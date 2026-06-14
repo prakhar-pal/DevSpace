@@ -22,6 +22,25 @@ const HOOK_EVENTS: &[(&str, Option<&str>, &str)] = &[
     ("PreToolUse", Some("AskUserQuestion"), "AskUserQuestion"),
 ];
 
+/// True if a hook entry is one DevSpace injected — identified by a command that
+/// POSTs a `pod_id` to our `/notify` endpoint. Matches both the current baked
+/// form and the older `$DEVSPACE_*` env-var form, so re-injecting cleans up
+/// stale entries (e.g. from a previous run's token) instead of accumulating.
+fn is_devspace_entry(entry: &Value) -> bool {
+    entry
+        .get("hooks")
+        .and_then(|h| h.as_array())
+        .map(|hooks| {
+            hooks.iter().any(|x| {
+                x.get("command")
+                    .and_then(|c| c.as_str())
+                    .map(|c| c.contains("/notify") && c.contains("pod_id"))
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
 fn devspace_hook_entry(matcher: Option<&str>, event_label: &str, pod_id: &str, token: &str) -> Value {
     let mut entry = json!({
         "hooks": [ { "type": "command", "command": hook_command(event_label, pod_id, token) } ]
@@ -57,16 +76,10 @@ pub fn merge_settings(existing: Option<Value>, pod_id: &str, token: &str) -> Val
             *event_val = json!([]);
         }
         let arr = event_val.as_array_mut().unwrap();
-        let cmd = hook_command(label, pod_id, token);
-        let already = arr.iter().any(|e| {
-            e.get("hooks")
-                .and_then(|h| h.as_array())
-                .map(|h| h.iter().any(|x| x.get("command").and_then(|c| c.as_str()) == Some(cmd.as_str())))
-                .unwrap_or(false)
-        });
-        if !already {
-            arr.push(devspace_hook_entry(*matcher, label, pod_id, token));
-        }
+        // Replace any prior DevSpace hook (old token / legacy form) rather than
+        // appending, so settings.json never accumulates stale entries.
+        arr.retain(|e| !is_devspace_entry(e));
+        arr.push(devspace_hook_entry(*matcher, label, pod_id, token));
     }
     root
 }
@@ -99,6 +112,17 @@ mod tests {
         let merged = merge_settings(Some(existing), "wc-1", "tok");
         let arr = merged["hooks"]["Notification"].as_array().unwrap();
         assert_eq!(arr.len(), 2);
+    }
+
+    #[test]
+    fn reinjecting_replaces_old_token_not_accumulates() {
+        let once = merge_settings(None, "wc-1", "tok1");
+        let twice = merge_settings(Some(once), "wc-1", "tok2");
+        let arr = twice["hooks"]["Notification"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(cmd.contains("tok2"));
+        assert!(!cmd.contains("tok1"));
     }
 
     #[test]

@@ -15,6 +15,20 @@ pub struct AppState {
     pub notify_token: String,
 }
 
+/// Quote a string as an AppleScript string literal for `osascript -e`.
+fn applescript_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        if c == '"' || c == '\\' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
+}
+
 #[tauri::command]
 fn list_workspaces(state: tauri::State<AppState>) -> Result<Vec<poller::WorkspaceView>, String> {
     poller::poll_once(state.runner.as_ref())
@@ -98,7 +112,6 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_notification::init())
         .manage(AppState {
             runner: runner.clone(),
             sessions: Arc::new(pty::SessionRegistry::new()),
@@ -117,13 +130,21 @@ pub fn run() {
             if !notify_token.is_empty() {
                 let notify_handle = app.handle().clone();
                 if let Err(e) = notify::serve(notify_token.clone(), move |pod_id, message| {
-                    use tauri_plugin_notification::NotificationExt;
-                    let _ = notify_handle
-                        .notification()
-                        .builder()
-                        .title(format!("DevSpace: {pod_id}"))
-                        .body(&message)
-                        .show();
+                    // Deliver via `osascript display notification`. The Tauri
+                    // notification plugin's macOS backend (mac-notification-sys /
+                    // the deprecated NSUserNotification) is silently dropped for
+                    // ad-hoc-signed dev builds; osascript renders regardless of
+                    // code signature.
+                    let title = applescript_quote(&format!("DevSpace: {pod_id}"));
+                    let body = applescript_quote(&message);
+                    let script = format!("display notification {body} with title {title}");
+                    if let Err(e) = std::process::Command::new("osascript")
+                        .arg("-e")
+                        .arg(&script)
+                        .status()
+                    {
+                        eprintln!("notification failed: {e}");
+                    }
                     let _ = notify_handle.emit("pod-badge", pod_id);
                 }) {
                     eprintln!("notifications disabled: {e}");
