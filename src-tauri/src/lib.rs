@@ -96,9 +96,9 @@ fn disconnect_pty(state: tauri::State<AppState>, id: String) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let runner: Arc<dyn CommandRunner> = Arc::new(DevpodCli);
-    // Fail closed: if the OS RNG is unavailable we run WITHOUT notifications
-    // rather than with a predictable token. Empty token => listener not started.
-    let notify_token = notify::random_token().unwrap_or_else(|e| {
+    // Persisted, stable token (survives app restarts so Claude's loaded hooks
+    // keep matching). Fail closed to no notifications if it can't be obtained.
+    let notify_token = notify::load_or_create_token().unwrap_or_else(|e| {
         eprintln!("notifications disabled: {e}");
         String::new()
     });

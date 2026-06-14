@@ -52,15 +52,44 @@ pub fn message_for(event: &str) -> &'static str {
     }
 }
 
-/// A per-run secret shared with the in-pod hook (via `--set-env`) so the local
-/// listener only acts on callbacks that carry it — any other local process
-/// POSTing to the port is ignored. Sourced from the OS CSPRNG; **fails closed**
+/// A secret shared with the in-pod hook so the local listener only acts on
+/// callbacks that carry it. Sourced from the OS CSPRNG; **fails closed**
 /// (returns Err) if the RNG is unavailable so callers never run with a
 /// predictable token.
 pub fn random_token() -> Result<String, String> {
     let mut buf = [0u8; 16];
     getrandom::getrandom(&mut buf).map_err(|e| format!("OS RNG unavailable: {e}"))?;
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Load the persisted notify token, or create+persist one. Persisting it (vs a
+/// per-run random) keeps it STABLE across app restarts, so hooks Claude Code
+/// loaded at startup keep matching even after DevSpace is relaunched. Stored
+/// owner-only (0600) under ~/Library/Application Support/DevSpace.
+pub fn load_or_create_token() -> Result<String, String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let home = std::env::var_os("HOME").ok_or("no HOME")?;
+    let mut dir = std::path::PathBuf::from(home);
+    dir.push("Library/Application Support/DevSpace");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("notify-token");
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let t = existing.trim();
+        if t.len() == 32 && t.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Ok(t.to_string());
+        }
+    }
+    let token = random_token()?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    f.write_all(token.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(token)
 }
 
 /// Start a blocking HTTP listener on `LISTENER_PORT`. For each `POST /notify`
