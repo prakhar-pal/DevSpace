@@ -18,3 +18,6 @@ export const deleteWorkspace = (id: string) => invoke<void>("delete_workspace", 
 export const onWorkspacesUpdated = (
   cb: (views: WorkspaceView[]) => void
 ): Promise<UnlistenFn> => listen<WorkspaceView[]>("workspaces-updated", (e) => cb(e.payload));
+
+export const onPodBadge = (cb: (podId: string) => void): Promise<UnlistenFn> =>
+  listen<string>("pod-badge", (e) => cb(e.payload));

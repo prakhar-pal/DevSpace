@@ -54,6 +54,19 @@ pub fn run() {
                     let _ = handle.emit("workspaces-updated", views);
                 },
             );
+            let notify_handle = app.handle().clone();
+            if let Err(e) = notify::serve(move |pod_id, message| {
+                use tauri_plugin_notification::NotificationExt;
+                let _ = notify_handle
+                    .notification()
+                    .builder()
+                    .title(format!("DevSpace: {pod_id}"))
+                    .body(&message)
+                    .show();
+                let _ = notify_handle.emit("pod-badge", pod_id);
+            }) {
+                eprintln!("notifications disabled: {e}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
