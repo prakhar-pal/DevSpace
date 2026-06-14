@@ -1,4 +1,5 @@
 mod devpod;
+mod notify;
 mod poller;
 
 use std::sync::Arc;
