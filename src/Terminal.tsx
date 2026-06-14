@@ -4,6 +4,12 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { connectPty, writePty, resizePty, onPtyOutput, onPtyClosed } from "./api";
 
+// Prefer a monospaced Nerd Font so Powerline/Nerd Font prompt glyphs (folder,
+// git branch, etc. — all in the Unicode Private Use Area) render instead of
+// tofu boxes. Falls back to plain monospace if none are installed.
+const FONT_FAMILY =
+  '"FiraCode Nerd Font Mono", "Hack Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "MesloLGS NF", "Symbols Nerd Font Mono", Menlo, Monaco, monospace';
+
 export function Terminal({ podId, visible }: { podId: string; visible: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
@@ -12,7 +18,7 @@ export function Terminal({ podId, visible }: { podId: string; visible: boolean }
 
   useEffect(() => {
     if (!ref.current) return;
-    const term = new XTerm({ convertEol: true, fontSize: 13 });
+    const term = new XTerm({ convertEol: true, fontSize: 13, fontFamily: FONT_FAMILY });
     termRef.current = term;
     const fit = new FitAddon();
     fitRef.current = fit;
