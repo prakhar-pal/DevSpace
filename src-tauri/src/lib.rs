@@ -1,4 +1,5 @@
 mod devpod;
+mod hooks;
 mod notify;
 mod poller;
 
