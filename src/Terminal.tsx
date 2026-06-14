@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "@xterm/xterm/css/xterm.css";
 import { connectPty, writePty, resizePty, onPtyOutput, onPtyClosed } from "./api";
 
@@ -14,7 +15,12 @@ export function Terminal({ podId, visible }: { podId: string; visible: boolean }
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const visibleRef = useRef(visible);
   const [disconnected, setDisconnected] = useState(false);
+
+  useEffect(() => {
+    visibleRef.current = visible;
+  }, [visible]);
 
   useEffect(() => {
     if (!ref.current) return;
@@ -28,6 +34,7 @@ export function Terminal({ podId, visible }: { podId: string; visible: boolean }
 
     let unlistenOutput: (() => void) | undefined;
     let unlistenClosed: (() => void) | undefined;
+    let unlistenFocus: (() => void) | undefined;
     const enc = new TextEncoder();
 
     (async () => {
@@ -35,6 +42,18 @@ export function Terminal({ podId, visible }: { podId: string; visible: boolean }
         term.write(new Uint8Array(bytes))
       );
       unlistenClosed = await onPtyClosed(podId, () => setDisconnected(true));
+      // Forward APP-level focus to xterm so it emits DECSET 1004 focus in/out
+      // (ESC[I / ESC[O). xterm only tracks its textarea's DOM focus, which does
+      // NOT blur when you switch to another macOS app — so Claude Code (which
+      // enables 1004) would otherwise never see focus-out and think it's always
+      // focused. Only the visible pane re-focuses.
+      unlistenFocus = await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+        if (focused) {
+          if (visibleRef.current) term.focus();
+        } else {
+          term.blur();
+        }
+      });
       await connectPty(podId);
       await resizePty(podId, term.rows, term.cols);
     })();
@@ -57,6 +76,7 @@ export function Terminal({ podId, visible }: { podId: string; visible: boolean }
       onResize.dispose();
       unlistenOutput?.();
       unlistenClosed?.();
+      unlistenFocus?.();
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
@@ -64,12 +84,16 @@ export function Terminal({ podId, visible }: { podId: string; visible: boolean }
   }, [podId]);
 
   // Re-fit and focus when this pane becomes visible: it may have been hidden
-  // (display:none, zero size) while another pod was selected.
+  // (display:none, zero size) while another pod was selected. When it becomes
+  // hidden, blur so xterm emits focus-out (1004) to the in-pod app.
   useEffect(() => {
-    if (!visible) return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
+    if (!visible) {
+      term.blur();
+      return;
+    }
     const raf = requestAnimationFrame(() => {
       try {
         fit.fit();
