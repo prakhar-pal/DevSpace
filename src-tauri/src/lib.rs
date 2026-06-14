@@ -5,7 +5,7 @@ mod poller;
 mod pty;
 
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 use devpod::{CommandRunner, DevpodCli};
 
@@ -13,20 +13,6 @@ pub struct AppState {
     pub runner: Arc<dyn CommandRunner>,
     pub sessions: Arc<pty::SessionRegistry>,
     pub notify_token: String,
-}
-
-/// Quote a string as an AppleScript string literal for `osascript -e`.
-fn applescript_quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        if c == '"' || c == '\\' {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out.push('"');
-    out
 }
 
 #[tauri::command]
@@ -119,6 +105,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState {
             runner: runner.clone(),
             sessions: Arc::new(pty::SessionRegistry::new()),
@@ -133,28 +120,41 @@ pub fn run() {
                     let _ = handle.emit("workspaces-updated", views);
                 },
             );
+            // Request notification authorization so DevSpace appears in System
+            // Settings → Notifications and can show banners (the user may need
+            // to set its style to Banners — it registered as "None").
+            {
+                use tauri_plugin_notification::NotificationExt;
+                match app.notification().request_permission() {
+                    Ok(state) => notify::log(&format!("notification permission: {state:?}")),
+                    Err(e) => notify::log(&format!("notification permission request failed: {e}")),
+                }
+            }
             // Empty token means RNG was unavailable — leave notifications off.
             notify::log(&format!("startup: notifications_enabled={}", !notify_token.is_empty()));
             if !notify_token.is_empty() {
                 let notify_handle = app.handle().clone();
                 match notify::serve(notify_token.clone(), move |pod_id, message| {
-                    // Deliver via `osascript display notification`. The Tauri
-                    // notification plugin's macOS backend (mac-notification-sys /
-                    // the deprecated NSUserNotification) is silently dropped for
-                    // ad-hoc-signed dev builds; osascript renders regardless of
-                    // code signature.
                     notify::log(&format!("callback: pod={pod_id} message={message}"));
-                    let title = applescript_quote(&format!("DevSpace: {pod_id}"));
-                    let body = applescript_quote(&message);
-                    let script = format!("display notification {body} with title {title}");
-                    match std::process::Command::new("osascript").arg("-e").arg(&script).output() {
-                        Ok(o) => notify::log(&format!(
-                            "osascript: exit={:?} stdout={:?} stderr={:?}",
-                            o.status.code(),
-                            String::from_utf8_lossy(&o.stdout).trim(),
-                            String::from_utf8_lossy(&o.stderr).trim()
-                        )),
-                        Err(e) => notify::log(&format!("osascript: spawn failed: {e}")),
+                    // Native notification, attributed to DevSpace (controllable
+                    // in System Settings → Notifications, where DevSpace appears).
+                    {
+                        use tauri_plugin_notification::NotificationExt;
+                        if let Err(e) = notify_handle
+                            .notification()
+                            .builder()
+                            .title(format!("DevSpace: {pod_id}"))
+                            .body(&message)
+                            .show()
+                        {
+                            notify::log(&format!("notification show failed: {e}"));
+                        }
+                    }
+                    // Guaranteed-visible fallback that needs NO notification
+                    // permission (works even when the OS suppresses banners, e.g.
+                    // on this MDM Mac): bounce the dock icon for attention.
+                    if let Some(win) = notify_handle.get_webview_window("main") {
+                        let _ = win.request_user_attention(Some(tauri::UserAttentionType::Critical));
                     }
                     let _ = notify_handle.emit("pod-badge", pod_id);
                 }) {
