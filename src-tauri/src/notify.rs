@@ -1,5 +1,35 @@
 use serde::Deserialize;
 
+/// Append a diagnostic line to the DevSpace log file
+/// (`~/Library/Logs/DevSpace/devspace.log`). Used to trace the notification
+/// path since GUI stderr is not easily captured. The file is created owner-only
+/// (0600) in a per-user directory, and callers MUST NOT pass secrets (e.g. the
+/// notify token) — log only non-sensitive fields.
+pub fn log(msg: &str) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let mut dir = std::path::PathBuf::from(home);
+    dir.push("Library/Logs/DevSpace");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(dir.join("devspace.log"))
+    {
+        let _ = writeln!(f, "[{ts}] {msg}");
+    }
+}
+
 /// Desktop-side port the notify HTTP listener binds.
 pub const LISTENER_PORT: u16 = 17865;
 /// Pod-side port the reverse SSH tunnel forwards to `LISTENER_PORT`; the in-pod
@@ -47,10 +77,22 @@ where
         for mut req in server.incoming_requests() {
             let mut body = String::new();
             let _ = req.as_reader().read_to_string(&mut body);
-            if let Ok(p) = serde_json::from_str::<NotifyPayload>(&body) {
-                if p.token == expected_token {
-                    on_notify(p.pod_id.clone(), message_for(&p.event).to_string());
+            // Never log the raw body — it carries the auth token. Log only
+            // non-sensitive fields after parsing.
+            match serde_json::from_str::<NotifyPayload>(&body) {
+                Ok(p) => {
+                    let matched = p.token == expected_token;
+                    log(&format!(
+                        "listener: received pod={} event={} token_match={}",
+                        p.pod_id, p.event, matched
+                    ));
+                    if matched {
+                        on_notify(p.pod_id.clone(), message_for(&p.event).to_string());
+                    } else {
+                        log("listener: token mismatch — ignoring (stale hook?)");
+                    }
                 }
+                Err(_) => log("listener: received unparseable body (ignored)"),
             }
             let _ = req.respond(tiny_http::Response::empty(204));
         }

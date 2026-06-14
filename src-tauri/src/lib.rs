@@ -62,27 +62,34 @@ fn connect_pty(app: tauri::AppHandle, state: tauri::State<AppState>, id: String)
     let inject_runner = state.runner.clone();
     let inject_id = id.clone();
     let inject_token = state.notify_token.clone();
+    notify::log(&format!("connect_pty: pod={id} (injecting hook + opening ssh)"));
     std::thread::spawn(move || {
-        let _ = hooks::inject(inject_runner.as_ref(), &inject_id, &inject_token);
+        match hooks::inject(inject_runner.as_ref(), &inject_id, &inject_token) {
+            Ok(()) => notify::log(&format!("inject: hook written to pod={inject_id}")),
+            Err(e) => notify::log(&format!("inject: FAILED pod={inject_id}: {e}")),
+        }
     });
     let out_handle = app.clone();
     let out_pod = id.clone();
     let close_handle = app.clone();
     let close_pod = id.clone();
     let sessions = state.sessions.clone();
-    state.sessions.ensure(
+    let res = state.sessions.ensure(
         &id,
         move |bytes| {
             let _ = out_handle.emit(&format!("pty-output:{out_pod}"), bytes);
         },
         move || {
+            notify::log(&format!("session closed (reader EOF) pod={close_pod}"));
             // Remove the dead session BEFORE signalling the frontend, so a
             // reconnect triggered by `pty-closed` can't race `ensure` against a
             // still-present (but dead) session and silently no-op.
             sessions.close(&close_pod);
             let _ = close_handle.emit(&format!("pty-closed:{close_pod}"), ());
         },
-    )
+    );
+    notify::log(&format!("connect_pty: ensure returned ok={} pod={id}", res.is_ok()));
+    res
 }
 
 #[tauri::command]
@@ -127,27 +134,32 @@ pub fn run() {
                 },
             );
             // Empty token means RNG was unavailable — leave notifications off.
+            notify::log(&format!("startup: notifications_enabled={}", !notify_token.is_empty()));
             if !notify_token.is_empty() {
                 let notify_handle = app.handle().clone();
-                if let Err(e) = notify::serve(notify_token.clone(), move |pod_id, message| {
+                match notify::serve(notify_token.clone(), move |pod_id, message| {
                     // Deliver via `osascript display notification`. The Tauri
                     // notification plugin's macOS backend (mac-notification-sys /
                     // the deprecated NSUserNotification) is silently dropped for
                     // ad-hoc-signed dev builds; osascript renders regardless of
                     // code signature.
+                    notify::log(&format!("callback: pod={pod_id} message={message}"));
                     let title = applescript_quote(&format!("DevSpace: {pod_id}"));
                     let body = applescript_quote(&message);
                     let script = format!("display notification {body} with title {title}");
-                    if let Err(e) = std::process::Command::new("osascript")
-                        .arg("-e")
-                        .arg(&script)
-                        .status()
-                    {
-                        eprintln!("notification failed: {e}");
+                    match std::process::Command::new("osascript").arg("-e").arg(&script).output() {
+                        Ok(o) => notify::log(&format!(
+                            "osascript: exit={:?} stdout={:?} stderr={:?}",
+                            o.status.code(),
+                            String::from_utf8_lossy(&o.stdout).trim(),
+                            String::from_utf8_lossy(&o.stderr).trim()
+                        )),
+                        Err(e) => notify::log(&format!("osascript: spawn failed: {e}")),
                     }
                     let _ = notify_handle.emit("pod-badge", pod_id);
                 }) {
-                    eprintln!("notifications disabled: {e}");
+                    Ok(()) => notify::log("listener: bound on 127.0.0.1:17865"),
+                    Err(e) => notify::log(&format!("listener: bind FAILED: {e}")),
                 }
             }
             Ok(())

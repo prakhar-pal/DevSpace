@@ -111,7 +111,12 @@ impl SessionRegistry {
     }
 
     pub fn close(&self, pod_id: &str) {
-        if let Some(sess) = self.sessions.lock().unwrap().remove(pod_id) {
+        // Bind the removed session to a local so the map's MutexGuard is dropped
+        // here — NOT held across the (potentially slow) kill/wait below. Holding
+        // it would block every other session op (write/resize/ensure) and freeze
+        // the UI.
+        let removed = self.sessions.lock().unwrap().remove(pod_id);
+        if let Some(sess) = removed {
             if let Ok(mut s) = sess.lock() {
                 let _ = s.child.kill();
                 let _ = s.child.wait();
