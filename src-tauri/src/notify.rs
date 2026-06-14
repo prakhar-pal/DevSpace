@@ -48,7 +48,6 @@ where
     std::thread::spawn(move || {
         for mut req in server.incoming_requests() {
             let mut body = String::new();
-            use std::io::Read;
             let _ = req.as_reader().read_to_string(&mut body);
             if let Ok(p) = serde_json::from_str::<NotifyPayload>(&body) {
                 on_notify(p.pod_id.clone(), message_for(&p.event).to_string());

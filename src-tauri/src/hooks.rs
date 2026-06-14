@@ -1,42 +1,57 @@
 use serde_json::{json, Value};
 
-/// The shell command Claude Code runs for each hook event. It posts the event
-/// name and pod id to the reverse-forwarded notify port.
-fn hook_command() -> String {
-    // $DEVSPACE_POD_ID and $DEVSPACE_NOTIFY_PORT are set via `devpod ssh --set-env`.
-    // CLAUDE_HOOK_EVENT_NAME is provided by Claude Code in the hook's environment.
-    "curl -s -m 2 -X POST \
-      -d \"{\\\"pod_id\\\":\\\"$DEVSPACE_POD_ID\\\",\\\"event\\\":\\\"$CLAUDE_HOOK_EVENT_NAME\\\"}\" \
-      http://localhost:$DEVSPACE_NOTIFY_PORT/notify >/dev/null 2>&1 || true"
-        .to_string()
+/// The shell command Claude Code runs for a given hook event. The event label
+/// is baked in literally (Claude Code does not reliably export it as an env
+/// var); $DEVSPACE_POD_ID and $DEVSPACE_NOTIFY_PORT ARE set on the ssh session.
+fn hook_command(event_label: &str) -> String {
+    format!(
+        "curl -s -m 2 -X POST \
+         -d \"{{\\\"pod_id\\\":\\\"$DEVSPACE_POD_ID\\\",\\\"event\\\":\\\"{event_label}\\\"}}\" \
+         http://localhost:$DEVSPACE_NOTIFY_PORT/notify >/dev/null 2>&1 || true"
+    )
 }
 
-fn devspace_hook_entry() -> Value {
-    json!({ "hooks": [ { "type": "command", "command": hook_command() } ] })
+// (settings-key, optional matcher, literal event label sent to the desktop)
+const HOOK_EVENTS: &[(&str, Option<&str>, &str)] = &[
+    ("Notification", None, "Notification"),
+    ("Stop", None, "Stop"),
+    ("PreToolUse", Some("AskUserQuestion"), "AskUserQuestion"),
+];
+
+fn devspace_hook_entry(matcher: Option<&str>, event_label: &str) -> Value {
+    let mut entry = json!({ "hooks": [ { "type": "command", "command": hook_command(event_label) } ] });
+    if let Some(m) = matcher {
+        entry["matcher"] = json!(m);
+    }
+    entry
 }
 
 /// Merge the DevSpace notification hook into an existing settings document
 /// (or an empty one), idempotently for the Notification, Stop, and
-/// PreToolUse events. Existing unrelated hooks are preserved.
+/// PreToolUse events. Existing unrelated hooks are preserved. Malformed
+/// existing values (wrong-typed `hooks` or event entries) are overwritten
+/// with the correct container rather than panicking.
 pub fn merge_settings(existing: Option<Value>) -> Value {
     let mut root = existing.unwrap_or_else(|| json!({}));
     if !root.is_object() {
         root = json!({});
     }
     let obj = root.as_object_mut().unwrap();
-    let hooks = obj
-        .entry("hooks")
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-        .expect("hooks must be an object");
+    // Treat a wrong-typed `hooks` value as missing.
+    let hooks_val = obj.entry("hooks").or_insert_with(|| json!({}));
+    if !hooks_val.is_object() {
+        *hooks_val = json!({});
+    }
+    let hooks = hooks_val.as_object_mut().unwrap();
 
-    for event in ["Notification", "Stop", "PreToolUse"] {
-        let arr = hooks
-            .entry(event)
-            .or_insert_with(|| json!([]))
-            .as_array_mut()
-            .expect("event hooks must be an array");
-        let cmd = hook_command();
+    for (key, matcher, label) in HOOK_EVENTS {
+        // Treat a wrong-typed event value as missing.
+        let event_val = hooks.entry(*key).or_insert_with(|| json!([]));
+        if !event_val.is_array() {
+            *event_val = json!([]);
+        }
+        let arr = event_val.as_array_mut().unwrap();
+        let cmd = hook_command(label);
         let already = arr.iter().any(|e| {
             e.get("hooks")
                 .and_then(|h| h.as_array())
@@ -44,7 +59,7 @@ pub fn merge_settings(existing: Option<Value>) -> Value {
                 .unwrap_or(false)
         });
         if !already {
-            arr.push(devspace_hook_entry());
+            arr.push(devspace_hook_entry(*matcher, label));
         }
     }
     root
@@ -84,6 +99,35 @@ mod tests {
     fn base64_matches_known_vector() {
         assert_eq!(base64_encode(b"hi"), "aGk=");
         assert_eq!(base64_encode(b"foo"), "Zm9v");
+    }
+
+    #[test]
+    fn pretooluse_has_matcher_and_literal_event() {
+        let merged = merge_settings(None);
+        let arr = merged["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        let entry = &arr[0];
+        assert_eq!(entry["matcher"], "AskUserQuestion");
+        let cmd = entry["hooks"][0]["command"].as_str().unwrap();
+        assert!(cmd.contains("AskUserQuestion"));
+        assert!(!cmd.contains("$CLAUDE_HOOK_EVENT_NAME"));
+    }
+
+    #[test]
+    fn tolerates_malformed_settings() {
+        // `hooks` is not an object.
+        let merged = merge_settings(Some(json!({ "hooks": "garbage" })));
+        assert!(merged["hooks"].is_object());
+        assert_eq!(merged["hooks"]["Stop"].as_array().unwrap().len(), 1);
+        assert_eq!(merged["hooks"]["Notification"].as_array().unwrap().len(), 1);
+        assert_eq!(merged["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+
+        // An event key is not an array.
+        let merged = merge_settings(Some(json!({ "hooks": { "Stop": 5 } })));
+        assert!(merged["hooks"].is_object());
+        assert_eq!(merged["hooks"]["Stop"].as_array().unwrap().len(), 1);
+        assert_eq!(merged["hooks"]["Notification"].as_array().unwrap().len(), 1);
+        assert_eq!(merged["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
     }
 }
 

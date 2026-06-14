@@ -14,12 +14,6 @@ pub struct AppState {
     pub sessions: Arc<pty::SessionRegistry>,
 }
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
 #[tauri::command]
 fn list_workspaces(state: tauri::State<AppState>) -> Result<Vec<poller::WorkspaceView>, String> {
     poller::poll_once(state.runner.as_ref())
@@ -48,11 +42,21 @@ fn connect_pty(app: tauri::AppHandle, state: tauri::State<AppState>, id: String)
     // Inject the Claude hook once per connect (idempotent). Best-effort: a hook
     // failure should not block opening the terminal.
     let _ = hooks::inject(state.runner.as_ref(), &id);
-    let handle = app.clone();
-    let pod = id.clone();
-    state.sessions.ensure(&id, move |bytes| {
-        let _ = handle.emit(&format!("pty-output:{pod}"), bytes);
-    })
+    let out_handle = app.clone();
+    let out_pod = id.clone();
+    let close_handle = app.clone();
+    let close_pod = id.clone();
+    let sessions = state.sessions.clone();
+    state.sessions.ensure(
+        &id,
+        move |bytes| {
+            let _ = out_handle.emit(&format!("pty-output:{out_pod}"), bytes);
+        },
+        move || {
+            let _ = close_handle.emit(&format!("pty-closed:{close_pod}"), ());
+            sessions.close(&close_pod);
+        },
+    )
 }
 
 #[tauri::command]
@@ -106,7 +110,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
             list_workspaces,
             start_workspace,
             stop_workspace,

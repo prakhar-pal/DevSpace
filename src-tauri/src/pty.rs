@@ -43,6 +43,7 @@ use std::sync::{Arc, Mutex};
 pub struct Session {
     pair: PtyPair,
     writer: Box<dyn Write + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
 #[derive(Default)]
@@ -61,9 +62,10 @@ impl SessionRegistry {
 
     /// Spawn `devpod ssh ...` in a PTY. `on_output` is called with raw bytes as
     /// they arrive from the workspace. The session persists until `close`.
-    pub fn ensure<F>(&self, pod_id: &str, on_output: F) -> Result<(), String>
+    pub fn ensure<F, G>(&self, pod_id: &str, on_output: F, on_close: G) -> Result<(), String>
     where
         F: Fn(Vec<u8>) + Send + 'static,
+        G: FnOnce() + Send + 'static,
     {
         let mut map = self.sessions.lock().unwrap();
         if map.contains_key(pod_id) {
@@ -78,7 +80,7 @@ impl SessionRegistry {
         for a in ssh_args(pod_id) {
             cmd.arg(a);
         }
-        let _child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+        let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
 
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         std::thread::spawn(move || {
@@ -89,10 +91,12 @@ impl SessionRegistry {
                     Ok(n) => on_output(buf[..n].to_vec()),
                 }
             }
+            // Reader hit EOF/error: the session is over. Signal the frontend.
+            on_close();
         });
 
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-        map.insert(pod_id.to_string(), Arc::new(Mutex::new(Session { pair, writer })));
+        map.insert(pod_id.to_string(), Arc::new(Mutex::new(Session { pair, writer, child })));
         Ok(())
     }
 
@@ -115,6 +119,11 @@ impl SessionRegistry {
     }
 
     pub fn close(&self, pod_id: &str) {
-        self.sessions.lock().unwrap().remove(pod_id);
+        if let Some(sess) = self.sessions.lock().unwrap().remove(pod_id) {
+            if let Ok(mut s) = sess.lock() {
+                let _ = s.child.kill();
+                let _ = s.child.wait();
+            }
+        }
     }
 }
