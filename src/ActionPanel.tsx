@@ -2,7 +2,6 @@ import type { WorkspaceView } from "./api";
 
 interface Props {
   workspace: WorkspaceView;
-  onStart: (id: string) => void;
   onDelete: (id: string) => void;
 }
 
@@ -12,7 +11,7 @@ const FIELDS: { label: string; value: (w: WorkspaceView) => string }[] = [
   { label: "Last used", value: (w) => w.last_used },
 ];
 
-export function ActionPanel({ workspace, onStart, onDelete }: Props) {
+export function ActionPanel({ workspace, onDelete }: Props) {
   return (
     <div className="action-panel">
       <div className="ap-card">
@@ -30,10 +29,8 @@ export function ActionPanel({ workspace, onStart, onDelete }: Props) {
             </div>
           ))}
         </dl>
+        <p className="ap-hint">Use the ▶ button in the sidebar to start this workspace.</p>
         <div className="ap-actions">
-          <button className="btn btn-primary" onClick={() => onStart(workspace.id)}>
-            Start
-          </button>
           <button className="btn btn-danger" onClick={() => onDelete(workspace.id)}>
             Delete
           </button>

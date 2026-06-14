@@ -2,12 +2,21 @@
 body, html, #root { margin: 0; height: 100%; }
 .app { display: flex; height: 100vh; font-family: system-ui, sans-serif; }
 .sidebar { width: 240px; border-right: 1px solid #2a2a2a; overflow-y: auto; background: #1b1b1b; }
-.ws-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px;
-  border: none; background: none; color: #ddd; cursor: pointer; text-align: left; }
+.ws-row { display: flex; align-items: center; width: 100%; }
 .ws-row.selected { background: #2d2d2d; }
+.ws-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
+  padding: 10px 4px 10px 12px; border: none; background: none; color: #ddd;
+  cursor: pointer; text-align: left; font: inherit; }
 .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
 .ws-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.badge { width: 8px; height: 8px; border-radius: 50%; background: #3b82f6; }
+.badge { width: 8px; height: 8px; border-radius: 50%; background: #3b82f6; flex: 0 0 auto; }
+.ws-action { display: flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  width: 26px; height: 26px; margin-right: 6px; padding: 0; border: none; background: none;
+  border-radius: 6px; cursor: pointer; color: #9a9a9a; opacity: 0.6;
+  transition: opacity 0.1s, background 0.1s, color 0.1s; }
+.ws-row:hover .ws-action, .ws-row.selected .ws-action { opacity: 1; }
+.ws-action.start:hover { color: #4ade80; background: rgba(74, 222, 128, 0.14); }
+.ws-action.stop:hover { color: #f87171; background: rgba(248, 113, 113, 0.14); }
 .main { flex: 1; display: flex; flex-direction: column; background: #111; color: #eee; min-width: 0; }
 .empty { margin: auto; color: #777; }
 .term-stack { flex: 1; min-height: 0; min-width: 0; flex-direction: column; }
@@ -42,6 +51,7 @@ body, html, #root { margin: 0; height: 100%; }
 .ap-row:last-child { border-bottom: none; }
 .ap-row dt { color: #8a8a8a; font-size: 13px; }
 .ap-row dd { margin: 0; color: #eaeaea; font-size: 14px; word-break: break-all; }
+.ap-hint { color: #777; font-size: 13px; margin: 0 0 18px; }
 .ap-actions { display: flex; gap: 10px; }
 .btn { padding: 8px 18px; border-radius: 8px; border: 1px solid transparent; font-size: 13px;
   font-weight: 500; cursor: pointer; transition: background 0.12s, border-color 0.12s; }

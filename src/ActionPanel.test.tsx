@@ -11,14 +11,14 @@ const ws: WorkspaceView = {
   error: null,
 };
 
-test("Start button calls onStart with id", () => {
-  const onStart = vi.fn();
-  render(<ActionPanel workspace={ws} onStart={onStart} onDelete={() => {}} />);
-  fireEvent.click(screen.getByRole("button", { name: /start/i }));
-  expect(onStart).toHaveBeenCalledWith("wc-1");
+test("Delete button calls onDelete with id", () => {
+  const onDelete = vi.fn();
+  render(<ActionPanel workspace={ws} onDelete={onDelete} />);
+  fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+  expect(onDelete).toHaveBeenCalledWith("wc-1");
 });
 
 test("shows source metadata", () => {
-  render(<ActionPanel workspace={ws} onStart={() => {}} onDelete={() => {}} />);
+  render(<ActionPanel workspace={ws} onDelete={() => {}} />);
   expect(screen.getByText(/talview\/webclients/)).toBeInTheDocument();
 });

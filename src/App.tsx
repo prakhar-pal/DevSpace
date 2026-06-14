@@ -21,11 +21,21 @@ export default function App() {
   // mounted (just hidden) when another pod is selected, so the xterm buffer and
   // its output subscription survive switching — the session is "restored".
   const [opened, setOpened] = useState<string[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const selectedIdRef = useRef<string | null>(null);
+  const workspacesRef = useRef<WorkspaceView[]>([]);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
+  useEffect(() => {
+    workspacesRef.current = workspaces;
+  }, [workspaces]);
+
+  const select = (id: string) => {
+    setSelectedId(id);
+    setBadges((b) => ({ ...b, [id]: false }));
+  };
 
   useEffect(() => {
     listWorkspaces().then(setWorkspaces).catch(() => {});
@@ -40,6 +50,34 @@ export default function App() {
     return () => {
       subs.forEach((p) => p.then((un) => un()));
     };
+  }, []);
+
+  // Keyboard shortcuts: Cmd+1..9 selects the Nth workspace; Cmd+B toggles the
+  // sidebar. Capture phase + stopPropagation so a focused terminal doesn't also
+  // receive the keystroke.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "b" || e.key === "B") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSidebarOpen((v) => !v);
+        return;
+      }
+      if (e.key >= "1" && e.key <= "9") {
+        const ws = workspacesRef.current;
+        const idx = Number(e.key) - 1;
+        if (ws[idx]) {
+          e.preventDefault();
+          e.stopPropagation();
+          const id = ws[idx].id;
+          setSelectedId(id);
+          setBadges((b) => ({ ...b, [id]: false }));
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
   const selected = workspaces.find((w) => w.id === selectedId) ?? null;
@@ -63,10 +101,11 @@ export default function App() {
     );
   }, [workspaces]);
 
-  const select = (id: string) => {
-    setSelectedId(id);
-    setBadges((b) => ({ ...b, [id]: false }));
-  };
+  // Terminal width changes when the sidebar toggles; nudge a refit.
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+    return () => cancelAnimationFrame(raf);
+  }, [sidebarOpen]);
 
   // Pods with a live terminal: those opened (and not since Stopped/removed),
   // plus the selected one eagerly if it's Running, so there's no blank frame on
@@ -82,18 +121,21 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar
-        workspaces={workspaces}
-        selectedId={selectedId}
-        badges={badges}
-        onSelect={select}
-      />
+      {sidebarOpen && (
+        <Sidebar
+          workspaces={workspaces}
+          selectedId={selectedId}
+          badges={badges}
+          onSelect={select}
+          onStart={(id) => startWorkspace(id).catch(() => {})}
+          onStop={(id) => stopWorkspace(id).catch(() => {})}
+        />
+      )}
       <main className="main">
         {!selected && <div className="empty">Select a workspace</div>}
         {selected && !selectedHasTerminal && (
           <ActionPanel
             workspace={selected}
-            onStart={(id) => startWorkspace(id).catch(() => {})}
             onDelete={(id) => deleteWorkspace(id).catch(() => {})}
           />
         )}
@@ -104,10 +146,6 @@ export default function App() {
               className="term-pane"
               style={{ display: id === selectedId ? "flex" : "none" }}
             >
-              <div className="term-header">
-                <span>{id}</span>
-                <button onClick={() => stopWorkspace(id).catch(() => {})}>Stop</button>
-              </div>
               <Terminal podId={id} visible={id === selectedId} />
             </div>
           ))}
