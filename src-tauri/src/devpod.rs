@@ -76,14 +76,25 @@ pub fn validate_id(id: &str) -> Result<(), String> {
 }
 
 pub fn list(runner: &dyn CommandRunner) -> Result<Vec<Workspace>, String> {
-    let out = runner.run(&["list", "--output", "json"])?;
+    // --skip-pro avoids slow pro-workspace enumeration we don't display.
+    let out = runner.run(&["list", "--output", "json", "--skip-pro"])?;
     parse_list(&out)
 }
 
 pub fn status(runner: &dyn CommandRunner, id: &str) -> Result<WorkspaceStatus, String> {
     validate_id(id)?;
-    // `--` terminates flag parsing so a hostile id can never be read as a flag.
-    let out = runner.run(&["status", "--output", "json", "--timeout", "10s", "--", id])?;
+    // --container-status=false skips an extra in-cluster container query we
+    // don't use. `--` terminates flag parsing so a hostile id can't be a flag.
+    let out = runner.run(&[
+        "status",
+        "--output",
+        "json",
+        "--timeout",
+        "10s",
+        "--container-status=false",
+        "--",
+        id,
+    ])?;
     parse_status(&out)
 }
 
@@ -138,7 +149,12 @@ mod tests {
     fn list_calls_cli_and_parses() {
         let runner = FakeRunner {
             output: include_str!("../tests/fixtures/list.json").to_string(),
-            expected_args: vec!["list".into(), "--output".into(), "json".into()],
+            expected_args: vec![
+                "list".into(),
+                "--output".into(),
+                "json".into(),
+                "--skip-pro".into(),
+            ],
         };
         let ws = list(&runner).unwrap();
         assert_eq!(ws.len(), 2);

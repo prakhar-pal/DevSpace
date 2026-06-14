@@ -11,9 +11,14 @@ status sidebar, start/stop/delete, an embedded `ssh <id>.devpod` terminal
 
 ```bash
 npm install                 # first time
-npm run tauri dev           # dev build: hot-reload frontend + run the app
-npm run tauri build         # production build: optimized .app + .dmg
+npm run tauri:dev           # DEV build: hot-reload + amber "DevSpace Dev" icon/name
+npm run tauri dev           # dev runtime with the production icon (no override)
+npm run tauri build         # PRODUCTION build: optimized .app + .dmg ("DevSpace")
 ```
+
+Dev vs prod are visually distinct: `tauri:dev` merges `src-tauri/tauri.dev.conf.json`,
+which uses the amber icon set in `src-tauri/icons-dev/` and the product name
+"DevSpace Dev". Production uses `src-tauri/icons/` and "DevSpace".
 
 Production artifacts (release, arm64):
 - App:  `src-tauri/target/release/bundle/macos/DevSpace.app`

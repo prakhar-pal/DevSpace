@@ -4,7 +4,6 @@ import { ActionPanel } from "./ActionPanel";
 import { Terminal } from "./Terminal";
 import { StartLog } from "./StartLog";
 import {
-  listWorkspaces,
   onWorkspacesUpdated,
   onPodBadge,
   startWorkspace,
@@ -51,7 +50,9 @@ export default function App() {
   };
 
   useEffect(() => {
-    listWorkspaces().then(setWorkspaces).catch(() => {});
+    // The background poller is the single source: it emits the list (names)
+    // immediately after `devpod list`, then again once statuses resolve. No
+    // redundant initial invoke that would double the cold-start devpod load.
     const subs = [
       onWorkspacesUpdated(setWorkspaces),
       onPodBadge((podId) =>

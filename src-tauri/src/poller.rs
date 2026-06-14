@@ -51,10 +51,11 @@ pub fn merge(
 /// (each call still carries the CLI's own short timeout).
 const MAX_CONCURRENT_STATUS: usize = 4;
 
-/// Run one poll cycle: list workspaces, fetch each status (up to
-/// `MAX_CONCURRENT_STATUS` in flight), return merged views.
-pub fn poll_once(runner: &dyn CommandRunner) -> Result<Vec<WorkspaceView>, String> {
-    let workspaces = devpod::list(runner)?;
+/// Fetch each workspace's status, up to `MAX_CONCURRENT_STATUS` in flight.
+pub fn fetch_statuses(
+    runner: &dyn CommandRunner,
+    workspaces: &[Workspace],
+) -> HashMap<String, Result<WorkspaceStatus, String>> {
     let mut statuses = HashMap::new();
     // `dyn CommandRunner: Send + Sync` (supertrait bounds), so `&dyn` is Send and
     // can be shared with scoped threads that are guaranteed to join before return.
@@ -73,20 +74,40 @@ pub fn poll_once(runner: &dyn CommandRunner) -> Result<Vec<WorkspaceView>, Strin
             }
         });
     }
+    statuses
+}
+
+/// Run one full poll cycle: list workspaces, fetch every status, return merged
+/// views. Used by the on-demand `list_workspaces` command.
+pub fn poll_once(runner: &dyn CommandRunner) -> Result<Vec<WorkspaceView>, String> {
+    let workspaces = devpod::list(runner)?;
+    let statuses = fetch_statuses(runner, &workspaces);
     Ok(merge(&workspaces, &statuses))
 }
 
-/// Spawn the background poll loop; emits `workspaces-updated` every `interval`.
+/// Spawn the background poll loop. Each cycle emits TWICE: first the workspace
+/// list immediately after the fast `devpod list` (names visible in ~1s, with
+/// not-yet-known statuses shown as Pending), then again once the slower
+/// per-workspace `devpod status` sweep resolves. A status cache is carried
+/// across cycles so re-polls keep showing last-known states instead of
+/// flickering back to Pending.
 pub fn spawn_loop<F>(runner: Arc<dyn CommandRunner>, interval: std::time::Duration, emit: F)
 where
     F: Fn(Vec<WorkspaceView>) + Send + 'static,
 {
-    std::thread::spawn(move || loop {
-        match poll_once(runner.as_ref()) {
-            Ok(views) => emit(views),
-            Err(_e) => { /* keep looping; transient CLI errors are expected */ }
+    std::thread::spawn(move || {
+        let mut cache: HashMap<String, Result<WorkspaceStatus, String>> = HashMap::new();
+        loop {
+            if let Ok(workspaces) = devpod::list(runner.as_ref()) {
+                // 1. Emit names immediately with whatever statuses we already
+                //    know (Pending for any not yet in the cache).
+                emit(merge(&workspaces, &cache));
+                // 2. Resolve fresh statuses, then emit the updated snapshot.
+                cache = fetch_statuses(runner.as_ref(), &workspaces);
+                emit(merge(&workspaces, &cache));
+            }
+            std::thread::sleep(interval);
         }
-        std::thread::sleep(interval);
     });
 }
 
