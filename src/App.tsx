@@ -17,6 +17,10 @@ export default function App() {
   const [workspaces, setWorkspaces] = useState<WorkspaceView[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [badges, setBadges] = useState<Record<string, boolean>>({});
+  // Pods whose terminal has been opened this session. Their <Terminal> stays
+  // mounted (just hidden) when another pod is selected, so the xterm buffer and
+  // its output subscription survive switching — the session is "restored".
+  const [opened, setOpened] = useState<string[]>([]);
   const selectedIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -40,10 +44,41 @@ export default function App() {
 
   const selected = workspaces.find((w) => w.id === selectedId) ?? null;
 
+  // Track opened terminals; remember a running pod the moment it's selected.
+  useEffect(() => {
+    if (selected?.state === "Running") {
+      setOpened((prev) => (prev.includes(selected.id) ? prev : [...prev, selected.id]));
+    }
+  }, [selectedId, selected?.state]);
+
+  // Drop a terminal only when its pod is explicitly Stopped or gone — NOT on a
+  // transient "Unknown"/"Pending" status blip, which would needlessly tear down
+  // a live session and lose its buffer.
+  useEffect(() => {
+    setOpened((prev) =>
+      prev.filter((id) => {
+        const w = workspaces.find((x) => x.id === id);
+        return w !== undefined && w.state !== "Stopped";
+      })
+    );
+  }, [workspaces]);
+
   const select = (id: string) => {
     setSelectedId(id);
     setBadges((b) => ({ ...b, [id]: false }));
   };
+
+  // Pods with a live terminal: those opened (and not since Stopped/removed),
+  // plus the selected one eagerly if it's Running, so there's no blank frame on
+  // first open.
+  const runningTerminals = Array.from(
+    new Set([...opened, ...(selected?.state === "Running" ? [selected.id] : [])])
+  ).filter((id) => {
+    const w = workspaces.find((x) => x.id === id);
+    return w !== undefined && w.state !== "Stopped";
+  });
+
+  const selectedHasTerminal = !!selected && runningTerminals.includes(selected.id);
 
   return (
     <div className="app">
@@ -55,22 +90,28 @@ export default function App() {
       />
       <main className="main">
         {!selected && <div className="empty">Select a workspace</div>}
-        {selected && selected.state === "Running" && (
-          <>
-            <div className="term-header">
-              <span>{selected.id}</span>
-              <button onClick={() => stopWorkspace(selected.id).catch(() => {})}>Stop</button>
-            </div>
-            <Terminal key={selected.id} podId={selected.id} />
-          </>
-        )}
-        {selected && selected.state !== "Running" && (
+        {selected && !selectedHasTerminal && (
           <ActionPanel
             workspace={selected}
             onStart={(id) => startWorkspace(id).catch(() => {})}
             onDelete={(id) => deleteWorkspace(id).catch(() => {})}
           />
         )}
+        <div className="term-stack" style={{ display: selectedHasTerminal ? "flex" : "none" }}>
+          {runningTerminals.map((id) => (
+            <div
+              key={id}
+              className="term-pane"
+              style={{ display: id === selectedId ? "flex" : "none" }}
+            >
+              <div className="term-header">
+                <span>{id}</span>
+                <button onClick={() => stopWorkspace(id).catch(() => {})}>Stop</button>
+              </div>
+              <Terminal podId={id} visible={id === selectedId} />
+            </div>
+          ))}
+        </div>
       </main>
     </div>
   );

@@ -4,9 +4,10 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { connectPty, writePty, resizePty, onPtyOutput, onPtyClosed } from "./api";
 
-export function Terminal({ podId }: { podId: string }) {
+export function Terminal({ podId, visible }: { podId: string; visible: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
   const [disconnected, setDisconnected] = useState(false);
 
   useEffect(() => {
@@ -14,6 +15,7 @@ export function Terminal({ podId }: { podId: string }) {
     const term = new XTerm({ convertEol: true, fontSize: 13 });
     termRef.current = term;
     const fit = new FitAddon();
+    fitRef.current = fit;
     term.loadAddon(fit);
     term.open(ref.current);
     fit.fit();
@@ -37,7 +39,10 @@ export function Terminal({ podId }: { podId: string }) {
     const onResize = term.onResize(({ rows, cols }) =>
       resizePty(podId, rows, cols)
     );
-    const handleWindowResize = () => fit.fit();
+    // Don't fit while hidden (display:none => zero size); offsetParent is null then.
+    const handleWindowResize = () => {
+      if (ref.current && ref.current.offsetParent !== null) fit.fit();
+    };
     window.addEventListener("resize", handleWindowResize);
 
     return () => {
@@ -48,8 +53,30 @@ export function Terminal({ podId }: { podId: string }) {
       unlistenClosed?.();
       term.dispose();
       termRef.current = null;
+      fitRef.current = null;
     };
   }, [podId]);
+
+  // Re-fit and focus when this pane becomes visible: it may have been hidden
+  // (display:none, zero size) while another pod was selected.
+  useEffect(() => {
+    if (!visible) return;
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!term || !fit) return;
+    const raf = requestAnimationFrame(() => {
+      try {
+        fit.fit();
+      } catch {
+        /* container not laid out yet */
+      }
+      if (term.cols > 0 && term.rows > 0) {
+        resizePty(podId, term.rows, term.cols).catch(() => {});
+      }
+      term.focus();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [visible, podId]);
 
   const reconnect = async () => {
     setDisconnected(false);
