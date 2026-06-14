@@ -16,6 +16,7 @@ test("maps state to dot color", () => {
   expect(statusColor("Running")).toBe("green");
   expect(statusColor("Stopped")).toBe("grey");
   expect(statusColor("Busy")).toBe("amber");
+  expect(statusColor("Pending")).toBe("grey");
   expect(statusColor("Unknown")).toBe("red");
 });
 

@@ -29,8 +29,10 @@ pub fn merge(
                 .unwrap_or_default();
             let (state, error) = match statuses.get(&w.id) {
                 Some(Ok(s)) => (s.state.clone(), None),
+                // A genuine status error surfaces as Unknown (+ tooltip).
                 Some(Err(e)) => ("Unknown".to_string(), Some(e.clone())),
-                None => ("Unknown".to_string(), None),
+                // Status not fetched yet this cycle: Pending, not an error.
+                None => ("Pending".to_string(), None),
             };
             WorkspaceView {
                 id: w.id.clone(),

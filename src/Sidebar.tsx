@@ -8,6 +8,9 @@ export function statusColor(state: string): string {
       return "grey";
     case "Busy":
       return "amber";
+    case "Pending":
+      // Status not resolved yet — neutral, not an error.
+      return "grey";
     default:
       return "red";
   }

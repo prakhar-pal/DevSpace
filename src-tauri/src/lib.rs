@@ -12,6 +12,7 @@ use devpod::{CommandRunner, DevpodCli};
 pub struct AppState {
     pub runner: Arc<dyn CommandRunner>,
     pub sessions: Arc<pty::SessionRegistry>,
+    pub notify_token: String,
 }
 
 #[tauri::command]
@@ -39,9 +40,15 @@ fn connect_pty(app: tauri::AppHandle, state: tauri::State<AppState>, id: String)
     // Reject hostile ids before doing anything (defense in depth; ssh_args also
     // passes the id after `--`).
     devpod::validate_id(&id)?;
-    // Inject the Claude hook once per connect (idempotent). Best-effort: a hook
-    // failure should not block opening the terminal.
-    let _ = hooks::inject(state.runner.as_ref(), &id);
+    // Inject the Claude hook off the open path (idempotent, best-effort): it
+    // makes two ssh round-trips, so doing it inline would delay the terminal
+    // appearing. A hook failure must never block opening the terminal.
+    let inject_runner = state.runner.clone();
+    let inject_id = id.clone();
+    std::thread::spawn(move || {
+        let _ = hooks::inject(inject_runner.as_ref(), &inject_id);
+    });
+    let token = state.notify_token.clone();
     let out_handle = app.clone();
     let out_pod = id.clone();
     let close_handle = app.clone();
@@ -49,6 +56,7 @@ fn connect_pty(app: tauri::AppHandle, state: tauri::State<AppState>, id: String)
     let sessions = state.sessions.clone();
     state.sessions.ensure(
         &id,
+        &token,
         move |bytes| {
             let _ = out_handle.emit(&format!("pty-output:{out_pod}"), bytes);
         },
@@ -80,6 +88,7 @@ fn disconnect_pty(state: tauri::State<AppState>, id: String) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let runner: Arc<dyn CommandRunner> = Arc::new(DevpodCli);
+    let notify_token = notify::random_token();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -87,6 +96,7 @@ pub fn run() {
         .manage(AppState {
             runner: runner.clone(),
             sessions: Arc::new(pty::SessionRegistry::new()),
+            notify_token: notify_token.clone(),
         })
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -98,7 +108,7 @@ pub fn run() {
                 },
             );
             let notify_handle = app.handle().clone();
-            if let Err(e) = notify::serve(move |pod_id, message| {
+            if let Err(e) = notify::serve(notify_token.clone(), move |pod_id, message| {
                 use tauri_plugin_notification::NotificationExt;
                 let _ = notify_handle
                     .notification()

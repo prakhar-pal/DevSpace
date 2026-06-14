@@ -1,12 +1,15 @@
+use crate::devpod::CommandRunner;
 use serde_json::{json, Value};
 
 /// The shell command Claude Code runs for a given hook event. The event label
 /// is baked in literally (Claude Code does not reliably export it as an env
-/// var); $DEVSPACE_POD_ID and $DEVSPACE_NOTIFY_PORT ARE set on the ssh session.
+/// var); $DEVSPACE_POD_ID, $DEVSPACE_NOTIFY_PORT and $DEVSPACE_NOTIFY_TOKEN ARE
+/// set on the ssh session. The token authenticates the callback to the desktop
+/// listener.
 fn hook_command(event_label: &str) -> String {
     format!(
         "curl -s -m 2 -X POST \
-         -d \"{{\\\"pod_id\\\":\\\"$DEVSPACE_POD_ID\\\",\\\"event\\\":\\\"{event_label}\\\"}}\" \
+         -d \"{{\\\"pod_id\\\":\\\"$DEVSPACE_POD_ID\\\",\\\"event\\\":\\\"{event_label}\\\",\\\"token\\\":\\\"$DEVSPACE_NOTIFY_TOKEN\\\"}}\" \
          http://localhost:$DEVSPACE_NOTIFY_PORT/notify >/dev/null 2>&1 || true"
     )
 }
@@ -130,8 +133,6 @@ mod tests {
         assert_eq!(merged["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
     }
 }
-
-use crate::devpod::CommandRunner;
 
 /// Read the pod's ~/.claude/settings.json, merge in the DevSpace hooks, and
 /// write it back via `devpod ssh --command`. Idempotent.

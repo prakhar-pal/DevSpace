@@ -1,9 +1,14 @@
 use crate::notify::LISTENER_PORT;
+use portable_pty::{CommandBuilder, NativePtySystem, PtyPair, PtySize, PtySystem};
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
 
 /// Build the argument vector for the `devpod ssh` invocation that carries both
 /// the interactive shell and the reverse notification tunnel. The (untrusted)
 /// pod id is validated by the caller and passed after a `--` flag terminator.
-pub fn ssh_args(pod_id: &str) -> Vec<String> {
+/// `token` is the per-run secret the in-pod hook echoes back to authenticate.
+pub fn ssh_args(pod_id: &str, token: &str) -> Vec<String> {
     vec![
         "ssh".into(),
         "-R".into(),
@@ -12,33 +17,12 @@ pub fn ssh_args(pod_id: &str) -> Vec<String> {
         format!("DEVSPACE_POD_ID={pod_id}"),
         "--set-env".into(),
         "DEVSPACE_NOTIFY_PORT=8765".into(),
+        "--set-env".into(),
+        format!("DEVSPACE_NOTIFY_TOKEN={token}"),
         "--".into(),
         pod_id.into(),
     ]
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn builds_ssh_args_with_reverse_tunnel() {
-        let args = ssh_args("wc-1");
-        assert!(args.contains(&"ssh".to_string()));
-        assert!(args.contains(&"wc-1".to_string()));
-        assert!(args.iter().any(|a| a.starts_with("8765:localhost:")));
-        assert!(args.contains(&"DEVSPACE_POD_ID=wc-1".to_string()));
-        assert!(args.contains(&"DEVSPACE_NOTIFY_PORT=8765".to_string()));
-        // The pod id must come after a `--` flag terminator.
-        let dd = args.iter().position(|a| a == "--").expect("has -- terminator");
-        assert_eq!(args[dd + 1], "wc-1");
-    }
-}
-
-use portable_pty::{CommandBuilder, NativePtySystem, PtyPair, PtySize, PtySystem};
-use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
 
 pub struct Session {
     pair: PtyPair,
@@ -61,8 +45,15 @@ impl SessionRegistry {
     }
 
     /// Spawn `devpod ssh ...` in a PTY. `on_output` is called with raw bytes as
-    /// they arrive from the workspace. The session persists until `close`.
-    pub fn ensure<F, G>(&self, pod_id: &str, on_output: F, on_close: G) -> Result<(), String>
+    /// they arrive from the workspace; `on_close` runs once when the reader hits
+    /// EOF/error. The session persists until `close`.
+    pub fn ensure<F, G>(
+        &self,
+        pod_id: &str,
+        token: &str,
+        on_output: F,
+        on_close: G,
+    ) -> Result<(), String>
     where
         F: Fn(Vec<u8>) + Send + 'static,
         G: FnOnce() + Send + 'static,
@@ -77,7 +68,7 @@ impl SessionRegistry {
             .map_err(|e| e.to_string())?;
 
         let mut cmd = CommandBuilder::new("devpod");
-        for a in ssh_args(pod_id) {
+        for a in ssh_args(pod_id, token) {
             cmd.arg(a);
         }
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
@@ -125,5 +116,24 @@ impl SessionRegistry {
                 let _ = s.child.wait();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_ssh_args_with_reverse_tunnel() {
+        let args = ssh_args("wc-1", "secret123");
+        assert!(args.contains(&"ssh".to_string()));
+        assert!(args.contains(&"wc-1".to_string()));
+        assert!(args.iter().any(|a| a.starts_with("8765:localhost:")));
+        assert!(args.contains(&"DEVSPACE_POD_ID=wc-1".to_string()));
+        assert!(args.contains(&"DEVSPACE_NOTIFY_PORT=8765".to_string()));
+        assert!(args.contains(&"DEVSPACE_NOTIFY_TOKEN=secret123".to_string()));
+        // The pod id must come after a `--` flag terminator.
+        let dd = args.iter().position(|a| a == "--").expect("has -- terminator");
+        assert_eq!(args[dd + 1], "wc-1");
     }
 }
