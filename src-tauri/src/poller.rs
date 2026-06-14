@@ -1,6 +1,7 @@
-use crate::devpod::{Workspace, WorkspaceStatus};
+use crate::devpod::{self, CommandRunner, Workspace, WorkspaceStatus};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkspaceView {
@@ -41,6 +42,30 @@ pub fn merge(
             }
         })
         .collect()
+}
+
+/// Run one poll cycle: list workspaces, fetch each status, return merged views.
+pub fn poll_once(runner: &dyn CommandRunner) -> Result<Vec<WorkspaceView>, String> {
+    let workspaces = devpod::list(runner)?;
+    let mut statuses = HashMap::new();
+    for w in &workspaces {
+        statuses.insert(w.id.clone(), devpod::status(runner, &w.id));
+    }
+    Ok(merge(&workspaces, &statuses))
+}
+
+/// Spawn the background poll loop; emits `workspaces-updated` every `interval`.
+pub fn spawn_loop<F>(runner: Arc<dyn CommandRunner>, interval: std::time::Duration, emit: F)
+where
+    F: Fn(Vec<WorkspaceView>) + Send + 'static,
+{
+    std::thread::spawn(move || loop {
+        match poll_once(runner.as_ref()) {
+            Ok(views) => emit(views),
+            Err(_e) => { /* keep looping; transient CLI errors are expected */ }
+        }
+        std::thread::sleep(interval);
+    });
 }
 
 #[cfg(test)]
