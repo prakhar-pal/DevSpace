@@ -57,17 +57,23 @@ interface Props {
   selectedId: string | null;
   badges: Record<string, boolean>;
   starting: string[];
+  aliases: Record<string, string>;
   onSelect: (id: string) => void;
   onHide: (id: string) => void;
   onUnhide: (id: string) => void;
+  onRename: (id: string) => void;
   onReorder: (dragId: string, targetId: string, before: boolean) => void;
 }
 
 export function Sidebar(props: Props) {
-  const { visible, hidden, selectedId, badges, starting } = props;
+  const { visible, hidden, selectedId, badges, starting, aliases } = props;
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(true);
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+
+  // Friendly name if set, else the raw workspace id.
+  const displayName = (id: string) => aliases[id] ?? id;
 
   const handleDrop = (e: DragEvent<HTMLElement>, targetId: string) => {
     e.preventDefault();
@@ -104,6 +110,10 @@ export function Sidebar(props: Props) {
               setDragId(null);
               setOverId(null);
             }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu({ id: w.id, x: e.clientX, y: e.clientY });
+            }}
           >
             <span className="grip" aria-hidden="true">
               <GripIcon />
@@ -111,14 +121,14 @@ export function Sidebar(props: Props) {
             <button
               className="ws-main"
               onClick={() => props.onSelect(w.id)}
-              title={w.error ?? w.source}
+              title={aliases[w.id] ? `${w.id} · ${w.source}` : (w.error ?? w.source)}
             >
               {starting.includes(w.id) ? (
                 <span className="spinner" aria-label="starting" />
               ) : (
                 <span className="dot" style={{ background: statusColor(w.state) }} />
               )}
-              <span className="ws-name">{w.id}</span>
+              <span className="ws-name">{displayName(w.id)}</span>
               {badges[w.id] && <span className="badge" aria-label="unread" />}
             </button>
             <button
@@ -146,14 +156,18 @@ export function Sidebar(props: Props) {
               <div
                 key={w.id}
                 className={`ws-row hidden-row${w.id === selectedId ? " selected" : ""}`}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setMenu({ id: w.id, x: e.clientX, y: e.clientY });
+                }}
               >
                 <button
                   className="ws-main"
                   onClick={() => props.onSelect(w.id)}
-                  title={w.error ?? w.source}
+                  title={aliases[w.id] ? `${w.id} · ${w.source}` : (w.error ?? w.source)}
                 >
                   <span className="dot" style={{ background: statusColor(w.state) }} />
-                  <span className="ws-name">{w.id}</span>
+                  <span className="ws-name">{displayName(w.id)}</span>
                 </button>
                 <button
                   className="ws-action show"
@@ -168,6 +182,33 @@ export function Sidebar(props: Props) {
                 </button>
               </div>
             ))}
+        </div>
+      )}
+
+      {menu && (
+        <div
+          className="ctx-backdrop"
+          onClick={() => setMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setMenu(null);
+          }}
+        >
+          <div
+            className="ctx-menu"
+            style={{ left: menu.x, top: menu.y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              className="ctx-item"
+              onClick={() => {
+                props.onRename(menu.id);
+                setMenu(null);
+              }}
+            >
+              Set friendly name…
+            </button>
+          </div>
         </div>
       )}
     </nav>

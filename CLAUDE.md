@@ -16,6 +16,11 @@ npm run tauri dev           # dev runtime with the production icon (no override)
 npm run tauri build         # PRODUCTION build: optimized .app + .dmg ("DevSpace")
 ```
 
+**During development always use a dev build** — `npm run tauri dev` (or
+`npm run tauri:dev` for the distinct amber "DevSpace Dev" icon). It's the fast,
+hot-reloading debug build. Do NOT run `npm run tauri build` (the slow optimized
+production bundle) for routine iteration — only for producing a release.
+
 Dev vs prod are visually distinct: `tauri:dev` merges `src-tauri/tauri.dev.conf.json`,
 which uses the amber icon set in `src-tauri/icons-dev/` and the product name
 "DevSpace Dev". Production uses `src-tauri/icons/` and "DevSpace".

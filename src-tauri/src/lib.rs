@@ -1,5 +1,6 @@
 mod devpod;
 mod hooks;
+mod layout;
 mod notify;
 mod poller;
 mod pty;
@@ -126,6 +127,20 @@ fn disconnect_pty(state: tauri::State<AppState>, id: String) {
     state.sessions.close(&id);
 }
 
+#[tauri::command]
+fn load_layout() -> layout::Layout {
+    layout::load()
+}
+
+#[tauri::command]
+fn save_layout(
+    order: Vec<String>,
+    hidden: Vec<String>,
+    aliases: std::collections::HashMap<String, String>,
+) {
+    layout::save(&layout::Layout { order, hidden, aliases });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let runner: Arc<dyn CommandRunner> = Arc::new(DevpodCli);
@@ -205,7 +220,9 @@ pub fn run() {
             connect_pty,
             write_pty,
             resize_pty,
-            disconnect_pty
+            disconnect_pty,
+            load_layout,
+            save_layout
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

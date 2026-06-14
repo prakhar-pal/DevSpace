@@ -3,25 +3,16 @@ import { Sidebar } from "./Sidebar";
 import { ActionPanel } from "./ActionPanel";
 import { Terminal } from "./Terminal";
 import { StartLog } from "./StartLog";
+import { RenameModal } from "./RenameModal";
 import {
   onWorkspacesUpdated,
   onPodBadge,
   startWorkspace,
+  loadLayout,
+  saveLayout,
   type WorkspaceView,
 } from "./api";
 import "./App.css";
-
-const ORDER_KEY = "devspace.order";
-const HIDDEN_KEY = "devspace.hidden";
-
-function loadIds(key: string): string[] {
-  try {
-    const v = JSON.parse(localStorage.getItem(key) || "[]");
-    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
-}
 
 export default function App() {
   const [workspaces, setWorkspaces] = useState<WorkspaceView[]>([]);
@@ -31,12 +22,19 @@ export default function App() {
   // Workspaces with a running `devpod up` (showing the startup log stream).
   const [starting, setStarting] = useState<string[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  // User-defined sidebar order and hidden set, persisted across launches.
-  const [order, setOrder] = useState<string[]>(() => loadIds(ORDER_KEY));
-  const [hidden, setHidden] = useState<string[]>(() => loadIds(HIDDEN_KEY));
+  // Sidebar layout, persisted in a backend JSON file (load on mount, save on
+  // change). order = drag order; hidden = hidden set; aliases = friendly names.
+  const [order, setOrder] = useState<string[]>([]);
+  const [hidden, setHidden] = useState<string[]>([]);
+  const [aliases, setAliases] = useState<Record<string, string>>({});
+  // Workspace id currently being renamed (drives the friendly-name modal).
+  const [renaming, setRenaming] = useState<string | null>(null);
 
   const selectedIdRef = useRef<string | null>(null);
   const visibleRef = useRef<WorkspaceView[]>([]);
+  // Gate saving until the initial load has applied, so we don't overwrite the
+  // saved file with empty arrays before loadLayout resolves.
+  const layoutLoaded = useRef(false);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -48,6 +46,17 @@ export default function App() {
   };
 
   useEffect(() => {
+    // Load persisted sidebar layout once.
+    loadLayout()
+      .then((l) => {
+        setOrder(l.order ?? []);
+        setHidden(l.hidden ?? []);
+        setAliases(l.aliases ?? {});
+      })
+      .catch(() => {})
+      .finally(() => {
+        layoutLoaded.current = true;
+      });
     // The background poller is the single source: it emits the list (names)
     // immediately after `devpod list`, then again once statuses resolve. No
     // redundant initial invoke that would double the cold-start devpod load.
@@ -64,13 +73,11 @@ export default function App() {
     };
   }, []);
 
-  // Persist order and hidden set.
+  // Persist layout on change (after the initial load has applied).
   useEffect(() => {
-    localStorage.setItem(ORDER_KEY, JSON.stringify(order));
-  }, [order]);
-  useEffect(() => {
-    localStorage.setItem(HIDDEN_KEY, JSON.stringify(hidden));
-  }, [hidden]);
+    if (!layoutLoaded.current) return;
+    saveLayout(order, hidden, aliases).catch(() => {});
+  }, [order, hidden, aliases]);
 
   // Keep `order` canonical: append new workspaces, drop removed ones; prune
   // hidden ids that no longer exist.
@@ -184,6 +191,16 @@ export default function App() {
   const hide = (id: string) => setHidden((prev) => (prev.includes(id) ? prev : [...prev, id]));
   const unhide = (id: string) => setHidden((prev) => prev.filter((x) => x !== id));
 
+  // Set/clear a workspace's friendly name. Empty or equal-to-id clears it.
+  const setAlias = (id: string, name: string) => {
+    setAliases((prev) => {
+      const next = { ...prev };
+      if (!name || name === id) delete next[id];
+      else next[id] = name;
+      return next;
+    });
+  };
+
   const start = (id: string) => {
     startWorkspace(id).catch(() => {});
     setStarting((s) => (s.includes(id) ? s : [...s, id]));
@@ -222,9 +239,11 @@ export default function App() {
           selectedId={selectedId}
           badges={badges}
           starting={starting}
+          aliases={aliases}
           onSelect={select}
           onHide={hide}
           onUnhide={unhide}
+          onRename={setRenaming}
           onReorder={reorder}
         />
       )}
@@ -252,6 +271,17 @@ export default function App() {
           ))}
         </div>
       </main>
+      {renaming && (
+        <RenameModal
+          workspaceId={renaming}
+          initialName={aliases[renaming] ?? renaming}
+          onSubmit={(name) => {
+            setAlias(renaming, name);
+            setRenaming(null);
+          }}
+          onCancel={() => setRenaming(null)}
+        />
+      )}
     </div>
   );
 }

@@ -37,3 +37,16 @@ export const onPtyClosed = (
   id: string,
   cb: () => void
 ): Promise<UnlistenFn> => listen<null>(`pty-closed:${id}`, () => cb());
+
+export interface Layout {
+  order: string[];
+  hidden: string[];
+  aliases: Record<string, string>;
+}
+
+export const loadLayout = () => invoke<Layout>("load_layout");
+export const saveLayout = (
+  order: string[],
+  hidden: string[],
+  aliases: Record<string, string>
+) => invoke<void>("save_layout", { order, hidden, aliases });

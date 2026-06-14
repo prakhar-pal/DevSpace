@@ -33,6 +33,25 @@ body, html, #root { margin: 0; height: 100%; }
 .hidden-header:hover { color: #aaa; }
 .hidden-row .ws-main { color: #888; }
 .hidden-row .ws-main { padding-left: 12px; }
+/* Right-click context menu */
+.ctx-backdrop { position: fixed; inset: 0; z-index: 1000; }
+.ctx-menu { position: fixed; min-width: 180px; background: #232323; border: 1px solid #3a3a3a;
+  border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
+.ctx-item { display: block; width: 100%; padding: 8px 12px; border: none; background: none;
+  color: #ddd; cursor: pointer; text-align: left; font: inherit; border-radius: 5px; }
+.ctx-item:hover { background: #3367d6; color: #fff; }
+/* Modal */
+.modal-overlay { position: fixed; inset: 0; z-index: 1001; display: flex; align-items: center;
+  justify-content: center; background: rgba(0, 0, 0, 0.5); }
+.modal { width: 380px; max-width: 90vw; background: #1d1d1d; border: 1px solid #333;
+  border-radius: 12px; padding: 20px 22px; color: #eee; }
+.modal h3 { margin: 0 0 4px; font-size: 16px; }
+.modal-sub { margin: 0 0 14px; color: #888; font-size: 12px; }
+.modal-sub code { color: #bbb; }
+.modal-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border-radius: 8px;
+  border: 1px solid #3a3a3a; background: #111; color: #eee; font: inherit; }
+.modal-input:focus { outline: none; border-color: #3b82f6; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .main { flex: 1; display: flex; flex-direction: column; background: #111; color: #eee; min-width: 0; }
 .empty { margin: auto; color: #777; }
 .term-stack { flex: 1; min-height: 0; min-width: 0; flex-direction: column; }

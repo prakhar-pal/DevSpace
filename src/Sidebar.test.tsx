@@ -22,9 +22,11 @@ function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {})
       selectedId={null}
       badges={{}}
       starting={[]}
+      aliases={{}}
       onSelect={noop}
       onHide={noop}
       onUnhide={noop}
+      onRename={noop}
       onReorder={noop}
       {...over}
     />
@@ -48,6 +50,20 @@ test("renders a row per visible workspace", () => {
 test("sidebar has no start/stop lifecycle buttons", () => {
   renderSidebar();
   expect(screen.queryByRole("button", { name: /start|stop/i })).toBeNull();
+});
+
+test("shows friendly name when an alias is set", () => {
+  renderSidebar({ visible: [ws({ id: "wc-1" })], aliases: { "wc-1": "Frontend" } });
+  expect(screen.getByText("Frontend")).toBeInTheDocument();
+  expect(screen.queryByText("wc-1")).toBeNull();
+});
+
+test("right-click → Set friendly name calls onRename", () => {
+  const onRename = vi.fn();
+  renderSidebar({ visible: [ws({ id: "wc-1" })], onRename });
+  fireEvent.contextMenu(screen.getByText("wc-1"));
+  fireEvent.click(screen.getByRole("button", { name: /set friendly name/i }));
+  expect(onRename).toHaveBeenCalledWith("wc-1");
 });
 
 test("hide action calls onHide; hidden section renders with unhide", () => {
