@@ -56,6 +56,7 @@ interface Props {
   hidden: WorkspaceView[];
   selectedId: string | null;
   badges: Record<string, boolean>;
+  starting: string[];
   onSelect: (id: string) => void;
   onHide: (id: string) => void;
   onUnhide: (id: string) => void;
@@ -63,7 +64,7 @@ interface Props {
 }
 
 export function Sidebar(props: Props) {
-  const { visible, hidden, selectedId, badges } = props;
+  const { visible, hidden, selectedId, badges, starting } = props;
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(true);
@@ -112,7 +113,11 @@ export function Sidebar(props: Props) {
               onClick={() => props.onSelect(w.id)}
               title={w.error ?? w.source}
             >
-              <span className="dot" style={{ background: statusColor(w.state) }} />
+              {starting.includes(w.id) ? (
+                <span className="spinner" aria-label="starting" />
+              ) : (
+                <span className="dot" style={{ background: statusColor(w.state) }} />
+              )}
               <span className="ws-name">{w.id}</span>
               {badges[w.id] && <span className="badge" aria-label="unread" />}
             </button>

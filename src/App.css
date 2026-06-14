@@ -13,6 +13,9 @@ body, html, #root { margin: 0; height: 100%; }
   padding: 10px 4px 10px 4px; border: none; background: none; color: #ddd;
   cursor: pointer; text-align: left; font: inherit; }
 .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+.spinner { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 50%;
+  border: 2px solid #444; border-top-color: #4ade80; animation: devspace-spin 0.7s linear infinite; }
+@keyframes devspace-spin { to { transform: rotate(360deg); } }
 .ws-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge { width: 8px; height: 8px; border-radius: 50%; background: #3b82f6; flex: 0 0 auto; }
 .ws-action { display: flex; align-items: center; justify-content: center; flex: 0 0 auto;

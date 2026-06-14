@@ -21,6 +21,7 @@ function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {})
       hidden={[]}
       selectedId={null}
       badges={{}}
+      starting={[]}
       onSelect={noop}
       onHide={noop}
       onUnhide={noop}

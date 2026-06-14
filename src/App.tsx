@@ -190,27 +190,28 @@ export default function App() {
     select(id);
   };
 
-  // Once a workspace is Running, it's no longer "starting" — switch from the
-  // startup log to the interactive terminal.
-  useEffect(() => {
-    setStarting((s) =>
-      s.filter((id) => {
-        const w = workspaces.find((x) => x.id === id);
-        return w !== undefined && w.state !== "Running";
-      })
-    );
-  }, [workspaces]);
+  // `devpod up` finished (its PTY closed). Only NOW leave the "starting" state —
+  // not when status flips to Running, which can happen while `up` is still
+  // streaming and would mount the SSH terminal over the live startup session.
+  // Optimistically mark Running so the terminal mounts immediately; the next
+  // poll confirms (or corrects) it.
+  const onUpFinished = (id: string) => {
+    setStarting((s) => s.filter((x) => x !== id));
+    setWorkspaces((ws) => ws.map((w) => (w.id === id ? { ...w, state: "Running" } : w)));
+  };
 
+  // Don't show the SSH terminal for a pod that's still starting — its PTY
+  // session is the live `devpod up` log, not a shell.
   const runningTerminals = Array.from(
     new Set([...opened, ...(selected?.state === "Running" ? [selected.id] : [])])
   ).filter((id) => {
     const w = workspaces.find((x) => x.id === id);
-    return w !== undefined && w.state !== "Stopped";
+    return w !== undefined && w.state !== "Stopped" && !starting.includes(id);
   });
 
-  const selectedHasTerminal = !!selected && runningTerminals.includes(selected.id);
-  const selectedStarting =
-    !!selected && selected.state !== "Running" && starting.includes(selected.id);
+  const selectedStarting = !!selected && starting.includes(selected.id);
+  const selectedHasTerminal =
+    !!selected && !selectedStarting && runningTerminals.includes(selected.id);
 
   return (
     <div className="app">
@@ -220,6 +221,7 @@ export default function App() {
           hidden={hiddenWs}
           selectedId={selectedId}
           badges={badges}
+          starting={starting}
           onSelect={select}
           onHide={hide}
           onUnhide={unhide}
@@ -231,7 +233,13 @@ export default function App() {
         {selected && !selectedHasTerminal && !selectedStarting && (
           <ActionPanel workspace={selected} onStart={start} />
         )}
-        {selected && selectedStarting && <StartLog key={selected.id} podId={selected.id} />}
+        {selected && selectedStarting && (
+          <StartLog
+            key={selected.id}
+            podId={selected.id}
+            onFinished={() => onUpFinished(selected.id)}
+          />
+        )}
         <div className="term-stack" style={{ display: selectedHasTerminal ? "flex" : "none" }}>
           {runningTerminals.map((id) => (
             <div
