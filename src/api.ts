@@ -32,3 +32,8 @@ export const onPtyOutput = (
   id: string,
   cb: (bytes: number[]) => void
 ): Promise<UnlistenFn> => listen<number[]>(`pty-output:${id}`, (e) => cb(e.payload));
+
+export const onPtyClosed = (
+  id: string,
+  cb: () => void
+): Promise<UnlistenFn> => listen<null>(`pty-closed:${id}`, () => cb());

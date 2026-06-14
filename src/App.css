@@ -12,7 +12,15 @@ body, html, #root { margin: 0; height: 100%; }
 .empty { margin: auto; color: #777; }
 .term-header { display: flex; justify-content: space-between; align-items: center;
   padding: 8px 12px; border-bottom: 1px solid #2a2a2a; }
-.terminal { flex: 1; min-height: 0; padding: 4px; }
+.terminal-wrap { flex: 1; min-height: 0; position: relative; display: flex; }
+.terminal { flex: 1; min-height: 0; min-width: 0; padding: 4px; }
+.term-disconnected { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  display: flex; align-items: center; gap: 12px; padding: 16px 24px; border-radius: 8px;
+  background: #1b1b1b; border: 1px solid #2a2a2a; color: #eee; font-size: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
+.term-disconnected button { padding: 6px 14px; border: 1px solid #3b82f6; border-radius: 6px;
+  background: #3b82f6; color: #fff; cursor: pointer; font-size: 13px; }
+.term-disconnected button:hover { background: #2563eb; }
 .action-panel { padding: 24px; }
 .action-panel .danger { color: #f87171; }
 .action-panel .actions { display: flex; gap: 12px; margin-top: 16px; }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { ActionPanel } from "./ActionPanel";
 import { Terminal } from "./Terminal";
@@ -17,19 +17,26 @@ export default function App() {
   const [workspaces, setWorkspaces] = useState<WorkspaceView[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [badges, setBadges] = useState<Record<string, boolean>>({});
+  const selectedIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   useEffect(() => {
     listWorkspaces().then(setWorkspaces).catch(() => {});
     const subs = [
       onWorkspacesUpdated(setWorkspaces),
       onPodBadge((podId) =>
-        setBadges((b) => (podId === selectedId ? b : { ...b, [podId]: true }))
+        setBadges((b) =>
+          podId === selectedIdRef.current ? b : { ...b, [podId]: true }
+        )
       ),
     ];
     return () => {
       subs.forEach((p) => p.then((un) => un()));
     };
-  }, [selectedId]);
+  }, []);
 
   const selected = workspaces.find((w) => w.id === selectedId) ?? null;
 
