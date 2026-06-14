@@ -132,6 +132,16 @@ mod tests {
     }
 
     #[test]
+    fn helper_script_bakes_pod_and_token() {
+        let s = notify_helper_script("wc-1", "deadbeef");
+        assert!(s.starts_with("#!/usr/bin/env bash"));
+        assert!(s.contains("wc-1"));
+        assert!(s.contains("deadbeef"));
+        assert!(s.contains("/notify"));
+        assert!(s.contains("${1:-Stop}"));
+    }
+
+    #[test]
     fn bakes_literal_pod_id_token_event_no_env() {
         let merged = merge_settings(None, "wc-7", "deadbeef");
         let arr = merged["hooks"]["PreToolUse"].as_array().unwrap();
@@ -183,7 +193,32 @@ pub fn inject(runner: &dyn CommandRunner, pod_id: &str, token: &str) -> Result<(
     let cmd = format!(
         "mkdir -p ~/.claude && echo {b64} | base64 -d > ~/.claude/settings.json"
     );
-    runner.run(&["ssh", "--command", &cmd, "--", pod_id]).map(|_| ())
+    runner.run(&["ssh", "--command", &cmd, "--", pod_id])?;
+
+    // Also drop a manual-trigger helper so the user can fire a real notification
+    // by hand from the DevSpace terminal (best-effort).
+    let script_b64 = base64_encode(notify_helper_script(pod_id, token).as_bytes());
+    let cmd2 = format!(
+        "echo {script_b64} | base64 -d > ~/.devspace-notify && chmod +x ~/.devspace-notify"
+    );
+    let _ = runner.run(&["ssh", "--command", &cmd2, "--", pod_id]);
+    Ok(())
+}
+
+/// A small executable helper written to `~/.devspace-notify` in the pod. Run it
+/// from the DevSpace terminal (it relies on this session's reverse tunnel) to
+/// fire a notification by hand: `~/.devspace-notify` (defaults to Stop) or
+/// `~/.devspace-notify Notification`.
+fn notify_helper_script(pod_id: &str, token: &str) -> String {
+    let port = crate::notify::POD_FORWARD_PORT;
+    format!(
+        "#!/usr/bin/env bash\n\
+         # DevSpace manual notification trigger. Must run inside the DevSpace\n\
+         # terminal — it uses the reverse SSH tunnel this session set up.\n\
+         event=\"${{1:-Stop}}\"\n\
+         curl -s -m 2 -X POST -d \"{{\\\"pod_id\\\":\\\"{pod_id}\\\",\\\"event\\\":\\\"$event\\\",\\\"token\\\":\\\"{token}\\\"}}\" http://localhost:{port}/notify \
+         && echo \"devspace-notify: sent event=$event\" || echo \"devspace-notify: failed (is this the DevSpace terminal?)\"\n"
+    )
 }
 
 fn base64_encode(input: &[u8]) -> String {
