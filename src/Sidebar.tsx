@@ -1,3 +1,4 @@
+import { useState, type DragEvent } from "react";
 import type { WorkspaceView } from "./api";
 
 export function statusColor(state: string): string {
@@ -32,45 +33,170 @@ function StopIcon() {
   );
 }
 
+function GripIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <g fill="currentColor">
+        <circle cx="6" cy="4" r="1.2" />
+        <circle cx="10" cy="4" r="1.2" />
+        <circle cx="6" cy="8" r="1.2" />
+        <circle cx="10" cy="8" r="1.2" />
+        <circle cx="6" cy="12" r="1.2" />
+        <circle cx="10" cy="12" r="1.2" />
+      </g>
+    </svg>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth={1.3} aria-hidden="true">
+      <path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" />
+      <circle cx="8" cy="8" r="2" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth={1.3} strokeLinecap="round" aria-hidden="true">
+      <path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" />
+      <circle cx="8" cy="8" r="2" />
+      <line x1="2.5" y1="13.5" x2="13.5" y2="2.5" />
+    </svg>
+  );
+}
+
 interface Props {
-  workspaces: WorkspaceView[];
+  visible: WorkspaceView[];
+  hidden: WorkspaceView[];
   selectedId: string | null;
   badges: Record<string, boolean>;
   onSelect: (id: string) => void;
   onStart: (id: string) => void;
   onStop: (id: string) => void;
+  onHide: (id: string) => void;
+  onUnhide: (id: string) => void;
+  onReorder: (dragId: string, targetId: string, before: boolean) => void;
 }
 
-export function Sidebar({ workspaces, selectedId, badges, onSelect, onStart, onStop }: Props) {
+export function Sidebar(props: Props) {
+  const { visible, hidden, selectedId, badges } = props;
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  const [showHidden, setShowHidden] = useState(true);
+
+  const handleDrop = (e: DragEvent<HTMLElement>, targetId: string) => {
+    e.preventDefault();
+    if (dragId && dragId !== targetId) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      props.onReorder(dragId, targetId, before);
+    }
+    setDragId(null);
+    setOverId(null);
+  };
+
   return (
     <nav className="sidebar">
-      {workspaces.map((w) => {
-        const running = w.state === "Running";
-        return (
-          <div key={w.id} className={`ws-row${w.id === selectedId ? " selected" : ""}`}>
-            <button
-              className="ws-main"
-              onClick={() => onSelect(w.id)}
-              title={w.error ?? w.source}
-            >
-              <span className="dot" style={{ background: statusColor(w.state) }} />
-              <span className="ws-name">{w.id}</span>
-              {badges[w.id] && <span className="badge" aria-label="unread" />}
-            </button>
-            <button
-              className={`ws-action ${running ? "stop" : "start"}`}
-              title={running ? "Stop" : "Start"}
-              aria-label={`${running ? "Stop" : "Start"} ${w.id}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                (running ? onStop : onStart)(w.id);
+      <div className="ws-list">
+        {visible.map((w) => {
+          const running = w.state === "Running";
+          return (
+            <div
+              key={w.id}
+              className={`ws-row${w.id === selectedId ? " selected" : ""}${
+                overId === w.id ? " drag-over" : ""
+              }`}
+              draggable
+              onDragStart={(e) => {
+                setDragId(w.id);
+                e.dataTransfer.effectAllowed = "move";
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setOverId(w.id);
+              }}
+              onDragLeave={() => setOverId((o) => (o === w.id ? null : o))}
+              onDrop={(e) => handleDrop(e, w.id)}
+              onDragEnd={() => {
+                setDragId(null);
+                setOverId(null);
               }}
             >
-              {running ? <StopIcon /> : <PlayIcon />}
-            </button>
-          </div>
-        );
-      })}
+              <span className="grip" aria-hidden="true">
+                <GripIcon />
+              </span>
+              <button
+                className="ws-main"
+                onClick={() => props.onSelect(w.id)}
+                title={w.error ?? w.source}
+              >
+                <span className="dot" style={{ background: statusColor(w.state) }} />
+                <span className="ws-name">{w.id}</span>
+                {badges[w.id] && <span className="badge" aria-label="unread" />}
+              </button>
+              <button
+                className={`ws-action ${running ? "stop" : "start"}`}
+                title={running ? "Stop" : "Start"}
+                aria-label={`${running ? "Stop" : "Start"} ${w.id}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  (running ? props.onStop : props.onStart)(w.id);
+                }}
+              >
+                {running ? <StopIcon /> : <PlayIcon />}
+              </button>
+              <button
+                className="ws-action hide"
+                title="Hide"
+                aria-label={`Hide ${w.id}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onHide(w.id);
+                }}
+              >
+                <EyeOffIcon />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {hidden.length > 0 && (
+        <div className="hidden-section">
+          <button className="hidden-header" onClick={() => setShowHidden((v) => !v)}>
+            {showHidden ? "▾" : "▸"} Hidden ({hidden.length})
+          </button>
+          {showHidden &&
+            hidden.map((w) => (
+              <div
+                key={w.id}
+                className={`ws-row hidden-row${w.id === selectedId ? " selected" : ""}`}
+              >
+                <button
+                  className="ws-main"
+                  onClick={() => props.onSelect(w.id)}
+                  title={w.error ?? w.source}
+                >
+                  <span className="dot" style={{ background: statusColor(w.state) }} />
+                  <span className="ws-name">{w.id}</span>
+                </button>
+                <button
+                  className="ws-action show"
+                  title="Unhide"
+                  aria-label={`Unhide ${w.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    props.onUnhide(w.id);
+                  }}
+                >
+                  <EyeIcon />
+                </button>
+              </div>
+            ))}
+        </div>
+      )}
     </nav>
   );
 }

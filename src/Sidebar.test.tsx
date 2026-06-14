@@ -12,6 +12,26 @@ const ws = (over: Partial<WorkspaceView>): WorkspaceView => ({
   ...over,
 });
 
+const noop = () => {};
+
+function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
+  return render(
+    <Sidebar
+      visible={[ws({ id: "wc-1" }), ws({ id: "wc-2", state: "Stopped" })]}
+      hidden={[]}
+      selectedId={null}
+      badges={{}}
+      onSelect={noop}
+      onStart={noop}
+      onStop={noop}
+      onHide={noop}
+      onUnhide={noop}
+      onReorder={noop}
+      {...over}
+    />
+  );
+}
+
 test("maps state to dot color", () => {
   expect(statusColor("Running")).toBe("green");
   expect(statusColor("Stopped")).toBe("grey");
@@ -20,36 +40,35 @@ test("maps state to dot color", () => {
   expect(statusColor("Unknown")).toBe("red");
 });
 
-test("renders a row per workspace", () => {
-  render(
-    <Sidebar
-      workspaces={[ws({ id: "wc-1" }), ws({ id: "wc-2", state: "Stopped" })]}
-      selectedId={null}
-      badges={{}}
-      onSelect={() => {}}
-      onStart={() => {}}
-      onStop={() => {}}
-    />
-  );
+test("renders a row per visible workspace", () => {
+  renderSidebar();
   expect(screen.getByText("wc-1")).toBeInTheDocument();
   expect(screen.getByText("wc-2")).toBeInTheDocument();
 });
 
-test("running pod shows a Stop action, stopped pod shows Start", () => {
+test("running pod shows Stop, stopped pod shows Start", () => {
   const onStart = vi.fn();
   const onStop = vi.fn();
-  render(
-    <Sidebar
-      workspaces={[ws({ id: "wc-1", state: "Running" }), ws({ id: "wc-2", state: "Stopped" })]}
-      selectedId={null}
-      badges={{}}
-      onSelect={() => {}}
-      onStart={onStart}
-      onStop={onStop}
-    />
-  );
+  renderSidebar({ onStart, onStop });
   fireEvent.click(screen.getByRole("button", { name: /stop wc-1/i }));
   expect(onStop).toHaveBeenCalledWith("wc-1");
   fireEvent.click(screen.getByRole("button", { name: /start wc-2/i }));
   expect(onStart).toHaveBeenCalledWith("wc-2");
+});
+
+test("hide action calls onHide; hidden section renders with unhide", () => {
+  const onHide = vi.fn();
+  const onUnhide = vi.fn();
+  renderSidebar({
+    visible: [ws({ id: "wc-1" })],
+    hidden: [ws({ id: "wc-9", state: "Stopped" })],
+    onHide,
+    onUnhide,
+  });
+  fireEvent.click(screen.getByRole("button", { name: /hide wc-1/i }));
+  expect(onHide).toHaveBeenCalledWith("wc-1");
+
+  expect(screen.getByText(/Hidden \(1\)/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /unhide wc-9/i }));
+  expect(onUnhide).toHaveBeenCalledWith("wc-9");
 });
