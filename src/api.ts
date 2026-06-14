@@ -21,3 +21,14 @@ export const onWorkspacesUpdated = (
 
 export const onPodBadge = (cb: (podId: string) => void): Promise<UnlistenFn> =>
   listen<string>("pod-badge", (e) => cb(e.payload));
+
+export const connectPty = (id: string) => invoke<void>("connect_pty", { id });
+export const writePty = (id: string, data: number[]) => invoke<void>("write_pty", { id, data });
+export const resizePty = (id: string, rows: number, cols: number) =>
+  invoke<void>("resize_pty", { id, rows, cols });
+export const disconnectPty = (id: string) => invoke<void>("disconnect_pty", { id });
+
+export const onPtyOutput = (
+  id: string,
+  cb: (bytes: number[]) => void
+): Promise<UnlistenFn> => listen<number[]>(`pty-output:${id}`, (e) => cb(e.payload));
