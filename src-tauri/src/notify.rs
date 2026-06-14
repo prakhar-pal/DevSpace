@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use std::io::Read;
 
 pub const LISTENER_PORT: u16 = 17865;
 
@@ -21,14 +20,13 @@ pub fn message_for(event: &str) -> &'static str {
 
 /// A per-run secret shared with the in-pod hook (via `--set-env`) so the local
 /// listener only acts on callbacks that carry it — any other local process
-/// POSTing to the port is ignored. Falls back to a process/zero-seeded value if
-/// `/dev/urandom` is unavailable.
-pub fn random_token() -> String {
+/// POSTing to the port is ignored. Sourced from the OS CSPRNG; **fails closed**
+/// (returns Err) if the RNG is unavailable so callers never run with a
+/// predictable token.
+pub fn random_token() -> Result<String, String> {
     let mut buf = [0u8; 16];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        let _ = f.read_exact(&mut buf);
-    }
-    buf.iter().map(|b| format!("{b:02x}")).collect()
+    getrandom::getrandom(&mut buf).map_err(|e| format!("OS RNG unavailable: {e}"))?;
+    Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Start a blocking HTTP listener on `LISTENER_PORT`. For each `POST /notify`

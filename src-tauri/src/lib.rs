@@ -88,7 +88,12 @@ fn disconnect_pty(state: tauri::State<AppState>, id: String) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let runner: Arc<dyn CommandRunner> = Arc::new(DevpodCli);
-    let notify_token = notify::random_token();
+    // Fail closed: if the OS RNG is unavailable we run WITHOUT notifications
+    // rather than with a predictable token. Empty token => listener not started.
+    let notify_token = notify::random_token().unwrap_or_else(|e| {
+        eprintln!("notifications disabled: {e}");
+        String::new()
+    });
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -107,18 +112,21 @@ pub fn run() {
                     let _ = handle.emit("workspaces-updated", views);
                 },
             );
-            let notify_handle = app.handle().clone();
-            if let Err(e) = notify::serve(notify_token.clone(), move |pod_id, message| {
-                use tauri_plugin_notification::NotificationExt;
-                let _ = notify_handle
-                    .notification()
-                    .builder()
-                    .title(format!("DevSpace: {pod_id}"))
-                    .body(&message)
-                    .show();
-                let _ = notify_handle.emit("pod-badge", pod_id);
-            }) {
-                eprintln!("notifications disabled: {e}");
+            // Empty token means RNG was unavailable — leave notifications off.
+            if !notify_token.is_empty() {
+                let notify_handle = app.handle().clone();
+                if let Err(e) = notify::serve(notify_token.clone(), move |pod_id, message| {
+                    use tauri_plugin_notification::NotificationExt;
+                    let _ = notify_handle
+                        .notification()
+                        .builder()
+                        .title(format!("DevSpace: {pod_id}"))
+                        .body(&message)
+                        .show();
+                    let _ = notify_handle.emit("pod-badge", pod_id);
+                }) {
+                    eprintln!("notifications disabled: {e}");
+                }
             }
             Ok(())
         })
