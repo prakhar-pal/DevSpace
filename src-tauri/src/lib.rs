@@ -2,6 +2,7 @@ mod devpod;
 mod hooks;
 mod notify;
 mod poller;
+mod pty;
 
 use std::sync::Arc;
 use tauri::Emitter;
@@ -10,6 +11,7 @@ use devpod::{CommandRunner, DevpodCli};
 
 pub struct AppState {
     pub runner: Arc<dyn CommandRunner>,
+    pub sessions: Arc<pty::SessionRegistry>,
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -38,6 +40,36 @@ fn delete_workspace(state: tauri::State<AppState>, id: String) -> Result<(), Str
     devpod::delete(state.runner.as_ref(), &id)
 }
 
+#[tauri::command]
+fn connect_pty(app: tauri::AppHandle, state: tauri::State<AppState>, id: String) -> Result<(), String> {
+    // Reject hostile ids before doing anything (defense in depth; ssh_args also
+    // passes the id after `--`).
+    devpod::validate_id(&id)?;
+    // Inject the Claude hook once per connect (idempotent). Best-effort: a hook
+    // failure should not block opening the terminal.
+    let _ = hooks::inject(state.runner.as_ref(), &id);
+    let handle = app.clone();
+    let pod = id.clone();
+    state.sessions.ensure(&id, move |bytes| {
+        let _ = handle.emit(&format!("pty-output:{pod}"), bytes);
+    })
+}
+
+#[tauri::command]
+fn write_pty(state: tauri::State<AppState>, id: String, data: Vec<u8>) -> Result<(), String> {
+    state.sessions.write(&id, &data)
+}
+
+#[tauri::command]
+fn resize_pty(state: tauri::State<AppState>, id: String, rows: u16, cols: u16) -> Result<(), String> {
+    state.sessions.resize(&id, rows, cols)
+}
+
+#[tauri::command]
+fn disconnect_pty(state: tauri::State<AppState>, id: String) {
+    state.sessions.close(&id);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let runner: Arc<dyn CommandRunner> = Arc::new(DevpodCli);
@@ -45,7 +77,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .manage(AppState { runner: runner.clone() })
+        .manage(AppState {
+            runner: runner.clone(),
+            sessions: Arc::new(pty::SessionRegistry::new()),
+        })
         .setup(move |app| {
             let handle = app.handle().clone();
             poller::spawn_loop(
@@ -75,7 +110,11 @@ pub fn run() {
             list_workspaces,
             start_workspace,
             stop_workspace,
-            delete_workspace
+            delete_workspace,
+            connect_pty,
+            write_pty,
+            resize_pty,
+            disconnect_pty
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
