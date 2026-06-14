@@ -83,18 +83,10 @@ pub fn list(runner: &dyn CommandRunner) -> Result<Vec<Workspace>, String> {
 
 pub fn status(runner: &dyn CommandRunner, id: &str) -> Result<WorkspaceStatus, String> {
     validate_id(id)?;
-    // --container-status=false skips an extra in-cluster container query we
-    // don't use. `--` terminates flag parsing so a hostile id can't be a flag.
-    let out = runner.run(&[
-        "status",
-        "--output",
-        "json",
-        "--timeout",
-        "10s",
-        "--container-status=false",
-        "--",
-        id,
-    ])?;
+    // Keep --container-status (the default): without it the kubernetes provider
+    // reports "Running" for a workspace whose container is actually Stopped.
+    // `--` terminates flag parsing so a hostile id can't be read as a flag.
+    let out = runner.run(&["status", "--output", "json", "--timeout", "10s", "--", id])?;
     parse_status(&out)
 }
 
