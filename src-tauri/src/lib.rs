@@ -53,8 +53,11 @@ fn connect_pty(app: tauri::AppHandle, state: tauri::State<AppState>, id: String)
             let _ = out_handle.emit(&format!("pty-output:{out_pod}"), bytes);
         },
         move || {
-            let _ = close_handle.emit(&format!("pty-closed:{close_pod}"), ());
+            // Remove the dead session BEFORE signalling the frontend, so a
+            // reconnect triggered by `pty-closed` can't race `ensure` against a
+            // still-present (but dead) session and silently no-op.
             sessions.close(&close_pod);
+            let _ = close_handle.emit(&format!("pty-closed:{close_pod}"), ());
         },
     )
 }

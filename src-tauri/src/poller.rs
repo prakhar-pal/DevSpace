@@ -44,12 +44,32 @@ pub fn merge(
         .collect()
 }
 
-/// Run one poll cycle: list workspaces, fetch each status, return merged views.
+/// How many `devpod status` calls run concurrently per poll cycle. Bounds load
+/// while keeping a slow/unreachable workspace from stalling the whole cycle
+/// (each call still carries the CLI's own short timeout).
+const MAX_CONCURRENT_STATUS: usize = 4;
+
+/// Run one poll cycle: list workspaces, fetch each status (up to
+/// `MAX_CONCURRENT_STATUS` in flight), return merged views.
 pub fn poll_once(runner: &dyn CommandRunner) -> Result<Vec<WorkspaceView>, String> {
     let workspaces = devpod::list(runner)?;
     let mut statuses = HashMap::new();
-    for w in &workspaces {
-        statuses.insert(w.id.clone(), devpod::status(runner, &w.id));
+    // `dyn CommandRunner: Send + Sync` (supertrait bounds), so `&dyn` is Send and
+    // can be shared with scoped threads that are guaranteed to join before return.
+    for chunk in workspaces.chunks(MAX_CONCURRENT_STATUS) {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = chunk
+                .iter()
+                .map(|w| {
+                    let id = w.id.clone();
+                    scope.spawn(move || (id.clone(), devpod::status(runner, &id)))
+                })
+                .collect();
+            for handle in handles {
+                let (id, status) = handle.join().expect("status thread panicked");
+                statuses.insert(id, status);
+            }
+        });
     }
     Ok(merge(&workspaces, &statuses))
 }
