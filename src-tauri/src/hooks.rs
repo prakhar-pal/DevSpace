@@ -188,21 +188,19 @@ pub fn inject(runner: &dyn CommandRunner, pod_id: &str, token: &str) -> Result<(
     let existing: Option<Value> = serde_json::from_str(read.trim()).ok();
     let merged = merge_settings(existing, pod_id, token);
     let serialized = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
-    // base64 to safely transport JSON through the shell.
-    let b64 = base64_encode(serialized.as_bytes());
+    // base64 to safely transport both files through the shell. Write the
+    // settings.json hooks AND the manual-trigger helper in one command so the
+    // helper is always refreshed (and overwrites any stale/hand-edited copy)
+    // whenever the hooks are.
+    let settings_b64 = base64_encode(serialized.as_bytes());
+    let helper_b64 = base64_encode(notify_helper_script(pod_id, token).as_bytes());
     let cmd = format!(
-        "mkdir -p ~/.claude && echo {b64} | base64 -d > ~/.claude/settings.json"
+        "mkdir -p ~/.claude \
+         && echo {settings_b64} | base64 -d > ~/.claude/settings.json \
+         && echo {helper_b64} | base64 -d > ~/.devspace-notify \
+         && chmod +x ~/.devspace-notify"
     );
-    runner.run(&["ssh", "--command", &cmd, "--", pod_id])?;
-
-    // Also drop a manual-trigger helper so the user can fire a real notification
-    // by hand from the DevSpace terminal (best-effort).
-    let script_b64 = base64_encode(notify_helper_script(pod_id, token).as_bytes());
-    let cmd2 = format!(
-        "echo {script_b64} | base64 -d > ~/.devspace-notify && chmod +x ~/.devspace-notify"
-    );
-    let _ = runner.run(&["ssh", "--command", &cmd2, "--", pod_id]);
-    Ok(())
+    runner.run(&["ssh", "--command", &cmd, "--", pod_id]).map(|_| ())
 }
 
 /// A small executable helper written to `~/.devspace-notify` in the pod. Run it
