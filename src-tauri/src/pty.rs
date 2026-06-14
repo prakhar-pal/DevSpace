@@ -1,26 +1,33 @@
-use crate::notify::LISTENER_PORT;
+use crate::notify::{LISTENER_PORT, POD_FORWARD_PORT};
 use portable_pty::{CommandBuilder, NativePtySystem, PtyPair, PtySize, PtySystem};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
-/// Build the argument vector for the `devpod ssh` invocation that carries both
-/// the interactive shell and the reverse notification tunnel. The (untrusted)
-/// pod id is validated by the caller and passed after a `--` flag terminator.
-/// `token` is the per-run secret the in-pod hook echoes back to authenticate.
-pub fn ssh_args(pod_id: &str, token: &str) -> Vec<String> {
+/// The program we spawn for a terminal session.
+pub const SSH_PROGRAM: &str = "ssh";
+
+/// Build the OpenSSH argument vector for a terminal session. We connect via the
+/// `<id>.devpod` host alias DevPod writes into `~/.ssh/config` (a raw
+/// `devpod ssh --stdio` proxy) rather than `devpod ssh <id>` directly: the
+/// latter runs `--start-services`, which floods the session with port-forward
+/// errors that conflict with the DevPod desktop app. We still carry the reverse
+/// notification tunnel via `-R`. Host-key checking is disabled because devpod
+/// containers are ephemeral with rotating keys and the transport is a local
+/// proxy, not a network host. The (untrusted) pod id is validated by the caller
+/// and can't start with `-`, so it is safe as the `<id>.devpod` hostname.
+pub fn ssh_args(pod_id: &str) -> Vec<String> {
     vec![
-        "ssh".into(),
+        "-tt".into(),
+        "-o".into(),
+        "StrictHostKeyChecking=no".into(),
+        "-o".into(),
+        "UserKnownHostsFile=/dev/null".into(),
+        "-o".into(),
+        "LogLevel=ERROR".into(),
         "-R".into(),
-        format!("8765:localhost:{LISTENER_PORT}"),
-        "--set-env".into(),
-        format!("DEVSPACE_POD_ID={pod_id}"),
-        "--set-env".into(),
-        "DEVSPACE_NOTIFY_PORT=8765".into(),
-        "--set-env".into(),
-        format!("DEVSPACE_NOTIFY_TOKEN={token}"),
-        "--".into(),
-        pod_id.into(),
+        format!("{POD_FORWARD_PORT}:localhost:{LISTENER_PORT}"),
+        format!("{pod_id}.devpod"),
     ]
 }
 
@@ -47,13 +54,7 @@ impl SessionRegistry {
     /// Spawn `devpod ssh ...` in a PTY. `on_output` is called with raw bytes as
     /// they arrive from the workspace; `on_close` runs once when the reader hits
     /// EOF/error. The session persists until `close`.
-    pub fn ensure<F, G>(
-        &self,
-        pod_id: &str,
-        token: &str,
-        on_output: F,
-        on_close: G,
-    ) -> Result<(), String>
+    pub fn ensure<F, G>(&self, pod_id: &str, on_output: F, on_close: G) -> Result<(), String>
     where
         F: Fn(Vec<u8>) + Send + 'static,
         G: FnOnce() + Send + 'static,
@@ -67,8 +68,8 @@ impl SessionRegistry {
             .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
             .map_err(|e| e.to_string())?;
 
-        let mut cmd = CommandBuilder::new("devpod");
-        for a in ssh_args(pod_id, token) {
+        let mut cmd = CommandBuilder::new(SSH_PROGRAM);
+        for a in ssh_args(pod_id) {
             cmd.arg(a);
         }
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
@@ -124,16 +125,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_ssh_args_with_reverse_tunnel() {
-        let args = ssh_args("wc-1", "secret123");
-        assert!(args.contains(&"ssh".to_string()));
-        assert!(args.contains(&"wc-1".to_string()));
-        assert!(args.iter().any(|a| a.starts_with("8765:localhost:")));
-        assert!(args.contains(&"DEVSPACE_POD_ID=wc-1".to_string()));
-        assert!(args.contains(&"DEVSPACE_NOTIFY_PORT=8765".to_string()));
-        assert!(args.contains(&"DEVSPACE_NOTIFY_TOKEN=secret123".to_string()));
-        // The pod id must come after a `--` flag terminator.
-        let dd = args.iter().position(|a| a == "--").expect("has -- terminator");
-        assert_eq!(args[dd + 1], "wc-1");
+    fn builds_ssh_args_for_devpod_alias() {
+        let args = ssh_args("wc-1");
+        // Forces a remote TTY for an interactive shell.
+        assert!(args.contains(&"-tt".to_string()));
+        // Carries the reverse notification tunnel.
+        assert!(args.contains(&"-R".to_string()));
+        assert!(args.iter().any(|a| a == &format!("{POD_FORWARD_PORT}:localhost:{LISTENER_PORT}")));
+        // Connects through the DevPod ssh host alias, not `devpod ssh`.
+        assert_eq!(args.last().unwrap(), "wc-1.devpod");
     }
 }

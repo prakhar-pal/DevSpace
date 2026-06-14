@@ -1,6 +1,10 @@
 use serde::Deserialize;
 
+/// Desktop-side port the notify HTTP listener binds.
 pub const LISTENER_PORT: u16 = 17865;
+/// Pod-side port the reverse SSH tunnel forwards to `LISTENER_PORT`; the in-pod
+/// hook posts here. Kept in one place so the tunnel and the hook agree.
+pub const POD_FORWARD_PORT: u16 = 8765;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct NotifyPayload {

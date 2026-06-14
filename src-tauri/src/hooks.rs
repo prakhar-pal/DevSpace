@@ -1,16 +1,17 @@
 use crate::devpod::CommandRunner;
 use serde_json::{json, Value};
 
-/// The shell command Claude Code runs for a given hook event. The event label
-/// is baked in literally (Claude Code does not reliably export it as an env
-/// var); $DEVSPACE_POD_ID, $DEVSPACE_NOTIFY_PORT and $DEVSPACE_NOTIFY_TOKEN ARE
-/// set on the ssh session. The token authenticates the callback to the desktop
-/// listener.
-fn hook_command(event_label: &str) -> String {
+/// The shell command Claude Code runs for a given hook event. Pod id, event
+/// label, port and auth token are all baked in literally at injection time —
+/// we connect with plain `ssh` (no DevPod `--set-env`), so nothing can be read
+/// from the environment. pod_id is validated (no quotes) and token is hex, so
+/// the single-quoted JSON payload is injection-safe.
+fn hook_command(event_label: &str, pod_id: &str, token: &str) -> String {
+    let port = crate::notify::POD_FORWARD_PORT;
     format!(
         "curl -s -m 2 -X POST \
-         -d \"{{\\\"pod_id\\\":\\\"$DEVSPACE_POD_ID\\\",\\\"event\\\":\\\"{event_label}\\\",\\\"token\\\":\\\"$DEVSPACE_NOTIFY_TOKEN\\\"}}\" \
-         http://localhost:$DEVSPACE_NOTIFY_PORT/notify >/dev/null 2>&1 || true"
+         -d '{{\"pod_id\":\"{pod_id}\",\"event\":\"{event_label}\",\"token\":\"{token}\"}}' \
+         http://localhost:{port}/notify >/dev/null 2>&1 || true"
     )
 }
 
@@ -21,8 +22,10 @@ const HOOK_EVENTS: &[(&str, Option<&str>, &str)] = &[
     ("PreToolUse", Some("AskUserQuestion"), "AskUserQuestion"),
 ];
 
-fn devspace_hook_entry(matcher: Option<&str>, event_label: &str) -> Value {
-    let mut entry = json!({ "hooks": [ { "type": "command", "command": hook_command(event_label) } ] });
+fn devspace_hook_entry(matcher: Option<&str>, event_label: &str, pod_id: &str, token: &str) -> Value {
+    let mut entry = json!({
+        "hooks": [ { "type": "command", "command": hook_command(event_label, pod_id, token) } ]
+    });
     if let Some(m) = matcher {
         entry["matcher"] = json!(m);
     }
@@ -34,7 +37,7 @@ fn devspace_hook_entry(matcher: Option<&str>, event_label: &str) -> Value {
 /// PreToolUse events. Existing unrelated hooks are preserved. Malformed
 /// existing values (wrong-typed `hooks` or event entries) are overwritten
 /// with the correct container rather than panicking.
-pub fn merge_settings(existing: Option<Value>) -> Value {
+pub fn merge_settings(existing: Option<Value>, pod_id: &str, token: &str) -> Value {
     let mut root = existing.unwrap_or_else(|| json!({}));
     if !root.is_object() {
         root = json!({});
@@ -54,7 +57,7 @@ pub fn merge_settings(existing: Option<Value>) -> Value {
             *event_val = json!([]);
         }
         let arr = event_val.as_array_mut().unwrap();
-        let cmd = hook_command(label);
+        let cmd = hook_command(label, pod_id, token);
         let already = arr.iter().any(|e| {
             e.get("hooks")
                 .and_then(|h| h.as_array())
@@ -62,7 +65,7 @@ pub fn merge_settings(existing: Option<Value>) -> Value {
                 .unwrap_or(false)
         });
         if !already {
-            arr.push(devspace_hook_entry(*matcher, label));
+            arr.push(devspace_hook_entry(*matcher, label, pod_id, token));
         }
     }
     root
@@ -74,7 +77,7 @@ mod tests {
 
     #[test]
     fn adds_hooks_to_empty_settings() {
-        let merged = merge_settings(None);
+        let merged = merge_settings(None, "wc-1", "tok");
         let notif = &merged["hooks"]["Notification"];
         assert_eq!(notif.as_array().unwrap().len(), 1);
         assert!(merged["hooks"]["Stop"].as_array().unwrap().len() == 1);
@@ -83,8 +86,8 @@ mod tests {
 
     #[test]
     fn is_idempotent() {
-        let once = merge_settings(None);
-        let twice = merge_settings(Some(once.clone()));
+        let once = merge_settings(None, "wc-1", "tok");
+        let twice = merge_settings(Some(once.clone()), "wc-1", "tok");
         assert_eq!(once, twice);
     }
 
@@ -93,7 +96,7 @@ mod tests {
         let existing = json!({
             "hooks": { "Notification": [ { "hooks": [ { "type": "command", "command": "echo other" } ] } ] }
         });
-        let merged = merge_settings(Some(existing));
+        let merged = merge_settings(Some(existing), "wc-1", "tok");
         let arr = merged["hooks"]["Notification"].as_array().unwrap();
         assert_eq!(arr.len(), 2);
     }
@@ -105,28 +108,33 @@ mod tests {
     }
 
     #[test]
-    fn pretooluse_has_matcher_and_literal_event() {
-        let merged = merge_settings(None);
+    fn bakes_literal_pod_id_token_event_no_env() {
+        let merged = merge_settings(None, "wc-7", "deadbeef");
         let arr = merged["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
         let entry = &arr[0];
         assert_eq!(entry["matcher"], "AskUserQuestion");
         let cmd = entry["hooks"][0]["command"].as_str().unwrap();
         assert!(cmd.contains("AskUserQuestion"));
+        assert!(cmd.contains("wc-7"));
+        assert!(cmd.contains("deadbeef"));
+        // No reliance on the in-pod environment.
         assert!(!cmd.contains("$CLAUDE_HOOK_EVENT_NAME"));
+        assert!(!cmd.contains("$DEVSPACE_POD_ID"));
+        assert!(!cmd.contains("$DEVSPACE_NOTIFY_TOKEN"));
     }
 
     #[test]
     fn tolerates_malformed_settings() {
         // `hooks` is not an object.
-        let merged = merge_settings(Some(json!({ "hooks": "garbage" })));
+        let merged = merge_settings(Some(json!({ "hooks": "garbage" })), "wc-1", "tok");
         assert!(merged["hooks"].is_object());
         assert_eq!(merged["hooks"]["Stop"].as_array().unwrap().len(), 1);
         assert_eq!(merged["hooks"]["Notification"].as_array().unwrap().len(), 1);
         assert_eq!(merged["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
 
         // An event key is not an array.
-        let merged = merge_settings(Some(json!({ "hooks": { "Stop": 5 } })));
+        let merged = merge_settings(Some(json!({ "hooks": { "Stop": 5 } })), "wc-1", "tok");
         assert!(merged["hooks"].is_object());
         assert_eq!(merged["hooks"]["Stop"].as_array().unwrap().len(), 1);
         assert_eq!(merged["hooks"]["Notification"].as_array().unwrap().len(), 1);
@@ -136,7 +144,7 @@ mod tests {
 
 /// Read the pod's ~/.claude/settings.json, merge in the DevSpace hooks, and
 /// write it back via `devpod ssh --command`. Idempotent.
-pub fn inject(runner: &dyn CommandRunner, pod_id: &str) -> Result<(), String> {
+pub fn inject(runner: &dyn CommandRunner, pod_id: &str, token: &str) -> Result<(), String> {
     crate::devpod::validate_id(pod_id)?;
     let read = runner.run(&[
         "ssh", "--command",
@@ -144,7 +152,7 @@ pub fn inject(runner: &dyn CommandRunner, pod_id: &str) -> Result<(), String> {
         "--", pod_id,
     ])?;
     let existing: Option<Value> = serde_json::from_str(read.trim()).ok();
-    let merged = merge_settings(existing);
+    let merged = merge_settings(existing, pod_id, token);
     let serialized = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
     // base64 to safely transport JSON through the shell.
     let b64 = base64_encode(serialized.as_bytes());

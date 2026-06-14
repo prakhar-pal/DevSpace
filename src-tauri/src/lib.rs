@@ -42,13 +42,15 @@ fn connect_pty(app: tauri::AppHandle, state: tauri::State<AppState>, id: String)
     devpod::validate_id(&id)?;
     // Inject the Claude hook off the open path (idempotent, best-effort): it
     // makes two ssh round-trips, so doing it inline would delay the terminal
-    // appearing. A hook failure must never block opening the terminal.
+    // appearing. A hook failure must never block opening the terminal. The
+    // per-run token is baked into the injected hook (we connect with plain ssh,
+    // so it can't be passed via the environment).
     let inject_runner = state.runner.clone();
     let inject_id = id.clone();
+    let inject_token = state.notify_token.clone();
     std::thread::spawn(move || {
-        let _ = hooks::inject(inject_runner.as_ref(), &inject_id);
+        let _ = hooks::inject(inject_runner.as_ref(), &inject_id, &inject_token);
     });
-    let token = state.notify_token.clone();
     let out_handle = app.clone();
     let out_pod = id.clone();
     let close_handle = app.clone();
@@ -56,7 +58,6 @@ fn connect_pty(app: tauri::AppHandle, state: tauri::State<AppState>, id: String)
     let sessions = state.sessions.clone();
     state.sessions.ensure(
         &id,
-        &token,
         move |bytes| {
             let _ = out_handle.emit(&format!("pty-output:{out_pod}"), bytes);
         },
