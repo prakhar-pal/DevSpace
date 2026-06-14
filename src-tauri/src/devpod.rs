@@ -60,26 +60,46 @@ impl CommandRunner for DevpodCli {
     }
 }
 
+/// Reject workspace ids that could smuggle CLI flags into the `devpod`
+/// subprocess (e.g. an id beginning with `-`). Real devpod ids are
+/// alphanumeric with `-`/`_` separators; anything else is refused.
+pub fn validate_id(id: &str) -> Result<(), String> {
+    let valid = !id.is_empty()
+        && id.len() <= 64
+        && id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("invalid workspace id: {id:?}"))
+    }
+}
+
 pub fn list(runner: &dyn CommandRunner) -> Result<Vec<Workspace>, String> {
     let out = runner.run(&["list", "--output", "json"])?;
     parse_list(&out)
 }
 
 pub fn status(runner: &dyn CommandRunner, id: &str) -> Result<WorkspaceStatus, String> {
-    let out = runner.run(&["status", id, "--output", "json", "--timeout", "10s"])?;
+    validate_id(id)?;
+    // `--` terminates flag parsing so a hostile id can never be read as a flag.
+    let out = runner.run(&["status", "--output", "json", "--timeout", "10s", "--", id])?;
     parse_status(&out)
 }
 
 pub fn up(runner: &dyn CommandRunner, id: &str) -> Result<(), String> {
-    runner.run(&["up", id, "--ide", "none"]).map(|_| ())
+    validate_id(id)?;
+    runner.run(&["up", "--ide", "none", "--", id]).map(|_| ())
 }
 
 pub fn stop(runner: &dyn CommandRunner, id: &str) -> Result<(), String> {
-    runner.run(&["stop", id]).map(|_| ())
+    validate_id(id)?;
+    runner.run(&["stop", "--", id]).map(|_| ())
 }
 
 pub fn delete(runner: &dyn CommandRunner, id: &str) -> Result<(), String> {
-    runner.run(&["delete", id]).map(|_| ())
+    validate_id(id)?;
+    runner.run(&["delete", "--", id]).map(|_| ())
 }
 
 #[cfg(test)]
@@ -133,8 +153,25 @@ mod tests {
     fn stop_passes_id() {
         let runner = FakeRunner {
             output: String::new(),
-            expected_args: vec!["stop".into(), "wc-1".into()],
+            expected_args: vec!["stop".into(), "--".into(), "wc-1".into()],
         };
         assert!(stop(&runner, "wc-1").is_ok());
+    }
+
+    struct PanicRunner;
+    impl CommandRunner for PanicRunner {
+        fn run(&self, _args: &[&str]) -> Result<String, String> {
+            panic!("runner must not be invoked for an invalid id");
+        }
+    }
+
+    #[test]
+    fn rejects_flag_like_id_before_running() {
+        // A hostile id must be refused before the subprocess is ever spawned.
+        assert!(stop(&PanicRunner, "--ide").is_err());
+        assert!(delete(&PanicRunner, "-rf").is_err());
+        assert!(validate_id("wc-1").is_ok());
+        assert!(validate_id("task-queue").is_ok());
+        assert!(validate_id("").is_err());
     }
 }
