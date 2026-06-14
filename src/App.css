@@ -21,6 +21,29 @@ body, html, #root { margin: 0; height: 100%; }
 .term-disconnected button { padding: 6px 14px; border: 1px solid #3b82f6; border-radius: 6px;
   background: #3b82f6; color: #fff; cursor: pointer; font-size: 13px; }
 .term-disconnected button:hover { background: #2563eb; }
-.action-panel { padding: 24px; }
-.action-panel .danger { color: #f87171; }
-.action-panel .actions { display: flex; gap: 12px; margin-top: 16px; }
+.action-panel { padding: 40px; overflow-y: auto; display: flex; justify-content: center; align-items: flex-start; }
+.ap-card { width: 100%; max-width: 540px; background: #181818; border: 1px solid #2a2a2a;
+  border-radius: 12px; padding: 24px 28px; }
+.ap-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 20px; }
+.ap-head h2 { margin: 0; font-size: 22px; font-weight: 600; word-break: break-all; }
+.ap-state { flex: 0 0 auto; font-size: 11px; font-weight: 600; padding: 4px 10px;
+  border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em;
+  background: #333; color: #cbd5e1; }
+.ap-state-running { background: rgba(34, 197, 94, 0.15); color: #4ade80; }
+.ap-state-stopped { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; }
+.ap-state-busy { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+.ap-state-unknown { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+.ap-meta { margin: 0 0 24px; }
+.ap-row { display: grid; grid-template-columns: 110px 1fr; gap: 16px; padding: 11px 0;
+  border-bottom: 1px solid #242424; }
+.ap-row:last-child { border-bottom: none; }
+.ap-row dt { color: #8a8a8a; font-size: 13px; }
+.ap-row dd { margin: 0; color: #eaeaea; font-size: 14px; word-break: break-all; }
+.ap-actions { display: flex; gap: 10px; }
+.btn { padding: 8px 18px; border-radius: 8px; border: 1px solid transparent; font-size: 13px;
+  font-weight: 500; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+.btn-primary { background: #3b82f6; color: #fff; }
+.btn-primary:hover { background: #2563eb; }
+.btn-danger { background: transparent; color: #f87171; border-color: #4a2a2a; }
+.btn-danger:hover { background: rgba(248, 113, 113, 0.1); border-color: #6a3535; }
