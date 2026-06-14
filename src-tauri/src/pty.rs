@@ -51,10 +51,18 @@ impl SessionRegistry {
         self.sessions.lock().unwrap().contains_key(pod_id)
     }
 
-    /// Spawn `devpod ssh ...` in a PTY. `on_output` is called with raw bytes as
-    /// they arrive from the workspace; `on_close` runs once when the reader hits
-    /// EOF/error. The session persists until `close`.
-    pub fn ensure<F, G>(&self, pod_id: &str, on_output: F, on_close: G) -> Result<(), String>
+    /// Spawn `program args...` in a PTY keyed by `pod_id`. `on_output` is called
+    /// with raw bytes as they arrive; `on_close` runs once when the reader hits
+    /// EOF/error. No-op if a session already exists for `pod_id`. Used for both
+    /// the interactive `ssh` shell and the streaming `devpod up` startup log.
+    pub fn ensure<F, G>(
+        &self,
+        pod_id: &str,
+        program: &str,
+        args: &[String],
+        on_output: F,
+        on_close: G,
+    ) -> Result<(), String>
     where
         F: Fn(Vec<u8>) + Send + 'static,
         G: FnOnce() + Send + 'static,
@@ -68,8 +76,8 @@ impl SessionRegistry {
             .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
             .map_err(|e| e.to_string())?;
 
-        let mut cmd = CommandBuilder::new(SSH_PROGRAM);
-        for a in ssh_args(pod_id) {
+        let mut cmd = CommandBuilder::new(program);
+        for a in args {
             cmd.arg(a);
         }
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;

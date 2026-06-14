@@ -87,11 +87,6 @@ pub fn status(runner: &dyn CommandRunner, id: &str) -> Result<WorkspaceStatus, S
     parse_status(&out)
 }
 
-pub fn up(runner: &dyn CommandRunner, id: &str) -> Result<(), String> {
-    validate_id(id)?;
-    runner.run(&["up", "--ide", "none", "--", id]).map(|_| ())
-}
-
 pub fn stop(runner: &dyn CommandRunner, id: &str) -> Result<(), String> {
     validate_id(id)?;
     runner.run(&["stop", "--", id]).map(|_| ())

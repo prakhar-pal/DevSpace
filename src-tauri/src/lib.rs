@@ -20,31 +20,82 @@ fn list_workspaces(state: tauri::State<AppState>) -> Result<Vec<poller::Workspac
     poller::poll_once(state.runner.as_ref())
 }
 
+/// Spawn `program args...` in the pod's PTY session, streaming output to the
+/// `pty-output:<id>` event and emitting `pty-closed:<id>` (after removing the
+/// session) when it ends. Shared by the interactive ssh terminal and the
+/// streaming `devpod up` startup log.
+fn spawn_pty_session(
+    app: &tauri::AppHandle,
+    sessions: &Arc<pty::SessionRegistry>,
+    id: &str,
+    program: &str,
+    args: Vec<String>,
+) -> Result<(), String> {
+    let out_handle = app.clone();
+    let out_pod = id.to_string();
+    let close_handle = app.clone();
+    let close_pod = id.to_string();
+    let sessions_close = sessions.clone();
+    sessions.ensure(
+        id,
+        program,
+        &args,
+        move |bytes| {
+            let _ = out_handle.emit(&format!("pty-output:{out_pod}"), bytes);
+        },
+        move || {
+            notify::log(&format!("session closed pod={close_pod}"));
+            // Remove the dead session BEFORE signalling the frontend, so a
+            // reconnect triggered by `pty-closed` can't race `ensure`.
+            sessions_close.close(&close_pod);
+            let _ = close_handle.emit(&format!("pty-closed:{close_pod}"), ());
+        },
+    )
+}
+
 #[tauri::command]
-fn start_workspace(state: tauri::State<AppState>, id: String) -> Result<(), String> {
-    devpod::up(state.runner.as_ref(), &id)
+fn start_workspace(app: tauri::AppHandle, state: tauri::State<AppState>, id: String) -> Result<(), String> {
+    devpod::validate_id(&id)?;
+    // Run `devpod up` in a PTY so it (a) doesn't block the UI and (b) streams
+    // its build/start log to the same terminal view as the workspace.
+    notify::log(&format!("start_workspace: devpod up pod={id}"));
+    let args = vec![
+        "up".into(),
+        "--ide".into(),
+        "none".into(),
+        "--".into(),
+        id.clone(),
+    ];
+    spawn_pty_session(&app, &state.sessions, &id, "devpod", args)
 }
 
 #[tauri::command]
 fn stop_workspace(state: tauri::State<AppState>, id: String) -> Result<(), String> {
-    devpod::stop(state.runner.as_ref(), &id)
+    devpod::validate_id(&id)?;
+    // Non-blocking: `devpod stop` can take a while; never block the UI thread.
+    let runner = state.runner.clone();
+    std::thread::spawn(move || {
+        let _ = devpod::stop(runner.as_ref(), &id);
+    });
+    Ok(())
 }
 
 #[tauri::command]
 fn delete_workspace(state: tauri::State<AppState>, id: String) -> Result<(), String> {
-    devpod::delete(state.runner.as_ref(), &id)
+    devpod::validate_id(&id)?;
+    let runner = state.runner.clone();
+    std::thread::spawn(move || {
+        let _ = devpod::delete(runner.as_ref(), &id);
+    });
+    Ok(())
 }
 
 #[tauri::command]
 fn connect_pty(app: tauri::AppHandle, state: tauri::State<AppState>, id: String) -> Result<(), String> {
-    // Reject hostile ids before doing anything (defense in depth; ssh_args also
-    // passes the id after `--`).
     devpod::validate_id(&id)?;
     // Inject the Claude hook off the open path (idempotent, best-effort): it
-    // makes two ssh round-trips, so doing it inline would delay the terminal
-    // appearing. A hook failure must never block opening the terminal. The
-    // per-run token is baked into the injected hook (we connect with plain ssh,
-    // so it can't be passed via the environment).
+    // makes ssh round-trips, so doing it inline would delay the terminal. A hook
+    // failure must never block opening the terminal.
     let inject_runner = state.runner.clone();
     let inject_id = id.clone();
     let inject_token = state.notify_token.clone();
@@ -55,25 +106,7 @@ fn connect_pty(app: tauri::AppHandle, state: tauri::State<AppState>, id: String)
             Err(e) => notify::log(&format!("inject: FAILED pod={inject_id}: {e}")),
         }
     });
-    let out_handle = app.clone();
-    let out_pod = id.clone();
-    let close_handle = app.clone();
-    let close_pod = id.clone();
-    let sessions = state.sessions.clone();
-    let res = state.sessions.ensure(
-        &id,
-        move |bytes| {
-            let _ = out_handle.emit(&format!("pty-output:{out_pod}"), bytes);
-        },
-        move || {
-            notify::log(&format!("session closed (reader EOF) pod={close_pod}"));
-            // Remove the dead session BEFORE signalling the frontend, so a
-            // reconnect triggered by `pty-closed` can't race `ensure` against a
-            // still-present (but dead) session and silently no-op.
-            sessions.close(&close_pod);
-            let _ = close_handle.emit(&format!("pty-closed:{close_pod}"), ());
-        },
-    );
+    let res = spawn_pty_session(&app, &state.sessions, &id, pty::SSH_PROGRAM, pty::ssh_args(&id));
     notify::log(&format!("connect_pty: ensure returned ok={} pod={id}", res.is_ok()));
     res
 }

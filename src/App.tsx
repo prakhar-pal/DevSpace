@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { ActionPanel } from "./ActionPanel";
 import { Terminal } from "./Terminal";
+import { StartLog } from "./StartLog";
 import {
   listWorkspaces,
   onWorkspacesUpdated,
@@ -30,6 +31,8 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [badges, setBadges] = useState<Record<string, boolean>>({});
   const [opened, setOpened] = useState<string[]>([]);
+  // Workspaces with a running `devpod up` (showing the startup log stream).
+  const [starting, setStarting] = useState<string[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // User-defined sidebar order and hidden set, persisted across launches.
   const [order, setOrder] = useState<string[]>(() => loadIds(ORDER_KEY));
@@ -182,6 +185,23 @@ export default function App() {
   const hide = (id: string) => setHidden((prev) => (prev.includes(id) ? prev : [...prev, id]));
   const unhide = (id: string) => setHidden((prev) => prev.filter((x) => x !== id));
 
+  const start = (id: string) => {
+    startWorkspace(id).catch(() => {});
+    setStarting((s) => (s.includes(id) ? s : [...s, id]));
+    select(id);
+  };
+
+  // Once a workspace is Running, it's no longer "starting" — switch from the
+  // startup log to the interactive terminal.
+  useEffect(() => {
+    setStarting((s) =>
+      s.filter((id) => {
+        const w = workspaces.find((x) => x.id === id);
+        return w !== undefined && w.state !== "Running";
+      })
+    );
+  }, [workspaces]);
+
   const runningTerminals = Array.from(
     new Set([...opened, ...(selected?.state === "Running" ? [selected.id] : [])])
   ).filter((id) => {
@@ -190,6 +210,8 @@ export default function App() {
   });
 
   const selectedHasTerminal = !!selected && runningTerminals.includes(selected.id);
+  const selectedStarting =
+    !!selected && selected.state !== "Running" && starting.includes(selected.id);
 
   return (
     <div className="app">
@@ -200,7 +222,7 @@ export default function App() {
           selectedId={selectedId}
           badges={badges}
           onSelect={select}
-          onStart={(id) => startWorkspace(id).catch(() => {})}
+          onStart={start}
           onStop={(id) => stopWorkspace(id).catch(() => {})}
           onHide={hide}
           onUnhide={unhide}
@@ -209,12 +231,13 @@ export default function App() {
       )}
       <main className="main">
         {!selected && <div className="empty">Select a workspace</div>}
-        {selected && !selectedHasTerminal && (
+        {selected && !selectedHasTerminal && !selectedStarting && (
           <ActionPanel
             workspace={selected}
             onDelete={(id) => deleteWorkspace(id).catch(() => {})}
           />
         )}
+        {selected && selectedStarting && <StartLog key={selected.id} podId={selected.id} />}
         <div className="term-stack" style={{ display: selectedHasTerminal ? "flex" : "none" }}>
           {runningTerminals.map((id) => (
             <div
