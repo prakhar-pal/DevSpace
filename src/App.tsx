@@ -7,8 +7,6 @@ import {
   onWorkspacesUpdated,
   onPodBadge,
   startWorkspace,
-  stopWorkspace,
-  deleteWorkspace,
   type WorkspaceView,
 } from "./api";
 import "./App.css";
@@ -223,8 +221,6 @@ export default function App() {
           selectedId={selectedId}
           badges={badges}
           onSelect={select}
-          onStart={start}
-          onStop={(id) => stopWorkspace(id).catch(() => {})}
           onHide={hide}
           onUnhide={unhide}
           onReorder={reorder}
@@ -233,10 +229,7 @@ export default function App() {
       <main className="main">
         {!selected && <div className="empty">Select a workspace</div>}
         {selected && !selectedHasTerminal && !selectedStarting && (
-          <ActionPanel
-            workspace={selected}
-            onDelete={(id) => deleteWorkspace(id).catch(() => {})}
-          />
+          <ActionPanel workspace={selected} onStart={start} />
         )}
         {selected && selectedStarting && <StartLog key={selected.id} podId={selected.id} />}
         <div className="term-stack" style={{ display: selectedHasTerminal ? "flex" : "none" }}>

@@ -17,22 +17,6 @@ export function statusColor(state: string): string {
   }
 }
 
-function PlayIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-      <path d="M5 3.5v9l7-4.5z" fill="currentColor" />
-    </svg>
-  );
-}
-
-function StopIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-      <rect x="4" y="4" width="8" height="8" rx="1" fill="currentColor" />
-    </svg>
-  );
-}
-
 function GripIcon() {
   return (
     <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
@@ -73,8 +57,6 @@ interface Props {
   selectedId: string | null;
   badges: Record<string, boolean>;
   onSelect: (id: string) => void;
-  onStart: (id: string) => void;
-  onStop: (id: string) => void;
   onHide: (id: string) => void;
   onUnhide: (id: string) => void;
   onReorder: (dragId: string, targetId: string, before: boolean) => void;
@@ -100,67 +82,53 @@ export function Sidebar(props: Props) {
   return (
     <nav className="sidebar">
       <div className="ws-list">
-        {visible.map((w) => {
-          const running = w.state === "Running";
-          return (
-            <div
-              key={w.id}
-              className={`ws-row${w.id === selectedId ? " selected" : ""}${
-                overId === w.id ? " drag-over" : ""
-              }`}
-              draggable
-              onDragStart={(e) => {
-                setDragId(w.id);
-                e.dataTransfer.effectAllowed = "move";
-              }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setOverId(w.id);
-              }}
-              onDragLeave={() => setOverId((o) => (o === w.id ? null : o))}
-              onDrop={(e) => handleDrop(e, w.id)}
-              onDragEnd={() => {
-                setDragId(null);
-                setOverId(null);
+        {visible.map((w) => (
+          <div
+            key={w.id}
+            className={`ws-row${w.id === selectedId ? " selected" : ""}${
+              overId === w.id ? " drag-over" : ""
+            }`}
+            draggable
+            onDragStart={(e) => {
+              setDragId(w.id);
+              e.dataTransfer.effectAllowed = "move";
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setOverId(w.id);
+            }}
+            onDragLeave={() => setOverId((o) => (o === w.id ? null : o))}
+            onDrop={(e) => handleDrop(e, w.id)}
+            onDragEnd={() => {
+              setDragId(null);
+              setOverId(null);
+            }}
+          >
+            <span className="grip" aria-hidden="true">
+              <GripIcon />
+            </span>
+            <button
+              className="ws-main"
+              onClick={() => props.onSelect(w.id)}
+              title={w.error ?? w.source}
+            >
+              <span className="dot" style={{ background: statusColor(w.state) }} />
+              <span className="ws-name">{w.id}</span>
+              {badges[w.id] && <span className="badge" aria-label="unread" />}
+            </button>
+            <button
+              className="ws-action hide"
+              title="Hide"
+              aria-label={`Hide ${w.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                props.onHide(w.id);
               }}
             >
-              <span className="grip" aria-hidden="true">
-                <GripIcon />
-              </span>
-              <button
-                className="ws-main"
-                onClick={() => props.onSelect(w.id)}
-                title={w.error ?? w.source}
-              >
-                <span className="dot" style={{ background: statusColor(w.state) }} />
-                <span className="ws-name">{w.id}</span>
-                {badges[w.id] && <span className="badge" aria-label="unread" />}
-              </button>
-              <button
-                className={`ws-action ${running ? "stop" : "start"}`}
-                title={running ? "Stop" : "Start"}
-                aria-label={`${running ? "Stop" : "Start"} ${w.id}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  (running ? props.onStop : props.onStart)(w.id);
-                }}
-              >
-                {running ? <StopIcon /> : <PlayIcon />}
-              </button>
-              <button
-                className="ws-action hide"
-                title="Hide"
-                aria-label={`Hide ${w.id}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  props.onHide(w.id);
-                }}
-              >
-                <EyeOffIcon />
-              </button>
-            </div>
-          );
-        })}
+              <EyeOffIcon />
+            </button>
+          </div>
+        ))}
       </div>
 
       {hidden.length > 0 && (

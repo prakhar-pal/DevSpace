@@ -22,8 +22,6 @@ function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {})
       selectedId={null}
       badges={{}}
       onSelect={noop}
-      onStart={noop}
-      onStop={noop}
       onHide={noop}
       onUnhide={noop}
       onReorder={noop}
@@ -46,14 +44,9 @@ test("renders a row per visible workspace", () => {
   expect(screen.getByText("wc-2")).toBeInTheDocument();
 });
 
-test("running pod shows Stop, stopped pod shows Start", () => {
-  const onStart = vi.fn();
-  const onStop = vi.fn();
-  renderSidebar({ onStart, onStop });
-  fireEvent.click(screen.getByRole("button", { name: /stop wc-1/i }));
-  expect(onStop).toHaveBeenCalledWith("wc-1");
-  fireEvent.click(screen.getByRole("button", { name: /start wc-2/i }));
-  expect(onStart).toHaveBeenCalledWith("wc-2");
+test("sidebar has no start/stop lifecycle buttons", () => {
+  renderSidebar();
+  expect(screen.queryByRole("button", { name: /start|stop/i })).toBeNull();
 });
 
 test("hide action calls onHide; hidden section renders with unhide", () => {
