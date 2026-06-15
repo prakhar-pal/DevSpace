@@ -20,6 +20,11 @@ hot-reloading debug build with the distinct amber "DevSpace Dev" icon/name. Do
 NOT run `npm run tauri:prod` (the slow optimized production bundle) for routine
 iteration — only for producing a release.
 
+**Always confirm with the user before running `npm run tauri:prod` or before
+killing/quitting a running production bundle (the `.app`)** — even when
+diagnosing a production-only failure. Dev builds (`npm run tauri:dev`) and dev
+instances need no confirmation.
+
 Dev vs prod are visually distinct: `tauri:dev` merges `src-tauri/tauri.dev.conf.json`,
 which uses the amber icon set in `src-tauri/icons-dev/` and the product name
 "DevSpace Dev". Production uses `src-tauri/icons/` and "DevSpace".
