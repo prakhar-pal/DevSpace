@@ -8,6 +8,7 @@ import {
   onWorkspacesUpdated,
   onPodBadge,
   startWorkspace,
+  stopWorkspace,
   loadLayout,
   saveLayout,
   type WorkspaceView,
@@ -21,6 +22,8 @@ export default function App() {
   const [opened, setOpened] = useState<string[]>([]);
   // Workspaces with a running `devpod up` (showing the startup log stream).
   const [starting, setStarting] = useState<string[]>([]);
+  // Workspaces whose SSH session ended but devpod is still shutting down.
+  const [shuttingDown, setShuttingDown] = useState<string[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Sidebar layout, persisted in a backend JSON file (load on mount, save on
   // change). order = drag order; hidden = hidden set; aliases = friendly names.
@@ -168,6 +171,13 @@ export default function App() {
         return w !== undefined && w.state !== "Stopped";
       })
     );
+    // Also clear shuttingDown once the workspace is confirmed Stopped.
+    setShuttingDown((prev) =>
+      prev.filter((id) => {
+        const w = workspaces.find((x) => x.id === id);
+        return w !== undefined && w.state !== "Stopped";
+      })
+    );
   }, [workspaces]);
 
   // Terminal width changes when the sidebar toggles; nudge a refit.
@@ -207,6 +217,20 @@ export default function App() {
     select(id);
   };
 
+  const stop = (id: string) => {
+    stopWorkspace(id).catch(() => {});
+  };
+
+  // Called by Terminal when the SSH session PTY closes (user typed `exit`).
+  // Move the workspace from "open terminal" → "shutting down log view", and
+  // explicitly trigger devpod stop.
+  const onExited = (id: string) => {
+    setOpened((prev) => prev.filter((x) => x !== id));
+    setShuttingDown((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    select(id);
+    stop(id);
+  };
+
   // `devpod up` finished (its PTY closed). Only NOW leave the "starting" state —
   // not when status flips to Running, which can happen while `up` is still
   // streaming and would mount the SSH terminal over the live startup session.
@@ -223,12 +247,13 @@ export default function App() {
     new Set([...opened, ...(selected?.state === "Running" ? [selected.id] : [])])
   ).filter((id) => {
     const w = workspaces.find((x) => x.id === id);
-    return w !== undefined && w.state !== "Stopped" && !starting.includes(id);
+    return w !== undefined && w.state !== "Stopped" && !starting.includes(id) && !shuttingDown.includes(id);
   });
 
   const selectedStarting = !!selected && starting.includes(selected.id);
+  const selectedShuttingDown = !!selected && shuttingDown.includes(selected.id);
   const selectedHasTerminal =
-    !!selected && !selectedStarting && runningTerminals.includes(selected.id);
+    !!selected && !selectedStarting && !selectedShuttingDown && runningTerminals.includes(selected.id);
 
   return (
     <div className="app">
@@ -241,6 +266,7 @@ export default function App() {
           starting={starting}
           aliases={aliases}
           onSelect={select}
+          onStop={stop}
           onHide={hide}
           onUnhide={unhide}
           onRename={setRenaming}
@@ -249,16 +275,47 @@ export default function App() {
       )}
       <main className="main">
         {!selected && <div className="empty">Select a workspace</div>}
-        {selected && !selectedHasTerminal && !selectedStarting && (
+        {selected && !selectedHasTerminal && !selectedStarting && !selectedShuttingDown && (
           <ActionPanel workspace={selected} onStart={start} />
         )}
-        {selected && selectedStarting && (
-          <StartLog
-            key={selected.id}
-            podId={selected.id}
-            onFinished={() => onUpFinished(selected.id)}
-          />
-        )}
+        {/* Startup logs: keep all starting pods mounted in a hidden stack so
+            switching workspaces doesn't lose the buffered `devpod up` output. */}
+        <div
+          className="term-stack"
+          style={{ display: selectedStarting ? "flex" : "none" }}
+        >
+          {starting.map((id) => (
+            <div
+              key={id}
+              className="term-pane"
+              style={{ display: id === selectedId ? "flex" : "none" }}
+            >
+              <StartLog
+                podId={id}
+                onFinished={() => onUpFinished(id)}
+              />
+            </div>
+          ))}
+        </div>
+        {/* Shutdown logs: shown after the user types `exit` in the SSH terminal
+            until devpod finishes stopping the container. */}
+        <div
+          className="term-stack"
+          style={{ display: selectedShuttingDown ? "flex" : "none" }}
+        >
+          {shuttingDown.map((id) => (
+            <div
+              key={id}
+              className="term-pane"
+              style={{ display: id === selectedId ? "flex" : "none" }}
+            >
+              <StartLog
+                podId={id}
+                label={`${id} — shutting down…`}
+              />
+            </div>
+          ))}
+        </div>
         <div className="term-stack" style={{ display: selectedHasTerminal ? "flex" : "none" }}>
           {runningTerminals.map((id) => (
             <div
@@ -266,7 +323,11 @@ export default function App() {
               className="term-pane"
               style={{ display: id === selectedId ? "flex" : "none" }}
             >
-              <Terminal podId={id} visible={id === selectedId} />
+              <Terminal
+                podId={id}
+                visible={id === selectedId}
+                onExited={() => onExited(id)}
+              />
             </div>
           ))}
         </div>
