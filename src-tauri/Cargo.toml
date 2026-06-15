@@ -26,4 +26,5 @@ portable-pty = "0.8"
 tiny_http = "0.12"
 getrandom = "0.2"
 tauri-plugin-notification = "2"
+tauri-plugin-clipboard-manager = "2"
 
