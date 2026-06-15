@@ -153,7 +153,7 @@ mod tests {
         std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
         assert!(devpod_in(dir.to_str().unwrap()));
         assert!(devpod_in(&format!("/no/such/dir:{}", dir.display())));
-        std::fs::remove_file(&bin).ok();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
