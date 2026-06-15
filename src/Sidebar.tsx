@@ -51,6 +51,14 @@ function EyeOffIcon() {
   );
 }
 
+function PencilIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth={1.3} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M11 2.5l2.5 2.5L6 12.5 3 13l.5-3 7.5-7.5z" />
+    </svg>
+  );
+}
+
 interface Props {
   visible: WorkspaceView[];
   hidden: WorkspaceView[];
@@ -70,7 +78,9 @@ export function Sidebar(props: Props) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(true);
-  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number; hidden: boolean } | null>(
+    null
+  );
 
   // Friendly name if set, else the raw workspace id.
   const displayName = (id: string) => aliases[id] ?? id;
@@ -112,7 +122,7 @@ export function Sidebar(props: Props) {
             }}
             onContextMenu={(e) => {
               e.preventDefault();
-              setMenu({ id: w.id, x: e.clientX, y: e.clientY });
+              setMenu({ id: w.id, x: e.clientX, y: e.clientY, hidden: false });
             }}
           >
             <span className="grip" aria-hidden="true">
@@ -131,17 +141,6 @@ export function Sidebar(props: Props) {
               <span className="ws-name">{displayName(w.id)}</span>
               {badges[w.id] && <span className="badge" aria-label="unread" />}
             </button>
-            <button
-              className="ws-action hide"
-              title="Hide"
-              aria-label={`Hide ${w.id}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                props.onHide(w.id);
-              }}
-            >
-              <EyeOffIcon />
-            </button>
           </div>
         ))}
       </div>
@@ -158,7 +157,7 @@ export function Sidebar(props: Props) {
                 className={`ws-row hidden-row${w.id === selectedId ? " selected" : ""}`}
                 onContextMenu={(e) => {
                   e.preventDefault();
-                  setMenu({ id: w.id, x: e.clientX, y: e.clientY });
+                  setMenu({ id: w.id, x: e.clientX, y: e.clientY, hidden: true });
                 }}
               >
                 <button
@@ -168,17 +167,6 @@ export function Sidebar(props: Props) {
                 >
                   <span className="dot" style={{ background: statusColor(w.state) }} />
                   <span className="ws-name">{displayName(w.id)}</span>
-                </button>
-                <button
-                  className="ws-action show"
-                  title="Unhide"
-                  aria-label={`Unhide ${w.id}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    props.onUnhide(w.id);
-                  }}
-                >
-                  <EyeIcon />
                 </button>
               </div>
             ))}
@@ -206,8 +194,32 @@ export function Sidebar(props: Props) {
                 setMenu(null);
               }}
             >
-              Set friendly name…
+              <PencilIcon />
+              <span>Set friendly name…</span>
             </button>
+            {menu.hidden ? (
+              <button
+                className="ctx-item"
+                onClick={() => {
+                  props.onUnhide(menu.id);
+                  setMenu(null);
+                }}
+              >
+                <EyeIcon />
+                <span>Show</span>
+              </button>
+            ) : (
+              <button
+                className="ctx-item"
+                onClick={() => {
+                  props.onHide(menu.id);
+                  setMenu(null);
+                }}
+              >
+                <EyeOffIcon />
+                <span>Hide</span>
+              </button>
+            )}
           </div>
         </div>
       )}

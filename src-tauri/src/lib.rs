@@ -2,6 +2,7 @@ mod devpod;
 mod hooks;
 mod layout;
 mod notify;
+mod path_env;
 mod poller;
 mod pty;
 
@@ -143,6 +144,12 @@ fn save_layout(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // GUI launches (LaunchServices) inherit a minimal PATH that omits where
+    // `devpod` lives, leaving the workspace list empty. Repair PATH before any
+    // subprocess is spawned so devpod commands, the PTY `devpod up`, and ssh's
+    // `devpod ssh --stdio` ProxyCommand can all find it.
+    path_env::repair();
+
     let runner: Arc<dyn CommandRunner> = Arc::new(DevpodCli);
     // Persisted, stable token (survives app restarts so Claude's loaded hooks
     // keep matching). Fail closed to no notifications if it can't be obtained.
@@ -154,6 +161,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(AppState {
             runner: runner.clone(),
             sessions: Arc::new(pty::SessionRegistry::new()),

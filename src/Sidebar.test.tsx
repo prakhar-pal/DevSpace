@@ -66,19 +66,23 @@ test("right-click → Set friendly name calls onRename", () => {
   expect(onRename).toHaveBeenCalledWith("wc-1");
 });
 
-test("hide action calls onHide; hidden section renders with unhide", () => {
+test("right-click visible row → Hide calls onHide", () => {
   const onHide = vi.fn();
+  renderSidebar({ visible: [ws({ id: "wc-1" })], onHide });
+  fireEvent.contextMenu(screen.getByText("wc-1"));
+  fireEvent.click(screen.getByRole("button", { name: /^hide$/i }));
+  expect(onHide).toHaveBeenCalledWith("wc-1");
+});
+
+test("right-click hidden row → Show calls onUnhide", () => {
   const onUnhide = vi.fn();
   renderSidebar({
     visible: [ws({ id: "wc-1" })],
     hidden: [ws({ id: "wc-9", state: "Stopped" })],
-    onHide,
     onUnhide,
   });
-  fireEvent.click(screen.getByRole("button", { name: /hide wc-1/i }));
-  expect(onHide).toHaveBeenCalledWith("wc-1");
-
   expect(screen.getByText(/Hidden \(1\)/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: /unhide wc-9/i }));
+  fireEvent.contextMenu(screen.getByText("wc-9"));
+  fireEvent.click(screen.getByRole("button", { name: /^show$/i }));
   expect(onUnhide).toHaveBeenCalledWith("wc-9");
 });

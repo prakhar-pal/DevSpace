@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { ClipboardAddon, Base64, type IClipboardProvider } from "@xterm/addon-clipboard";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  readText as clipboardReadText,
+  writeText as clipboardWriteText,
+} from "@tauri-apps/plugin-clipboard-manager";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
 import { connectPty, writePty, resizePty, onPtyOutput, onPtyClosed } from "./api";
 
@@ -10,6 +19,42 @@ import { connectPty, writePty, resizePty, onPtyOutput, onPtyClosed } from "./api
 // tofu boxes. Falls back to plain monospace if none are installed.
 const FONT_FAMILY =
   '"FiraCode Nerd Font Mono", "Hack Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "MesloLGS NF", "Symbols Nerd Font Mono", Menlo, Monaco, monospace';
+
+// A modern dark palette (Hyper "Snazzy") with the background matched to the
+// app's #111 so the terminal blends into the surrounding chrome.
+const THEME = {
+  background: "#111111",
+  foreground: "#e6e6e6",
+  cursor: "#e6e6e6",
+  cursorAccent: "#111111",
+  selectionBackground: "#3b4d66",
+  black: "#1e1e1e",
+  red: "#ff5c57",
+  green: "#5af78e",
+  yellow: "#f3f99d",
+  blue: "#57c7ff",
+  magenta: "#ff6ac1",
+  cyan: "#9aedfe",
+  white: "#f1f1f0",
+  brightBlack: "#686868",
+  brightRed: "#ff5c57",
+  brightGreen: "#5af78e",
+  brightYellow: "#f3f99d",
+  brightBlue: "#57c7ff",
+  brightMagenta: "#ff6ac1",
+  brightCyan: "#9aedfe",
+  brightWhite: "#ffffff",
+};
+
+// Route xterm's OSC 52 clipboard access (used by tmux `set-clipboard`, neovim's
+// osc52 provider, etc.) through Tauri's clipboard plugin. `navigator.clipboard`
+// is unreliable in a WKWebView for script-initiated (non-gesture) writes; the
+// Rust-backed plugin has no such restriction. The addon hands us already-decoded
+// text, so we just forward it.
+const tauriClipboard: IClipboardProvider = {
+  readText: () => clipboardReadText().catch(() => ""),
+  writeText: (_selection, text) => clipboardWriteText(text).catch(() => {}),
+};
 
 export function Terminal({ podId, visible }: { podId: string; visible: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -24,12 +69,73 @@ export function Terminal({ podId, visible }: { podId: string; visible: boolean }
 
   useEffect(() => {
     if (!ref.current) return;
-    const term = new XTerm({ convertEol: true, fontSize: 13, fontFamily: FONT_FAMILY });
+    const term = new XTerm({
+      // NOTE: no convertEol — this is a real PTY (ssh -tt); the remote tty
+      // already maps \n→\r\n. Converting again corrupts full-screen TUIs
+      // (e.g. neovim's line-number gutter rendered in the wrong columns).
+      fontSize: 13,
+      fontFamily: FONT_FAMILY,
+      cursorBlink: true,
+      cursorStyle: "block",
+      cursorInactiveStyle: "outline",
+      scrollback: 10000,
+      // Option key sends Meta (ESC prefix) so Alt-bindings in shells/neovim/tmux
+      // work; allowProposedApi unlocks the Unicode 11 width handling below.
+      macOptionIsMeta: true,
+      macOptionClickForcesSelection: true,
+      rightClickSelectsWord: true,
+      allowProposedApi: true,
+      theme: THEME,
+    });
     termRef.current = term;
+
+    // macOS-style copy/paste through the reliable Tauri clipboard. Returning
+    // false stops xterm from also sending the keystroke to the PTY.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown" || !e.metaKey) return true;
+      if (e.key === "c") {
+        const sel = term.getSelection();
+        if (sel) {
+          clipboardWriteText(sel).catch(() => {});
+          return false;
+        }
+        return true;
+      }
+      if (e.key === "v") {
+        clipboardReadText()
+          .then((t) => t && term.paste(t))
+          .catch(() => {});
+        return false;
+      }
+      return true;
+    });
+
     const fit = new FitAddon();
     fitRef.current = fit;
     term.loadAddon(fit);
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
+    term.loadAddon(
+      new WebLinksAddon((event, uri) => {
+        event.preventDefault();
+        openUrl(uri).catch(() => {});
+      })
+    );
+    // OSC 52 → system clipboard (tmux/neovim copy).
+    term.loadAddon(new ClipboardAddon(new Base64(), tauriClipboard));
+
     term.open(ref.current);
+
+    // GPU-accelerated rendering (crisp text, low latency). Fall back to the DOM
+    // renderer if WebGL is unavailable or its context is lost at runtime.
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
+    } catch {
+      /* WebGL unsupported — xterm uses its DOM renderer */
+    }
+
     fit.fit();
 
     let unlistenOutput: (() => void) | undefined;

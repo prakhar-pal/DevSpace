@@ -37,9 +37,12 @@ body, html, #root { margin: 0; height: 100%; }
 .ctx-backdrop { position: fixed; inset: 0; z-index: 1000; }
 .ctx-menu { position: fixed; min-width: 180px; background: #232323; border: 1px solid #3a3a3a;
   border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
-.ctx-item { display: block; width: 100%; padding: 8px 12px; border: none; background: none;
-  color: #ddd; cursor: pointer; text-align: left; font: inherit; border-radius: 5px; }
+.ctx-item { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 12px;
+  border: none; background: none; color: #ddd; cursor: pointer; text-align: left; font: inherit;
+  border-radius: 5px; }
+.ctx-item svg { flex: 0 0 auto; color: #9a9a9a; }
 .ctx-item:hover { background: #3367d6; color: #fff; }
+.ctx-item:hover svg { color: #fff; }
 /* Modal */
 .modal-overlay { position: fixed; inset: 0; z-index: 1001; display: flex; align-items: center;
   justify-content: center; background: rgba(0, 0, 0, 0.5); }
