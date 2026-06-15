@@ -49,12 +49,35 @@ fn merge_path(current: &str, shell_path: &str) -> String {
     entries.join(":")
 }
 
+/// Whether a `devpod` executable is reachable on the given colon-separated PATH.
+/// `is_file` follows symlinks, so the usual `~/.local/bin/devpod -> DevPod.app`
+/// link counts.
+fn devpod_in(path: &str) -> bool {
+    path.split(':')
+        .filter(|dir| !dir.is_empty())
+        .any(|dir| std::path::Path::new(dir).join("devpod").is_file())
+}
+
 /// Query the user's login shell for its `PATH` and merge it into this process's
 /// `PATH`. Best-effort: on any failure the existing `PATH` is left untouched.
+///
+/// MUST be called before any thread is spawned: it mutates the process
+/// environment via `set_var`, which is only sound while single-threaded.
 pub fn repair() {
+    // Fast path: if `devpod` already resolves (e.g. launched from a terminal
+    // that inherited the user's full PATH), skip the shell spawn entirely.
+    // Sourcing the login shell's rc files is slow and could hang on a
+    // misbehaving profile, so we only pay that cost when devpod is missing —
+    // i.e. the LaunchServices/minimal-PATH case this exists to fix.
+    if devpod_in(&std::env::var("PATH").unwrap_or_default()) {
+        return;
+    }
+
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     // `-i -l` so the same profile/rc files that build the user's interactive
-    // PATH are sourced; `-c` runs our echo and exits.
+    // PATH are sourced; `-c` runs our echo and exits. This assumes a POSIX-ish
+    // shell (zsh/bash/sh) that prints `$PATH` colon-separated — fish would emit
+    // it space-separated; there we simply leave PATH as-is (best-effort).
     let output = std::process::Command::new(&shell)
         .args(["-ilc", &path_query_command()])
         .output();
@@ -111,6 +134,26 @@ mod tests {
         let cmd = path_query_command();
         assert!(cmd.contains("${PATH}"), "command must brace PATH: {cmd}");
         assert!(!cmd.contains("$PATH}"), "must not have a bare $PATH: {cmd}");
+    }
+
+    #[test]
+    fn devpod_in_detects_an_executable_on_path() {
+        // A real directory (this crate's manifest dir) without a `devpod` file
+        // must read as absent; a temp dir we plant one in must read as present.
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        assert!(!devpod_in(manifest));
+        assert!(!devpod_in("")); // empty PATH
+        assert!(!devpod_in("/no/such/dir:/also/missing"));
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("devpod_in_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("devpod");
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+        assert!(devpod_in(dir.to_str().unwrap()));
+        assert!(devpod_in(&format!("/no/such/dir:{}", dir.display())));
+        std::fs::remove_file(&bin).ok();
     }
 
     #[test]

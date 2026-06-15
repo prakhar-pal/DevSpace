@@ -46,13 +46,18 @@ const THEME = {
   brightWhite: "#ffffff",
 };
 
-// Route xterm's OSC 52 clipboard access (used by tmux `set-clipboard`, neovim's
+// Route xterm's OSC 52 clipboard WRITES (used by tmux `set-clipboard`, neovim's
 // osc52 provider, etc.) through Tauri's clipboard plugin. `navigator.clipboard`
 // is unreliable in a WKWebView for script-initiated (non-gesture) writes; the
 // Rust-backed plugin has no such restriction. The addon hands us already-decoded
 // text, so we just forward it.
+//
+// readText returns "" on purpose: answering OSC 52 read requests (`OSC 52;c;?`)
+// would let any program in the pod exfiltrate the host clipboard by having it
+// echoed back into the PTY. Host-initiated paste (Cmd+V) reads the clipboard
+// directly, so disabling the OSC 52 read path costs us nothing.
 const tauriClipboard: IClipboardProvider = {
-  readText: () => clipboardReadText().catch(() => ""),
+  readText: () => "",
   writeText: (_selection, text) => clipboardWriteText(text).catch(() => {}),
 };
 
