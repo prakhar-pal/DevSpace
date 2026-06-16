@@ -1,7 +1,7 @@
 import { useState, type DragEvent } from "react";
-import type { WorkspaceView } from "./api";
+import type { WorkspaceView, WorkspaceState } from "./api";
 
-export function statusColor(state: string): string {
+export function statusColor(state: WorkspaceState): string {
   switch (state) {
     case "Running":
       return "green";
@@ -59,14 +59,34 @@ function PencilIcon() {
   );
 }
 
+function StopIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" aria-hidden="true">
+      <rect x="3" y="3" width="10" height="10" rx="1.5" />
+    </svg>
+  );
+}
+
+function ReloadIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M1 4v4h4" />
+      <path d="M3.51 9a6 6 0 101.4-6.4L1 4" />
+    </svg>
+  );
+}
+
 interface Props {
   visible: WorkspaceView[];
   hidden: WorkspaceView[];
   selectedId: string | null;
   badges: Record<string, boolean>;
   starting: string[];
+  opened: string[];
   aliases: Record<string, string>;
   onSelect: (id: string) => void;
+  onStop: (id: string) => void;
+  onReload: (id: string) => void;
   onHide: (id: string) => void;
   onUnhide: (id: string) => void;
   onRename: (id: string) => void;
@@ -74,7 +94,7 @@ interface Props {
 }
 
 export function Sidebar(props: Props) {
-  const { visible, hidden, selectedId, badges, starting, aliases } = props;
+  const { visible, hidden, selectedId, badges, starting, opened, aliases } = props;
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(true);
@@ -141,6 +161,20 @@ export function Sidebar(props: Props) {
               <span className="ws-name">{displayName(w.id)}</span>
               {badges[w.id] && <span className="badge" aria-label="unread" />}
             </button>
+            {w.state !== "Stopped" && (
+              <button
+                type="button"
+                className="ws-action stop"
+                title="Stop devpod"
+                aria-label={`Stop ${w.id}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onStop(w.id);
+                }}
+              >
+                <StopIcon />
+              </button>
+            )}
           </div>
         ))}
       </div>
@@ -197,6 +231,18 @@ export function Sidebar(props: Props) {
               <PencilIcon />
               <span>Set friendly name…</span>
             </button>
+            {opened.includes(menu.id) && (
+              <button
+                className="ctx-item"
+                onClick={() => {
+                  props.onReload(menu.id);
+                  setMenu(null);
+                }}
+              >
+                <ReloadIcon />
+                <span>Reload SSH Session</span>
+              </button>
+            )}
             {menu.hidden ? (
               <button
                 className="ctx-item"

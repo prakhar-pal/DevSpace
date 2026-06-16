@@ -78,13 +78,53 @@ pub fn repair() {
     // PATH are sourced; `-c` runs our echo and exits. This assumes a POSIX-ish
     // shell (zsh/bash/sh) that prints `$PATH` colon-separated — fish would emit
     // it space-separated; there we simply leave PATH as-is (best-effort).
-    let output = std::process::Command::new(&shell)
+    let mut child = match std::process::Command::new(&shell)
         .args(["-ilc", &path_query_command()])
-        .output();
-    let stdout = match output {
-        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
-        _ => return,
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return,
     };
+
+    let timeout = std::time::Duration::from_secs(3);
+    let start = std::time::Instant::now();
+    let mut exit_status = None;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                exit_status = Some(status);
+                break;
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                return;
+            }
+        }
+    }
+
+    if let Some(status) = exit_status {
+        if !status.success() {
+            return;
+        }
+    } else {
+        return;
+    }
+
+    let mut stdout = String::new();
+    if let Some(mut stream) = child.stdout.take() {
+        use std::io::Read;
+        let _ = stream.read_to_string(&mut stdout);
+    }
     let Some(shell_path) = extract_path(&stdout) else {
         return;
     };
