@@ -1,12 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+export type WorkspaceState = "Running" | "Stopped" | "Busy" | "Pending" | "Unknown";
+
 export interface WorkspaceView {
   id: string;
   provider: string;
   source: string;
   last_used: string;
-  state: string;
+  state: WorkspaceState;
   error: string | null;
 }
 

@@ -61,12 +61,24 @@ const tauriClipboard: IClipboardProvider = {
   writeText: (_selection, text) => clipboardWriteText(text).catch(() => {}),
 };
 
-export function Terminal({ podId, visible }: { podId: string; visible: boolean }) {
+export function Terminal({
+  podId,
+  visible,
+  reloadNonce,
+  onExited,
+}: {
+  podId: string;
+  visible: boolean;
+  reloadNonce?: number;
+  onExited?: () => void;
+}) {
+  const [connecting, setConnecting] = useState(true);
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const visibleRef = useRef(visible);
-  const [disconnected, setDisconnected] = useState(false);
+  const onExitedRef = useRef(onExited);
+  onExitedRef.current = onExited;
 
   useEffect(() => {
     visibleRef.current = visible;
@@ -74,6 +86,7 @@ export function Terminal({ podId, visible }: { podId: string; visible: boolean }
 
   useEffect(() => {
     if (!ref.current) return;
+    setConnecting(true);
     const term = new XTerm({
       // NOTE: no convertEol — this is a real PTY (ssh -tt); the remote tty
       // already maps \n→\r\n. Converting again corrupts full-screen TUIs
@@ -141,30 +154,45 @@ export function Terminal({ podId, visible }: { podId: string; visible: boolean }
       /* WebGL unsupported — xterm uses its DOM renderer */
     }
 
+    if (reloadNonce) {
+      term.clear();
+    }
+
     fit.fit();
 
+    let isMounted = true;
     let unlistenOutput: (() => void) | undefined;
     let unlistenClosed: (() => void) | undefined;
     let unlistenFocus: (() => void) | undefined;
     const enc = new TextEncoder();
 
     (async () => {
-      unlistenOutput = await onPtyOutput(podId, (bytes) =>
-        term.write(new Uint8Array(bytes))
-      );
-      unlistenClosed = await onPtyClosed(podId, () => setDisconnected(true));
+      const out = await onPtyOutput(podId, (bytes) => {
+        if (isMounted) {
+          setConnecting(false);
+        }
+        term.write(new Uint8Array(bytes));
+      });
+      if (isMounted) unlistenOutput = out;
+      else out();
+
+      const cls = await onPtyClosed(podId, () => onExitedRef.current?.());
+      if (isMounted) unlistenClosed = cls;
+      else cls();
+
       // Forward APP-level focus to xterm so it emits DECSET 1004 focus in/out
       // (ESC[I / ESC[O). xterm only tracks its textarea's DOM focus, which does
       // NOT blur when you switch to another macOS app — so Claude Code (which
-      // enables 1004) would otherwise never see focus-out and think it's always
-      // focused. Only the visible pane re-focuses.
-      unlistenFocus = await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-        if (focused) {
-          if (visibleRef.current) term.focus();
-        } else {
-          term.blur();
-        }
+      // relies on 1004 focus events to stop/start repainting status updates)
+      // will spin your CPU at 100% in the background forever unless we tell
+      // the terminal that the whole app lost focus.
+      const foc = await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+        if (focused && termRef.current) termRef.current.focus();
+        else if (!focused && termRef.current) termRef.current.blur();
       });
+      if (isMounted) unlistenFocus = foc;
+      else foc();
+
       await connectPty(podId);
       await resizePty(podId, term.rows, term.cols);
     })();
@@ -182,6 +210,7 @@ export function Terminal({ podId, visible }: { podId: string; visible: boolean }
     window.addEventListener("resize", handleWindowResize);
 
     return () => {
+      isMounted = false;
       window.removeEventListener("resize", handleWindowResize);
       onData.dispose();
       onResize.dispose();
@@ -192,7 +221,7 @@ export function Terminal({ podId, visible }: { podId: string; visible: boolean }
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [podId]);
+  }, [podId, reloadNonce]);
 
   // Re-fit and focus when this pane becomes visible: it may have been hidden
   // (display:none, zero size) while another pod was selected. When it becomes
@@ -219,21 +248,15 @@ export function Terminal({ podId, visible }: { podId: string; visible: boolean }
     return () => cancelAnimationFrame(raf);
   }, [visible, podId]);
 
-  const reconnect = async () => {
-    setDisconnected(false);
-    const term = termRef.current;
-    await connectPty(podId);
-    if (term) await resizePty(podId, term.rows, term.cols);
-  };
-
   return (
     <div className="terminal-wrap">
-      <div className="terminal" ref={ref} />
-      {disconnected && (
-        <div className="term-disconnected">
-          Session ended <button onClick={reconnect}>Reconnect</button>
+      {connecting && (
+        <div className="term-connecting">
+          <span className="spinner" aria-label="connecting" />
+          <span>Connecting to SSH session…</span>
         </div>
       )}
+      <div className="terminal" ref={ref} />
     </div>
   );
 }

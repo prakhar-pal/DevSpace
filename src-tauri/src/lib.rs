@@ -72,14 +72,16 @@ fn start_workspace(app: tauri::AppHandle, state: tauri::State<AppState>, id: Str
 }
 
 #[tauri::command]
-fn stop_workspace(state: tauri::State<AppState>, id: String) -> Result<(), String> {
+fn stop_workspace(app: tauri::AppHandle, state: tauri::State<AppState>, id: String) -> Result<(), String> {
     devpod::validate_id(&id)?;
-    // Non-blocking: `devpod stop` can take a while; never block the UI thread.
-    let runner = state.runner.clone();
-    std::thread::spawn(move || {
-        let _ = devpod::stop(runner.as_ref(), &id);
-    });
-    Ok(())
+    // If the SSH terminal is still open (e.g. user clicked Stop in sidebar),
+    // forcibly close it to free up the session key for the shutdown log.
+    state.sessions.close(&id);
+    
+    // Run `devpod stop` in a PTY so its shutdown logs stream to the frontend
+    notify::log(&format!("stop_workspace: devpod stop pod={id}"));
+    let args = vec!["stop".into(), id.clone()];
+    spawn_pty_session(&app, &state.sessions, &id, "devpod", args)
 }
 
 #[tauri::command]

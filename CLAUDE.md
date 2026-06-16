@@ -20,6 +20,11 @@ hot-reloading debug build with the distinct amber "DevSpace Dev" icon/name. Do
 NOT run `npm run tauri:prod` (the slow optimized production bundle) for routine
 iteration — only for producing a release.
 
+**Always confirm with the user before running `npm run tauri:prod` or before
+killing/quitting a running production bundle (the `.app`)** — even when
+diagnosing a production-only failure. Dev builds (`npm run tauri:dev`) and dev
+instances need no confirmation.
+
 Dev vs prod are visually distinct: `tauri:dev` merges `src-tauri/tauri.dev.conf.json`,
 which uses the amber icon set in `src-tauri/icons-dev/` and the product name
 "DevSpace Dev". Production uses `src-tauri/icons/` and "DevSpace".
@@ -64,3 +69,7 @@ cd src-tauri && cargo test                # backend (Rust)
 - Manual notification trigger inside a pod: open the workspace in DevSpace, then
   run `~/.devspace-notify` in that terminal (it uses this session's reverse
   tunnel). `~/.devspace-notify Notification` sends a "needs input" event.
+
+## Agent Rules
+
+- **Never commit files directly without asking the user.** Always present the changes and wait for explicit user approval before executing `git commit` or `git push`.

@@ -25,6 +25,7 @@ body, html, #root { margin: 0; height: 100%; }
 .ws-row:hover .ws-action, .ws-row.selected .ws-action { opacity: 1; }
 .ws-action.start:hover { color: #4ade80; background: rgba(74, 222, 128, 0.14); }
 .ws-action.stop:hover { color: #f87171; background: rgba(248, 113, 113, 0.14); }
+.ws-action.reload:hover { color: #60a5fa; background: rgba(96, 165, 250, 0.14); }
 .ws-action.hide:hover, .ws-action.show:hover { color: #ddd; background: rgba(255, 255, 255, 0.08); }
 .hidden-section { border-top: 1px solid #2a2a2a; margin-top: 6px; }
 .hidden-header { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 12px;
@@ -58,7 +59,7 @@ body, html, #root { margin: 0; height: 100%; }
 .main { flex: 1; display: flex; flex-direction: column; background: #111; color: #eee; min-width: 0; }
 .empty { margin: auto; color: #777; }
 .term-stack { flex: 1; min-height: 0; min-width: 0; flex-direction: column; }
-.term-pane { flex: 1; min-height: 0; min-width: 0; flex-direction: column; }
+.term-pane { display: flex; flex: 1; min-height: 0; min-width: 0; flex-direction: column; }
 .term-header { display: flex; justify-content: space-between; align-items: center;
   padding: 8px 12px; border-bottom: 1px solid #2a2a2a; }
 .terminal-wrap { flex: 1; min-height: 0; position: relative; display: flex; }
@@ -67,6 +68,25 @@ body, html, #root { margin: 0; height: 100%; }
   display: flex; align-items: center; gap: 12px; padding: 16px 24px; border-radius: 8px;
   background: #1b1b1b; border: 1px solid #2a2a2a; color: #eee; font-size: 14px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
+.term-connecting {
+  position: absolute;
+  inset: 0;
+  background: #111;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: #9a9a9a;
+  font-size: 13px;
+  z-index: 5;
+}
+.term-connecting .spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #2a2a2a;
+  border-top-color: #3b82f6;
+}
 .term-disconnected button { padding: 6px 14px; border: 1px solid #3b82f6; border-radius: 6px;
   background: #3b82f6; color: #fff; cursor: pointer; font-size: 13px; }
 .term-disconnected button:hover { background: #2563eb; }
