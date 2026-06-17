@@ -7,7 +7,6 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ClipboardAddon, Base64, type IClipboardProvider } from "@xterm/addon-clipboard";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  readText as clipboardReadText,
   writeText as clipboardWriteText,
 } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
