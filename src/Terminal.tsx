@@ -7,7 +7,6 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ClipboardAddon, Base64, type IClipboardProvider } from "@xterm/addon-clipboard";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  readText as clipboardReadText,
   writeText as clipboardWriteText,
 } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -110,7 +109,15 @@ export function Terminal({
     // macOS-style copy/paste through the reliable Tauri clipboard. Returning
     // false stops xterm from also sending the keystroke to the PTY.
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== "keydown" || !e.metaKey) return true;
+      if (e.type !== "keydown") return true;
+
+      if (e.key === "Enter" && e.shiftKey) {
+        // Send CSI u sequence for Shift+Enter to support multi-line text input
+        writePty(podId, Array.from(new TextEncoder().encode("\x1b[13;2u")));
+        return false;
+      }
+
+      if (!e.metaKey) return true;
       if (e.key === "c") {
         const sel = term.getSelection();
         if (sel) {
@@ -119,12 +126,8 @@ export function Terminal({
         }
         return true;
       }
-      if (e.key === "v") {
-        clipboardReadText()
-          .then((t) => t && term.paste(t))
-          .catch(() => {});
-        return false;
-      }
+      // Note: We intentionally do not intercept 'v' (paste). WKWebView's native
+      // paste handles Cmd+V natively. Intercepting it causes double-pastes.
       return true;
     });
 

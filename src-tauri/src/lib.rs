@@ -173,7 +173,7 @@ pub fn run() {
             let handle = app.handle().clone();
             poller::spawn_loop(
                 runner.clone(),
-                std::time::Duration::from_secs(10),
+                std::time::Duration::from_secs(3),
                 move |views| {
                     let _ = handle.emit("workspaces-updated", views);
                 },
