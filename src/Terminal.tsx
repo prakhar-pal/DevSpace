@@ -252,14 +252,14 @@ export function Terminal({
   }, [visible, podId]);
 
   return (
-    <div className="terminal-wrap">
+    <div className="flex-1 min-h-0 relative flex">
       {connecting && (
-        <div className="term-connecting">
-          <span className="spinner" aria-label="connecting" />
+        <div className="absolute inset-0 bg-[#111] flex flex-col items-center justify-center gap-4 text-[#9a9a9a] text-[13px] z-[5]">
+          <span className="w-5 h-5 border-2 border-[#2a2a2a] border-t-[#3b82f6] rounded-full animate-spin" aria-label="connecting" />
           <span>Connecting to SSH session…</span>
         </div>
       )}
-      <div className="terminal" ref={ref} />
+      <div className="flex-1 min-h-0 min-w-0 p-1" ref={ref} />
     </div>
   );
 }

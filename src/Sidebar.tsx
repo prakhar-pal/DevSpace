@@ -97,7 +97,6 @@ export function Sidebar(props: Props) {
   const { visible, hidden, selectedId, badges, starting, opened, aliases } = props;
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
-  const [showHidden, setShowHidden] = useState(true);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number; hidden: boolean } | null>(
     null
   );
@@ -117,13 +116,13 @@ export function Sidebar(props: Props) {
   };
 
   return (
-    <nav className="sidebar">
-      <div className="ws-list">
+    <nav className="w-[240px] border-r border-[#2a2a2a] bg-[#18181b] flex flex-col">
+      <div className="flex-1 overflow-y-auto pt-2">
         {visible.map((w) => (
           <div
             key={w.id}
-            className={`ws-row${w.id === selectedId ? " selected" : ""}${
-              overId === w.id ? " drag-over" : ""
+            className={`group flex items-center mx-2 my-[2px] rounded-md transition-colors duration-150 ${w.id === selectedId ? "bg-[#3f3f46]" : ""} ${
+              overId === w.id ? "shadow-[inset_0_0_0_1px_rgba(59,130,246,0.5)] bg-blue-500/10" : ""
             }`}
             draggable
             onDragStart={(e) => {
@@ -145,21 +144,21 @@ export function Sidebar(props: Props) {
               setMenu({ id: w.id, x: e.clientX, y: e.clientY, hidden: false });
             }}
           >
-            <span className="grip" aria-hidden="true">
+            <span className="flex items-center justify-center flex-none w-[14px] ml-1.5 text-[#555] cursor-grab opacity-0 group-hover:opacity-100" aria-hidden="true">
               <GripIcon />
             </span>
             <button
-              className="ws-main"
+              className={`flex items-center gap-2 flex-1 min-w-0 p-2 pl-1 border-none bg-transparent cursor-pointer text-left font-inherit ${w.id === selectedId ? "text-white font-medium" : "text-[#d4d4d8]"}`}
               onClick={() => props.onSelect(w.id)}
               title={aliases[w.id] ? `${w.id} · ${w.source}` : (w.error ?? w.source)}
             >
               {starting.includes(w.id) ? (
-                <span className="spinner" aria-label="starting" />
+                <span className="w-2.5 h-2.5 flex-none rounded-full border-2 border-[#444] border-t-green-400 animate-spin" aria-label="starting" />
               ) : (
-                <span className="dot" style={{ background: statusColor(w.state) }} />
+                <span className="w-2.5 h-2.5 rounded-full flex-none" style={{ background: statusColor(w.state) }} />
               )}
-              <span className="ws-name">{displayName(w.id)}</span>
-              {badges[w.id] && <span className="badge" aria-label="unread" />}
+              <span className="flex-1 overflow-hidden truncate whitespace-nowrap">{displayName(w.id)}</span>
+              {badges[w.id] && <span className="w-2 h-2 rounded-full bg-blue-500 flex-none" aria-label="unread" />}
             </button>
             {w.state !== "Stopped" && (
               <button
@@ -180,27 +179,26 @@ export function Sidebar(props: Props) {
       </div>
 
       {hidden.length > 0 && (
-        <div className="hidden-section">
-          <button className="hidden-header" onClick={() => setShowHidden((v) => !v)}>
-            {showHidden ? "▾" : "▸"} Hidden ({hidden.length})
-          </button>
-          {showHidden &&
-            hidden.map((w) => (
+        <div className="border-t border-[#2a2a2a] mt-auto pb-2">
+          <div className="flex items-center gap-1.5 w-full px-3 pt-3 pb-2 text-[#777] text-left text-[11px] uppercase tracking-wider font-semibold">
+            Hidden ({hidden.length})
+          </div>
+          {hidden.map((w) => (
               <div
                 key={w.id}
-                className={`ws-row hidden-row${w.id === selectedId ? " selected" : ""}`}
+                className={`group flex items-center mx-2 my-[2px] rounded-md transition-colors duration-150 ${w.id === selectedId ? "bg-[#3f3f46]" : ""}`}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setMenu({ id: w.id, x: e.clientX, y: e.clientY, hidden: true });
                 }}
               >
                 <button
-                  className="ws-main"
+                  className={`flex items-center gap-2 flex-1 min-w-0 py-2 pr-2 pl-3 border-none bg-transparent cursor-pointer text-left font-inherit ${w.id === selectedId ? "text-white font-medium" : "text-[#888]"}`}
                   onClick={() => props.onSelect(w.id)}
                   title={aliases[w.id] ? `${w.id} · ${w.source}` : (w.error ?? w.source)}
                 >
-                  <span className="dot" style={{ background: statusColor(w.state) }} />
-                  <span className="ws-name">{displayName(w.id)}</span>
+                  <span className="w-2.5 h-2.5 rounded-full flex-none" style={{ background: statusColor(w.state) }} />
+                  <span className="flex-1 overflow-hidden truncate whitespace-nowrap">{displayName(w.id)}</span>
                 </button>
               </div>
             ))}
@@ -209,7 +207,7 @@ export function Sidebar(props: Props) {
 
       {menu && (
         <div
-          className="ctx-backdrop"
+          className="fixed inset-0 z-[1000]"
           onClick={() => setMenu(null)}
           onContextMenu={(e) => {
             e.preventDefault();
@@ -217,18 +215,18 @@ export function Sidebar(props: Props) {
           }}
         >
           <div
-            className="ctx-menu"
+            className="fixed min-w-[180px] bg-[#232323] border border-[#3a3a3a] rounded-lg p-1 shadow-2xl"
             style={{ left: menu.x, top: menu.y }}
             onClick={(e) => e.stopPropagation()}
           >
             <button
-              className="ctx-item"
+              className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white"
               onClick={() => {
                 props.onRename(menu.id);
                 setMenu(null);
               }}
             >
-              <PencilIcon />
+              <div className="flex-none text-[#9a9a9a] group-hover/item:text-white"><PencilIcon /></div>
               <span>Set friendly name…</span>
             </button>
             {opened.includes(menu.id) && (
@@ -245,24 +243,24 @@ export function Sidebar(props: Props) {
             )}
             {menu.hidden ? (
               <button
-                className="ctx-item"
+                className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white"
                 onClick={() => {
                   props.onUnhide(menu.id);
                   setMenu(null);
                 }}
               >
-                <EyeIcon />
+                <div className="flex-none text-[#9a9a9a] group-hover/item:text-white"><EyeIcon /></div>
                 <span>Show</span>
               </button>
             ) : (
               <button
-                className="ctx-item"
+                className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white"
                 onClick={() => {
                   props.onHide(menu.id);
                   setMenu(null);
                 }}
               >
-                <EyeOffIcon />
+                <div className="flex-none text-[#9a9a9a] group-hover/item:text-white"><EyeOffIcon /></div>
                 <span>Hide</span>
               </button>
             )}
