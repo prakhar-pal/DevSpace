@@ -16,6 +16,7 @@ export const listWorkspaces = () => invoke<WorkspaceView[]>("list_workspaces");
 export const startWorkspace = (id: string) => invoke<void>("start_workspace", { id });
 export const stopWorkspace = (id: string) => invoke<void>("stop_workspace", { id });
 export const deleteWorkspace = (id: string) => invoke<void>("delete_workspace", { id });
+export const openIde = (id: string, ide: string) => invoke<void>("open_ide", { id, ide });
 
 export const onWorkspacesUpdated = (
   cb: (views: WorkspaceView[]) => void

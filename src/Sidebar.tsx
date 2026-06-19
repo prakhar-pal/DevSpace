@@ -1,4 +1,5 @@
 import { useState, type DragEvent } from "react";
+import { openIde } from "./api";
 import type { WorkspaceView, WorkspaceState } from "./api";
 
 export function statusColor(state: WorkspaceState): string {
@@ -19,15 +20,23 @@ export function statusColor(state: WorkspaceState): string {
 
 function GripIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-      <g fill="currentColor">
-        <circle cx="6" cy="4" r="1.2" />
-        <circle cx="10" cy="4" r="1.2" />
-        <circle cx="6" cy="8" r="1.2" />
-        <circle cx="10" cy="8" r="1.2" />
-        <circle cx="6" cy="12" r="1.2" />
-        <circle cx="10" cy="12" r="1.2" />
-      </g>
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="9" cy="12" r="1" />
+      <circle cx="9" cy="5" r="1" />
+      <circle cx="9" cy="19" r="1" />
+      <circle cx="15" cy="12" r="1" />
+      <circle cx="15" cy="5" r="1" />
+      <circle cx="15" cy="19" r="1" />
+    </svg>
+  );
+}
+
+function DotsVerticalIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="12" cy="5" r="1" />
+      <circle cx="12" cy="19" r="1" />
     </svg>
   );
 }
@@ -175,6 +184,18 @@ export function Sidebar(props: Props) {
                 <StopIcon />
               </button>
             )}
+            <button
+              type="button"
+              className="ws-action"
+              title="More options"
+              aria-label={`Options for ${w.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenu({ id: w.id, x: e.clientX, y: e.clientY, hidden: false });
+              }}
+            >
+              <DotsVerticalIcon />
+            </button>
           </div>
         ))}
       </div>
@@ -243,6 +264,18 @@ export function Sidebar(props: Props) {
                 <span>Reload SSH Session</span>
               </button>
             )}
+            <div style={{ height: 1, background: '#2a2a2a', margin: '4px 0' }} />
+            <button
+              className="ctx-item"
+              onClick={() => {
+                openIde(menu.id, "zed");
+                setMenu(null);
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+              <span>Open in Zed</span>
+            </button>
+            <div style={{ height: 1, background: '#2a2a2a', margin: '4px 0' }} />
             {menu.hidden ? (
               <button
                 className="ctx-item"
