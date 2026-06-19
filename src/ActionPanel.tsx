@@ -1,4 +1,5 @@
 import type { WorkspaceView } from "./api";
+import { clsx } from "clsx";
 
 interface Props {
   workspace: WorkspaceView;
@@ -26,7 +27,7 @@ export function ActionPanel({ workspace, onStart }: Props) {
       <div className="w-full max-w-[540px] bg-[#181818] border border-[#2a2a2a] rounded-xl px-7 py-6">
         <header className="flex items-center justify-between gap-3 mb-5">
           <h2 className="m-0 text-[22px] font-semibold break-all">{workspace.id}</h2>
-          <span className={`flex-none text-[11px] font-semibold px-2.5 py-1 rounded-full uppercase tracking-wider ${stateColorClasses(workspace.state)}`}>
+          <span className={clsx("flex-none text-[11px] font-semibold px-2.5 py-1 rounded-full uppercase tracking-wider", stateColorClasses(workspace.state))}>
             {workspace.state}
           </span>
         </header>
