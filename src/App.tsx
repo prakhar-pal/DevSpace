@@ -8,6 +8,8 @@ import {
   onWorkspacesUpdated,
   onPodBadge,
   startWorkspace,
+  stopWorkspace,
+  disconnectPty,
   loadLayout,
   saveLayout,
   type WorkspaceView,
@@ -21,6 +23,10 @@ export default function App() {
   const [opened, setOpened] = useState<string[]>([]);
   // Workspaces with a running `devpod up` (showing the startup log stream).
   const [starting, setStarting] = useState<string[]>([]);
+  // Workspaces whose SSH session ended but devpod is still shutting down.
+  const [shuttingDown, setShuttingDown] = useState<string[]>([]);
+  // Tracks the reload sequence number for each workspace.
+  const [reloads, setReloads] = useState<Record<string, number>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Sidebar layout, persisted in a backend JSON file (load on mount, save on
   // change). order = drag order; hidden = hidden set; aliases = friendly names.
@@ -32,6 +38,7 @@ export default function App() {
 
   const selectedIdRef = useRef<string | null>(null);
   const visibleRef = useRef<WorkspaceView[]>([]);
+  const reloadingRef = useRef<Set<string>>(new Set());
   // Gate saving until the initial load has applied, so we don't overwrite the
   // saved file with empty arrays before loadLayout resolves.
   const layoutLoaded = useRef(false);
@@ -152,17 +159,37 @@ export default function App() {
 
   const selected = workspaces.find((w) => w.id === selectedId) ?? null;
 
-  // Track opened terminals; remember a running pod the moment it's selected.
+  // Track opened terminals; automatically open and SSH into any running workspace.
   useEffect(() => {
-    if (selected?.state === "Running") {
-      setOpened((prev) => (prev.includes(selected.id) ? prev : [...prev, selected.id]));
-    }
-  }, [selectedId, selected?.state]);
+    const runningIds = workspaces.filter((w) => w.state === "Running").map((w) => w.id);
+    setOpened((prev) => {
+      const next = [...prev];
+      let changed = false;
+      for (const id of runningIds) {
+        if (!next.includes(id)) {
+          next.push(id);
+          changed = true;
+        }
+      }
+      if (selected && selected.state === "Running" && !next.includes(selected.id)) {
+        next.push(selected.id);
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [workspaces, selected]);
 
   // Drop a terminal only when its pod is explicitly Stopped or gone — NOT on a
   // transient "Unknown"/"Pending" status blip.
   useEffect(() => {
     setOpened((prev) =>
+      prev.filter((id) => {
+        const w = workspaces.find((x) => x.id === id);
+        return w !== undefined && w.state !== "Stopped";
+      })
+    );
+    // Also clear shuttingDown once the workspace is confirmed Stopped.
+    setShuttingDown((prev) =>
       prev.filter((id) => {
         const w = workspaces.find((x) => x.id === id);
         return w !== undefined && w.state !== "Stopped";
@@ -207,6 +234,33 @@ export default function App() {
     select(id);
   };
 
+  const stop = (id: string) => {
+    stopWorkspace(id).catch(() => {});
+  };
+
+  const reload = async (id: string) => {
+    reloadingRef.current.add(id);
+    await disconnectPty(id).catch(() => {});
+    setReloads((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
+    
+    // The backend's pty-closed event arrives asynchronously after disconnectPty
+    // returns. Keep the ignore flag up for a bit to prevent triggering shutdown.
+    setTimeout(() => {
+      reloadingRef.current.delete(id);
+    }, 1000);
+  };
+
+  // Called by Terminal when the SSH session PTY closes (user typed `exit`).
+  // Move the workspace from "open terminal" → "shutting down log view", and
+  // explicitly trigger devpod stop.
+  const onExited = (id: string) => {
+    if (reloadingRef.current.has(id)) return;
+    setOpened((prev) => prev.filter((x) => x !== id));
+    setShuttingDown((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    select(id);
+    stop(id);
+  };
+
   // `devpod up` finished (its PTY closed). Only NOW leave the "starting" state —
   // not when status flips to Running, which can happen while `up` is still
   // streaming and would mount the SSH terminal over the live startup session.
@@ -223,15 +277,16 @@ export default function App() {
     new Set([...opened, ...(selected?.state === "Running" ? [selected.id] : [])])
   ).filter((id) => {
     const w = workspaces.find((x) => x.id === id);
-    return w !== undefined && w.state !== "Stopped" && !starting.includes(id);
+    return w !== undefined && w.state !== "Stopped" && !starting.includes(id) && !shuttingDown.includes(id);
   });
 
   const selectedStarting = !!selected && starting.includes(selected.id);
+  const selectedShuttingDown = !!selected && shuttingDown.includes(selected.id);
   const selectedHasTerminal =
-    !!selected && !selectedStarting && runningTerminals.includes(selected.id);
+    !!selected && !selectedStarting && !selectedShuttingDown && runningTerminals.includes(selected.id);
 
   return (
-    <div className="app">
+    <div className="flex h-screen font-sans">
       {sidebarOpen && (
         <Sidebar
           visible={visibleWs}
@@ -239,34 +294,75 @@ export default function App() {
           selectedId={selectedId}
           badges={badges}
           starting={starting}
+          opened={opened}
           aliases={aliases}
           onSelect={select}
+          onStop={stop}
+          onReload={reload}
           onHide={hide}
           onUnhide={unhide}
           onRename={setRenaming}
           onReorder={reorder}
         />
       )}
-      <main className="main">
-        {!selected && <div className="empty">Select a workspace</div>}
-        {selected && !selectedHasTerminal && !selectedStarting && (
+      <main className="flex-1 flex flex-col bg-[#111] text-[#eee] min-w-0">
+        {!selected && <div className="m-auto text-[#777]">Select a workspace</div>}
+        {selected && !selectedHasTerminal && !selectedStarting && !selectedShuttingDown && (
           <ActionPanel workspace={selected} onStart={start} />
         )}
-        {selected && selectedStarting && (
-          <StartLog
-            key={selected.id}
-            podId={selected.id}
-            onFinished={() => onUpFinished(selected.id)}
-          />
-        )}
-        <div className="term-stack" style={{ display: selectedHasTerminal ? "flex" : "none" }}>
+        {/* Startup logs: keep all starting pods mounted in a hidden stack so
+            switching workspaces doesn't lose the buffered `devpod up` output. */}
+        <div
+          className="flex-1 min-h-0 min-w-0 flex-col"
+          style={{ display: selectedStarting ? "flex" : "none" }}
+        >
+          {starting.map((id) => (
+            <div
+              key={id}
+              className="flex-1 min-h-0 min-w-0 flex-col"
+              style={{ display: id === selectedId ? "flex" : "none" }}
+            >
+              <StartLog
+                podId={id}
+                visible={id === selectedId}
+                onFinished={() => onUpFinished(id)}
+              />
+            </div>
+          ))}
+        </div>
+        {/* Shutdown logs: shown after the user types `exit` in the SSH terminal
+            until devpod finishes stopping the container. */}
+        <div
+          className="flex-1 min-h-0 min-w-0 flex-col"
+          style={{ display: selectedShuttingDown ? "flex" : "none" }}
+        >
+          {shuttingDown.map((id) => (
+            <div
+              key={id}
+              className="flex-1 min-h-0 min-w-0 flex-col"
+              style={{ display: id === selectedId ? "flex" : "none" }}
+            >
+              <StartLog
+                podId={id}
+                visible={id === selectedId}
+                label={`${id} — shutting down…`}
+              />
+            </div>
+          ))}
+        </div>
+        <div className="flex-1 min-h-0 min-w-0 flex-col" style={{ display: selectedHasTerminal ? "flex" : "none" }}>
           {runningTerminals.map((id) => (
             <div
               key={id}
-              className="term-pane"
+              className="flex-1 min-h-0 min-w-0 flex-col"
               style={{ display: id === selectedId ? "flex" : "none" }}
             >
-              <Terminal podId={id} visible={id === selectedId} />
+              <Terminal
+                podId={id}
+                visible={id === selectedId}
+                reloadNonce={reloads[id]}
+                onExited={() => onExited(id)}
+              />
             </div>
           ))}
         </div>

@@ -17,6 +17,15 @@ pub const SSH_PROGRAM: &str = "ssh";
 /// proxy, not a network host. The (untrusted) pod id is validated by the caller
 /// and can't start with `-`, so it is safe as the `<id>.devpod` hostname.
 pub fn ssh_args(pod_id: &str) -> Vec<String> {
+    // Determine which TERM value to advertise to the remote container.
+    // SSH forwards the terminal type via PTY negotiation only when the remote
+    // sshd has `AcceptEnv TERM` — devpod container images often don't. Passing
+    // `-o SetEnv=TERM=…` injects it unconditionally (OpenSSH 7.8+), the same
+    // approach VS Code Remote SSH uses.
+    let term = std::env::var("TERM")
+        .ok()
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| "xterm-256color".to_string());
     vec![
         "-tt".into(),
         "-o".into(),
@@ -25,6 +34,8 @@ pub fn ssh_args(pod_id: &str) -> Vec<String> {
         "UserKnownHostsFile=/dev/null".into(),
         "-o".into(),
         "LogLevel=ERROR".into(),
+        "-o".into(),
+        format!("SetEnv=TERM={term}"),
         "-R".into(),
         format!("{POD_FORWARD_PORT}:localhost:{LISTENER_PORT}"),
         format!("{pod_id}.devpod"),
@@ -80,6 +91,17 @@ impl SessionRegistry {
         for a in args {
             cmd.arg(a);
         }
+        // Ensure TERM is always set for local PTY processes (e.g. `devpod up`).
+        // For SSH sessions TERM is already injected via `-o SetEnv=TERM=…` in
+        // ssh_args(), but setting it here too is harmless and covers any other
+        // program spawned through this registry.
+        cmd.env(
+            "TERM",
+            std::env::var("TERM")
+                .ok()
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| "xterm-256color".to_string()),
+        );
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
 
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
@@ -142,6 +164,8 @@ mod tests {
         let args = ssh_args("wc-1");
         // Forces a remote TTY for an interactive shell.
         assert!(args.contains(&"-tt".to_string()));
+        // Injects TERM on remote side.
+        assert!(args.iter().any(|a| a.starts_with("SetEnv=TERM=")));
         // Carries the reverse notification tunnel.
         assert!(args.contains(&"-R".to_string()));
         assert!(args.iter().any(|a| a == &format!("{POD_FORWARD_PORT}:localhost:{LISTENER_PORT}")));
