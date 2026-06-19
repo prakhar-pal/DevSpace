@@ -15,12 +15,15 @@ export function StartLog({
   podId,
   onFinished,
   label,
+  visible = true,
 }: {
   podId: string;
   onFinished?: () => void;
   label?: string;
+  visible?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const fitRef = useRef<FitAddon | null>(null);
   const [done, setDone] = useState(false);
   const finishedRef = useRef(onFinished);
   finishedRef.current = onFinished;
@@ -35,6 +38,7 @@ export function StartLog({
       disableStdin: true,
     });
     const fit = new FitAddon();
+    fitRef.current = fit;
     term.loadAddon(fit);
     term.open(ref.current);
     fit.fit();
@@ -75,13 +79,25 @@ export function StartLog({
     ? `${podId} — startup finished`
     : `Starting ${podId}…`;
 
+  useEffect(() => {
+    if (!visible || !fitRef.current) return;
+    const raf = requestAnimationFrame(() => {
+      try {
+        fitRef.current?.fit();
+      } catch {
+        /* container not laid out yet */
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [visible]);
+
   return (
-    <div className="term-pane">
-      <div className="term-header">
+    <div className="flex flex-1 min-h-0 min-w-0 flex-col">
+      <div className="flex justify-between items-center px-3 py-2 border-b border-[#2a2a2a]">
         <span>{headerText}</span>
       </div>
-      <div className="terminal-wrap">
-        <div className="terminal" ref={ref} />
+      <div className="flex-1 min-h-0 relative flex">
+        <div className="flex-1 min-h-0 min-w-0 p-1" ref={ref} />
       </div>
     </div>
   );

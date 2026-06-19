@@ -182,7 +182,7 @@ pub fn inject(runner: &dyn CommandRunner, pod_id: &str, token: &str) -> Result<(
     crate::devpod::validate_id(pod_id)?;
     let read = runner.run(&[
         "ssh", "--command",
-        "cat ~/.claude/settings.json 2>/dev/null || echo '{}'",
+        "cat \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\" 2>/dev/null || echo '{}'",
         "--", pod_id,
     ])?;
     let existing: Option<Value> = serde_json::from_str(read.trim()).ok();
@@ -195,8 +195,9 @@ pub fn inject(runner: &dyn CommandRunner, pod_id: &str, token: &str) -> Result<(
     let settings_b64 = base64_encode(serialized.as_bytes());
     let helper_b64 = base64_encode(notify_helper_script(pod_id, token).as_bytes());
     let cmd = format!(
-        "mkdir -p ~/.claude \
-         && echo {settings_b64} | base64 -d > ~/.claude/settings.json \
+        "CLAUDE_DIR=\"${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}\" \
+         && mkdir -p \"$CLAUDE_DIR\" \
+         && echo {settings_b64} | base64 -d > \"$CLAUDE_DIR/settings.json\" \
          && echo {helper_b64} | base64 -d > ~/.devspace-notify \
          && chmod +x ~/.devspace-notify"
     );
