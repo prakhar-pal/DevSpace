@@ -286,7 +286,7 @@ export default function App() {
     !!selected && !selectedStarting && !selectedShuttingDown && runningTerminals.includes(selected.id);
 
   return (
-    <div className="app">
+    <div className="flex h-screen font-sans">
       {sidebarOpen && (
         <Sidebar
           visible={visibleWs}
@@ -305,25 +305,26 @@ export default function App() {
           onReorder={reorder}
         />
       )}
-      <main className="main">
-        {!selected && <div className="empty">Select a workspace</div>}
+      <main className="flex-1 flex flex-col bg-[#111] text-[#eee] min-w-0">
+        {!selected && <div className="m-auto text-[#777]">Select a workspace</div>}
         {selected && !selectedHasTerminal && !selectedStarting && !selectedShuttingDown && (
           <ActionPanel workspace={selected} onStart={start} />
         )}
         {/* Startup logs: keep all starting pods mounted in a hidden stack so
             switching workspaces doesn't lose the buffered `devpod up` output. */}
         <div
-          className="term-stack"
+          className="flex-1 min-h-0 min-w-0 flex-col"
           style={{ display: selectedStarting ? "flex" : "none" }}
         >
           {starting.map((id) => (
             <div
               key={id}
-              className="term-pane"
+              className="flex-1 min-h-0 min-w-0 flex-col"
               style={{ display: id === selectedId ? "flex" : "none" }}
             >
               <StartLog
                 podId={id}
+                visible={id === selectedId}
                 onFinished={() => onUpFinished(id)}
               />
             </div>
@@ -332,27 +333,28 @@ export default function App() {
         {/* Shutdown logs: shown after the user types `exit` in the SSH terminal
             until devpod finishes stopping the container. */}
         <div
-          className="term-stack"
+          className="flex-1 min-h-0 min-w-0 flex-col"
           style={{ display: selectedShuttingDown ? "flex" : "none" }}
         >
           {shuttingDown.map((id) => (
             <div
               key={id}
-              className="term-pane"
+              className="flex-1 min-h-0 min-w-0 flex-col"
               style={{ display: id === selectedId ? "flex" : "none" }}
             >
               <StartLog
                 podId={id}
+                visible={id === selectedId}
                 label={`${id} — shutting down…`}
               />
             </div>
           ))}
         </div>
-        <div className="term-stack" style={{ display: selectedHasTerminal ? "flex" : "none" }}>
+        <div className="flex-1 min-h-0 min-w-0 flex-col" style={{ display: selectedHasTerminal ? "flex" : "none" }}>
           {runningTerminals.map((id) => (
             <div
               key={id}
-              className="term-pane"
+              className="flex-1 min-h-0 min-w-0 flex-col"
               style={{ display: id === selectedId ? "flex" : "none" }}
             >
               <Terminal
