@@ -117,6 +117,16 @@ export function Terminal({
         return false;
       }
 
+      // macOS native Option+Left/Right word navigation
+      if (e.altKey && e.key === "ArrowLeft") {
+        writePty(podId, Array.from(new TextEncoder().encode("\x1bb")));
+        return false;
+      }
+      if (e.altKey && e.key === "ArrowRight") {
+        writePty(podId, Array.from(new TextEncoder().encode("\x1bf")));
+        return false;
+      }
+
       if (!e.metaKey) return true;
       if (e.key === "c") {
         const sel = term.getSelection();
