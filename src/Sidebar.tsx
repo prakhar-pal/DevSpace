@@ -1,5 +1,6 @@
 import { useState, type DragEvent } from "react";
 import { clsx } from "clsx";
+import { openIde } from "./api";
 import type { WorkspaceView, WorkspaceState } from "./api";
 
 export function statusColor(state: WorkspaceState): string {
@@ -17,6 +18,7 @@ export function statusColor(state: WorkspaceState): string {
       return "red";
   }
 }
+
 
 function EyeIcon() {
   return (
@@ -347,6 +349,18 @@ export function Sidebar(props: Props) {
                 <span>Reload SSH Session</span>
               </button>
             )}
+            <div style={{ height: 1, background: '#2a2a2a', margin: '4px 0' }} />
+            <button
+              className="ctx-item"
+              onClick={() => {
+                openIde(menu.id, "zed");
+                setMenu(null);
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+              <span>Open in Zed</span>
+            </button>
+            <div style={{ height: 1, background: '#2a2a2a', margin: '4px 0' }} />
             {menu.hidden ? (
               <button
                 className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white"

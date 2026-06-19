@@ -95,6 +95,20 @@ fn delete_workspace(state: tauri::State<AppState>, id: String) -> Result<(), Str
 }
 
 #[tauri::command]
+fn open_ide(state: tauri::State<AppState>, id: String, ide: String) -> Result<(), String> {
+    devpod::validate_id(&id)?;
+    if !ide.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(format!("invalid ide: {ide:?}"));
+    }
+    let runner = state.runner.clone();
+    std::thread::spawn(move || {
+        let _ = runner.run(&["up", "--ide", &ide, "--", &id]);
+    });
+    Ok(())
+}
+
+
+#[tauri::command]
 fn connect_pty(app: tauri::AppHandle, state: tauri::State<AppState>, id: String) -> Result<(), String> {
     devpod::validate_id(&id)?;
     // Inject the Claude hook off the open path (idempotent, best-effort): it
@@ -232,7 +246,8 @@ pub fn run() {
             resize_pty,
             disconnect_pty,
             load_layout,
-            save_layout
+            save_layout,
+            open_ide
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
