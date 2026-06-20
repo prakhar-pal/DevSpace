@@ -351,13 +351,15 @@ export function Sidebar(props: Props) {
             )}
             <div style={{ height: 1, background: '#2a2a2a', margin: '4px 0' }} />
             <button
-              className="ctx-item"
+              className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white"
               onClick={() => {
                 openIde(menu.id, "zed");
                 setMenu(null);
               }}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+              <div className="flex-none text-[#9a9a9a] group-hover/item:text-white">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+              </div>
               <span>Open in Zed</span>
             </button>
             <div style={{ height: 1, background: '#2a2a2a', margin: '4px 0' }} />
