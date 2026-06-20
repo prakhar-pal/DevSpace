@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "devspace-scaffold"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "getrandom 0.2.17",
  "portable-pty",
