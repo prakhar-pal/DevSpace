@@ -69,9 +69,10 @@ export function Terminal({
   podId: string;
   visible: boolean;
   reloadNonce?: number;
-  onExited?: () => void;
+  onExited?: (success: boolean) => void;
 }) {
   const [connecting, setConnecting] = useState(true);
+  const [disconnected, setDisconnected] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -189,7 +190,13 @@ export function Terminal({
       if (isMounted) unlistenOutput = out;
       else out();
 
-      const cls = await onPtyClosed(podId, () => onExitedRef.current?.());
+      const cls = await onPtyClosed(podId, (success) => {
+        if (!success && isMounted) {
+          setDisconnected(true);
+        } else {
+          onExitedRef.current?.(success);
+        }
+      });
       if (isMounted) unlistenClosed = cls;
       else cls();
 
@@ -261,12 +268,48 @@ export function Terminal({
     return () => cancelAnimationFrame(raf);
   }, [visible, podId]);
 
+  // Auto-reconnect when the OS reports the internet connection is back online
+  useEffect(() => {
+    if (!disconnected) return;
+    const handleOnline = () => {
+      setDisconnected(false);
+      setConnecting(true);
+      if (termRef.current) {
+        termRef.current.clear();
+      }
+      connectPty(podId).catch(() => {});
+    };
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, [disconnected, podId]);
+
   return (
     <div className="flex-1 min-h-0 relative flex">
-      {connecting && (
+      {connecting && !disconnected && (
         <div className="absolute inset-0 bg-[#111] flex flex-col items-center justify-center gap-4 text-[#9a9a9a] text-[13px] z-[5]">
           <span className="w-5 h-5 border-2 border-[#2a2a2a] border-t-[#3b82f6] rounded-full animate-spin" aria-label="connecting" />
           <span>Connecting to SSH session…</span>
+        </div>
+      )}
+      {disconnected && (
+        <div className="absolute inset-0 bg-[#111] flex flex-col items-center justify-center gap-4 text-[#9a9a9a] text-[13px] z-[5]">
+          <span className="w-8 h-8 flex items-center justify-center text-red-400">
+             <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </span>
+          <span>Connection dropped</span>
+          <button 
+            onClick={() => {
+              setDisconnected(false);
+              setConnecting(true);
+              if (termRef.current) {
+                termRef.current.clear();
+              }
+              connectPty(podId).catch(() => {});
+            }}
+            className="px-[18px] py-2 mt-2 rounded-lg border border-transparent text-[13px] font-medium cursor-pointer transition-colors duration-100 bg-[#3f3f46] text-white hover:bg-[#52525b]"
+          >
+            Reconnect
+          </button>
         </div>
       )}
       <div className="flex-1 min-h-0 min-w-0 p-1" ref={ref} />
