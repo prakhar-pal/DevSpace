@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type WorkspaceState = "Running" | "Stopped" | "Busy" | "Pending" | "Unknown";
+export type WorkspaceState = "Running" | "Stopped" | "Busy" | "Loading" | "Unknown";
 
 export interface WorkspaceView {
   id: string;
@@ -36,10 +36,8 @@ export const onPtyOutput = (
   cb: (bytes: number[]) => void
 ): Promise<UnlistenFn> => listen<number[]>(`pty-output:${id}`, (e) => cb(e.payload));
 
-export const onPtyClosed = (
-  id: string,
-  cb: () => void
-): Promise<UnlistenFn> => listen<null>(`pty-closed:${id}`, () => cb());
+export const onPtyClosed = (id: string, cb: (success: boolean) => void): Promise<UnlistenFn> =>
+  listen<boolean>(`pty-closed:${id}`, (e) => cb(e.payload));
 
 export interface Layout {
   order: string[];

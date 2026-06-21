@@ -11,7 +11,7 @@ export function statusColor(state: WorkspaceState): string {
       return "grey";
     case "Busy":
       return "amber";
-    case "Pending":
+    case "Loading":
       // Status not resolved yet — neutral, not an error.
       return "grey";
     default:
@@ -205,7 +205,7 @@ export function Sidebar(props: Props) {
                   className="w-2.5 h-2.5 flex-none rounded-full border-2 border-[#444] border-t-green-400 animate-spin"
                   aria-label="starting"
                 />
-              ) : w.state === "Pending" ? (
+              ) : w.state === "Loading" ? (
                 <span
                   className="w-2.5 h-2.5 flex-none rounded-full border-2 border-[#444] border-t-[#888] animate-spin"
                   aria-label="fetching status"
@@ -284,10 +284,17 @@ export function Sidebar(props: Props) {
                     : (w.error ?? w.source)
                 }
               >
-                <span
-                  className="w-2.5 h-2.5 rounded-full flex-none"
-                  style={{ background: statusColor(w.state) }}
-                />
+                {w.state === "Loading" ? (
+                  <span
+                    className="w-2.5 h-2.5 flex-none rounded-full border-2 border-[#444] border-t-[#888] animate-spin"
+                    aria-label="fetching status"
+                  />
+                ) : (
+                  <span
+                    className="w-2.5 h-2.5 rounded-full flex-none"
+                    style={{ background: statusColor(w.state) }}
+                  />
+                )}
                 <span className="flex-1 overflow-hidden truncate whitespace-nowrap">
                   {displayName(w.id)}
                 </span>

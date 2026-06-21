@@ -49,8 +49,8 @@ fn spawn_pty_session(
             notify::log(&format!("session closed pod={close_pod}"));
             // Remove the dead session BEFORE signalling the frontend, so a
             // reconnect triggered by `pty-closed` can't race `ensure`.
-            sessions_close.close(&close_pod);
-            let _ = close_handle.emit(&format!("pty-closed:{close_pod}"), ());
+            let success = sessions_close.close(&close_pod, true).unwrap_or(false);
+            let _ = close_handle.emit(&format!("pty-closed:{close_pod}"), success);
         },
     )
 }
@@ -76,7 +76,7 @@ fn stop_workspace(app: tauri::AppHandle, state: tauri::State<AppState>, id: Stri
     devpod::validate_id(&id)?;
     // If the SSH terminal is still open (e.g. user clicked Stop in sidebar),
     // forcibly close it to free up the session key for the shutdown log.
-    state.sessions.close(&id);
+    state.sessions.close(&id, false);
     
     // Run `devpod stop` in a PTY so its shutdown logs stream to the frontend
     notify::log(&format!("stop_workspace: devpod stop pod={id}"));
@@ -141,7 +141,7 @@ fn resize_pty(state: tauri::State<AppState>, id: String, rows: u16, cols: u16) -
 
 #[tauri::command]
 fn disconnect_pty(state: tauri::State<AppState>, id: String) {
-    state.sessions.close(&id);
+    state.sessions.close(&id, false);
 }
 
 #[tauri::command]

@@ -35,6 +35,10 @@ pub fn ssh_args(pod_id: &str) -> Vec<String> {
         "-o".into(),
         "LogLevel=ERROR".into(),
         "-o".into(),
+        "ServerAliveInterval=5".into(),
+        "-o".into(),
+        "ServerAliveCountMax=3".into(),
+        "-o".into(),
         format!("SetEnv=TERM={term}"),
         "-R".into(),
         format!("{POD_FORWARD_PORT}:localhost:{LISTENER_PORT}"),
@@ -140,7 +144,7 @@ impl SessionRegistry {
             .map_err(|e| e.to_string())
     }
 
-    pub fn close(&self, pod_id: &str) {
+    pub fn close(&self, pod_id: &str, wait: bool) -> Option<bool> {
         // Bind the removed session to a local so the map's MutexGuard is dropped
         // here — NOT held across the (potentially slow) kill/wait below. Holding
         // it would block every other session op (write/resize/ensure) and freeze
@@ -148,10 +152,20 @@ impl SessionRegistry {
         let removed = self.sessions.lock().unwrap().remove(pod_id);
         if let Some(sess) = removed {
             if let Ok(mut s) = sess.lock() {
+                if let Ok(Some(st)) = s.child.try_wait() {
+                    return Some(st.success());
+                }
+                if wait {
+                    if let Ok(st) = s.child.wait() {
+                        return Some(st.success());
+                    }
+                }
                 let _ = s.child.kill();
                 let _ = s.child.wait();
+                return Some(false);
             }
         }
+        None
     }
 }
 

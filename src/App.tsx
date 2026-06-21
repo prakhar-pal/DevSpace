@@ -180,7 +180,7 @@ export default function App() {
   }, [workspaces, selected]);
 
   // Drop a terminal only when its pod is explicitly Stopped or gone — NOT on a
-  // transient "Unknown"/"Pending" status blip.
+  // transient "Unknown"/"Loading" status blip.
   useEffect(() => {
     setOpened((prev) =>
       prev.filter((id) => {
