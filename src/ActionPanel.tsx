@@ -28,6 +28,9 @@ export function ActionPanel({ workspace, onStart }: Props) {
         <header className="flex items-center justify-between gap-3 mb-5">
           <h2 className="m-0 text-[22px] font-semibold break-all">{workspace.id}</h2>
           <span className={clsx("flex-none text-[11px] font-semibold px-2.5 py-1 rounded-full uppercase tracking-wider", stateColorClasses(workspace.state))}>
+            {workspace.state === "Pending" ? (
+              <span className="w-2.5 h-2.5 inline-block rounded-full border-2 border-[#444] border-t-blue-500 animate-spin mr-2" />
+            ) : null}
             {workspace.state}
           </span>
         </header>
@@ -39,11 +42,13 @@ export function ActionPanel({ workspace, onStart }: Props) {
             </div>
           ))}
         </dl>
-        <div className="flex gap-2.5">
-          <button className="px-[18px] py-2 rounded-lg border border-transparent text-[13px] font-medium cursor-pointer transition-colors duration-100 bg-blue-500 text-white hover:bg-blue-600" onClick={() => onStart(workspace.id)}>
-            Start
-          </button>
-        </div>
+        {workspace.state !== "Pending" && (
+          <div className="flex gap-2.5">
+            <button className="px-[18px] py-2 rounded-lg border border-transparent text-[13px] font-medium cursor-pointer transition-colors duration-100 bg-blue-500 text-white hover:bg-blue-600" onClick={() => onStart(workspace.id)}>
+              Start
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

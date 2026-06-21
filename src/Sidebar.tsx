@@ -205,6 +205,11 @@ export function Sidebar(props: Props) {
                   className="w-2.5 h-2.5 flex-none rounded-full border-2 border-[#444] border-t-green-400 animate-spin"
                   aria-label="starting"
                 />
+              ) : w.state === "Pending" ? (
+                <span
+                  className="w-2.5 h-2.5 flex-none rounded-full border-2 border-[#444] border-t-[#888] animate-spin"
+                  aria-label="fetching status"
+                />
               ) : (
                 <span
                   className="w-2.5 h-2.5 rounded-full flex-none"
@@ -324,7 +329,7 @@ export function Sidebar(props: Props) {
             onClick={(e) => e.stopPropagation()}
           >
             <button
-              className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white"
+              className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white text-[13px]"
               onClick={() => {
                 props.onRename(menu.id);
                 setMenu(null);
@@ -337,7 +342,7 @@ export function Sidebar(props: Props) {
             </button>
             {opened.includes(menu.id) && (
               <button
-                className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white"
+                className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white text-[13px]"
                 onClick={() => {
                   props.onReload(menu.id);
                   setMenu(null);
@@ -351,7 +356,7 @@ export function Sidebar(props: Props) {
             )}
             <div style={{ height: 1, background: '#2a2a2a', margin: '4px 0' }} />
             <button
-              className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white"
+              className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white text-[13px]"
               onClick={() => {
                 openIde(menu.id, "zed");
                 setMenu(null);
@@ -365,7 +370,7 @@ export function Sidebar(props: Props) {
             <div style={{ height: 1, background: '#2a2a2a', margin: '4px 0' }} />
             {menu.hidden ? (
               <button
-                className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white"
+                className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white text-[13px]"
                 onClick={() => {
                   props.onUnhide(menu.id);
                   setMenu(null);
@@ -378,7 +383,7 @@ export function Sidebar(props: Props) {
               </button>
             ) : (
               <button
-                className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white"
+                className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white text-[13px]"
                 onClick={() => {
                   props.onHide(menu.id);
                   setMenu(null);
