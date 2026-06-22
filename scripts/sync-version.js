@@ -13,4 +13,13 @@ let cargoToml = fs.readFileSync(cargoPath, 'utf8');
 cargoToml = cargoToml.replace(/^version\s*=\s*".*?"/m, `version = "${version}"`);
 fs.writeFileSync(cargoPath, cargoToml);
 
-console.log(`Synced version ${version} to tauri.conf.json and Cargo.toml`);
+const lockPath = 'src-tauri/Cargo.lock';
+if (fs.existsSync(lockPath)) {
+  let lockfile = fs.readFileSync(lockPath, 'utf8');
+  const regex = /(\[\[package\]\]\r?\nname = "DevSpace"\r?\nversion = ").*?(")/;
+  lockfile = lockfile.replace(regex, `$1${version}$2`);
+  fs.writeFileSync(lockPath, lockfile);
+}
+
+console.log(`Synced version ${version} to tauri.conf.json, Cargo.toml, and Cargo.lock`);
+
