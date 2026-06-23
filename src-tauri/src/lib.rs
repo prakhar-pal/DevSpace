@@ -122,6 +122,7 @@ fn connect_pty(app: tauri::AppHandle, state: tauri::State<AppState>, id: String)
     let inject_token = state.notify_token.clone();
     notify::log(&format!("connect_pty: pod={id} (injecting hook + opening ssh)"));
     std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(1000));
         match hooks::inject(inject_runner.as_ref(), &inject_id, &inject_token) {
             Ok(()) => notify::log(&format!("inject: hook written to pod={inject_id}")),
             Err(e) => notify::log(&format!("inject: FAILED pod={inject_id}: {e}")),
