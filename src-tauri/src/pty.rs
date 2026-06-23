@@ -16,16 +16,20 @@ pub const SSH_PROGRAM: &str = "ssh";
 /// containers are ephemeral with rotating keys and the transport is a local
 /// proxy, not a network host. The (untrusted) pod id is validated by the caller
 /// and can't start with `-`, so it is safe as the `<id>.devpod` hostname.
+fn get_sanitized_term() -> String {
+    std::env::var("TERM")
+        .ok()
+        .filter(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+        .unwrap_or_else(|| "xterm-256color".to_string())
+}
+
 pub fn ssh_args(pod_id: &str) -> Vec<String> {
     // Determine which TERM value to advertise to the remote container.
     // SSH forwards the terminal type via PTY negotiation only when the remote
     // sshd has `AcceptEnv TERM` — devpod container images often don't. Passing
     // `-o SetEnv=TERM=…` injects it unconditionally (OpenSSH 7.8+), the same
     // approach VS Code Remote SSH uses.
-    let term = std::env::var("TERM")
-        .ok()
-        .filter(|t| !t.is_empty())
-        .unwrap_or_else(|| "xterm-256color".to_string());
+    let term = get_sanitized_term();
     vec![
         "-tt".into(),
         "-o".into(),
@@ -80,7 +84,7 @@ impl SessionRegistry {
     ) -> Result<(), String>
     where
         F: Fn(Vec<u8>) + Send + 'static,
-        G: FnOnce() + Send + 'static,
+        G: FnOnce(Arc<Mutex<Session>>) + Send + 'static,
     {
         let mut map = self.sessions.lock().unwrap();
         if map.contains_key(pod_id) {
@@ -99,16 +103,14 @@ impl SessionRegistry {
         // For SSH sessions TERM is already injected via `-o SetEnv=TERM=…` in
         // ssh_args(), but setting it here too is harmless and covers any other
         // program spawned through this registry.
-        cmd.env(
-            "TERM",
-            std::env::var("TERM")
-                .ok()
-                .filter(|t| !t.is_empty())
-                .unwrap_or_else(|| "xterm-256color".to_string()),
-        );
+        cmd.env("TERM", get_sanitized_term());
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
 
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+        let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+        let session = Arc::new(Mutex::new(Session { pair, writer, child }));
+        let session_clone = session.clone();
+
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             loop {
@@ -118,11 +120,10 @@ impl SessionRegistry {
                 }
             }
             // Reader hit EOF/error: the session is over. Signal the frontend.
-            on_close();
+            on_close(session_clone);
         });
 
-        let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-        map.insert(pod_id.to_string(), Arc::new(Mutex::new(Session { pair, writer, child })));
+        map.insert(pod_id.to_string(), session);
         Ok(())
     }
 
@@ -150,6 +151,38 @@ impl SessionRegistry {
         // it would block every other session op (write/resize/ensure) and freeze
         // the UI.
         let removed = self.sessions.lock().unwrap().remove(pod_id);
+        if let Some(sess) = removed {
+            if let Ok(mut s) = sess.lock() {
+                if let Ok(Some(st)) = s.child.try_wait() {
+                    return Some(st.success());
+                }
+                if wait {
+                    if let Ok(st) = s.child.wait() {
+                        return Some(st.success());
+                    }
+                }
+                let _ = s.child.kill();
+                let _ = s.child.wait();
+                return Some(false);
+            }
+        }
+        None
+    }
+
+    pub fn close_only_if_matches(&self, pod_id: &str, session: &Arc<Mutex<Session>>, wait: bool) -> Option<bool> {
+        let removed = {
+            let mut map = self.sessions.lock().unwrap();
+            let matches = if let Some(current) = map.get(pod_id) {
+                Arc::ptr_eq(current, session)
+            } else {
+                false
+            };
+            if matches {
+                map.remove(pod_id)
+            } else {
+                None
+            }
+        };
         if let Some(sess) = removed {
             if let Ok(mut s) = sess.lock() {
                 if let Ok(Some(st)) = s.child.try_wait() {

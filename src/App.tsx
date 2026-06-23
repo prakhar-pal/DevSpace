@@ -38,7 +38,6 @@ export default function App() {
 
   const selectedIdRef = useRef<string | null>(null);
   const visibleRef = useRef<WorkspaceView[]>([]);
-  const reloadingRef = useRef<Set<string>>(new Set());
   // Gate saving until the initial load has applied, so we don't overwrite the
   // saved file with empty arrays before loadLayout resolves.
   const layoutLoaded = useRef(false);
@@ -239,22 +238,11 @@ export default function App() {
   };
 
   const reload = async (id: string) => {
-    reloadingRef.current.add(id);
     await disconnectPty(id).catch(() => {});
     setReloads((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
-    
-    // The backend's pty-closed event arrives asynchronously after disconnectPty
-    // returns. Keep the ignore flag up for a bit to prevent triggering shutdown.
-    setTimeout(() => {
-      reloadingRef.current.delete(id);
-    }, 1000);
   };
 
-  // Called by Terminal when the SSH session PTY closes (user typed `exit`).
-  // Move the workspace from "open terminal" → "shutting down log view", and
-  // explicitly trigger devpod stop.
   const onExited = (id: string) => {
-    if (reloadingRef.current.has(id)) return;
     setOpened((prev) => prev.filter((x) => x !== id));
     setShuttingDown((prev) => (prev.includes(id) ? prev : [...prev, id]));
     select(id);
