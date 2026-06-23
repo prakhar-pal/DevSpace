@@ -90,11 +90,6 @@ pub fn status(runner: &dyn CommandRunner, id: &str) -> Result<WorkspaceStatus, S
     parse_status(&out)
 }
 
-pub fn stop(runner: &dyn CommandRunner, id: &str) -> Result<(), String> {
-    validate_id(id)?;
-    runner.run(&["stop", "--", id]).map(|_| ())
-}
-
 pub fn delete(runner: &dyn CommandRunner, id: &str) -> Result<(), String> {
     validate_id(id)?;
     runner.run(&["delete", "--", id]).map(|_| ())
@@ -152,14 +147,6 @@ mod tests {
         assert_eq!(ws.len(), 2);
     }
 
-    #[test]
-    fn stop_passes_id() {
-        let runner = FakeRunner {
-            output: String::new(),
-            expected_args: vec!["stop".into(), "--".into(), "wc-1".into()],
-        };
-        assert!(stop(&runner, "wc-1").is_ok());
-    }
 
     struct PanicRunner;
     impl CommandRunner for PanicRunner {
@@ -171,7 +158,7 @@ mod tests {
     #[test]
     fn rejects_flag_like_id_before_running() {
         // A hostile id must be refused before the subprocess is ever spawned.
-        assert!(stop(&PanicRunner, "--ide").is_err());
+        assert!(delete(&PanicRunner, "--ide").is_err());
         assert!(delete(&PanicRunner, "-rf").is_err());
         assert!(validate_id("wc-1").is_ok());
         assert!(validate_id("task-queue").is_ok());
