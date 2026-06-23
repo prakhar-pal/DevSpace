@@ -172,7 +172,7 @@ export function Sidebar(props: Props) {
         {visible.map((w) => (
           <div
             key={w.id}
-            className={clsx("group flex items-center mx-2 my-[2px] rounded-md transition-colors duration-150", w.id === selectedId && "bg-[#3f3f46]", overId === w.id && "shadow-[inset_0_0_0_1px_rgba(59,130,246,0.5)] bg-blue-500/10")}
+            className={clsx("ws-row group flex items-center mx-2 my-[2px] rounded-md transition-colors duration-150", w.id === selectedId && "bg-[#3f3f46]", overId === w.id && "shadow-[inset_0_0_0_1px_rgba(59,130,246,0.5)] bg-blue-500/10")}
             draggable
             onDragStart={(e) => {
               setDragId(w.id);
@@ -269,7 +269,7 @@ export function Sidebar(props: Props) {
           {hidden.map((w) => (
             <div
               key={w.id}
-              className={clsx("group flex items-center mx-2 my-[2px] rounded-md transition-colors duration-150", w.id === selectedId && "bg-[#3f3f46]")}
+              className={clsx("ws-row group flex items-center mx-2 my-[2px] rounded-md transition-colors duration-150", w.id === selectedId && "bg-[#3f3f46]")}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setMenu({ id: w.id, x: e.clientX, y: e.clientY, hidden: true });

@@ -64,76 +64,68 @@ fn devpod_in(path: &str) -> bool {
 /// MUST be called before any thread is spawned: it mutates the process
 /// environment via `set_var`, which is only sound while single-threaded.
 pub fn repair() {
-    // Fast path: if `devpod` already resolves (e.g. launched from a terminal
-    // that inherited the user's full PATH), skip the shell spawn entirely.
-    // Sourcing the login shell's rc files is slow and could hang on a
-    // misbehaving profile, so we only pay that cost when devpod is missing —
-    // i.e. the LaunchServices/minimal-PATH case this exists to fix.
+    // Fast path: if `devpod` already resolves, skip the shell spawn entirely.
     if devpod_in(&std::env::var("PATH").unwrap_or_default()) {
         return;
     }
 
+    // Standard macOS fallback paths where Homebrew or DevPod script installers live
+    let mut fallbacks_to_add = vec![
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        let local_bin = std::path::PathBuf::from(home).join(".local/bin");
+        if let Some(s) = local_bin.to_str() {
+            fallbacks_to_add.push(s.to_string());
+        }
+    }
+    let fallbacks = fallbacks_to_add.join(":");
+
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    // `-i -l` so the same profile/rc files that build the user's interactive
-    // PATH are sourced; `-c` runs our echo and exits. This assumes a POSIX-ish
-    // shell (zsh/bash/sh) that prints `$PATH` colon-separated — fish would emit
-    // it space-separated; there we simply leave PATH as-is (best-effort).
-    let mut child = match std::process::Command::new(&shell)
-        .args(["-ilc", &path_query_command()])
+    let mut shell_path = String::new();
+
+    // Use `-lc` (non-interactive login) instead of `-ilc` (interactive login).
+    // Interactive shells source `.zshrc` which often hangs (e.g. prompt themes,
+    // update checks, plugins) when run headlessly without a TTY. Non-interactive
+    // login shells still source profiles/zprofile (where Homebrew/PATH is set).
+    if let Ok(mut child) = std::process::Command::new(&shell)
+        .args(["-lc", &path_query_command()])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
     {
-        Ok(c) => c,
-        Err(_) => return,
-    };
+        let timeout = std::time::Duration::from_secs(3);
+        let start = std::time::Instant::now();
+        let mut exited = false;
 
-    let timeout = std::time::Duration::from_secs(3);
-    let start = std::time::Instant::now();
-    let mut exit_status = None;
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                exit_status = Some(status);
+        while start.elapsed() < timeout {
+            if let Ok(Some(status)) = child.try_wait() {
+                if status.success() {
+                    exited = true;
+                }
                 break;
             }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    return;
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        if !exited {
+            let _ = child.kill();
+        } else if let Some(mut stream) = child.stdout.take() {
+            use std::io::Read;
+            let mut stdout = String::new();
+            if stream.read_to_string(&mut stdout).is_ok() {
+                if let Some(extracted) = extract_path(&stdout) {
+                    shell_path = extracted;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            Err(_) => {
-                let _ = child.kill();
-                return;
             }
         }
     }
 
-    if let Some(status) = exit_status {
-        if !status.success() {
-            return;
-        }
-    } else {
-        return;
-    }
-
-    let mut stdout = String::new();
-    if let Some(mut stream) = child.stdout.take() {
-        use std::io::Read;
-        let _ = stream.read_to_string(&mut stdout);
-    }
-    let Some(shell_path) = extract_path(&stdout) else {
-        return;
-    };
-    if shell_path.is_empty() {
-        return;
-    }
     let current = std::env::var("PATH").unwrap_or_default();
     let merged = merge_path(&current, &shell_path);
-    std::env::set_var("PATH", merged);
+    let final_path = merge_path(&merged, &fallbacks);
+    std::env::set_var("PATH", final_path);
 }
 
 #[cfg(test)]

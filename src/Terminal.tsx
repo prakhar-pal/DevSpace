@@ -87,6 +87,7 @@ export function Terminal({
   useEffect(() => {
     if (!ref.current) return;
     setConnecting(true);
+    setDisconnected(false);
     const term = new XTerm({
       // NOTE: no convertEol — this is a real PTY (ssh -tt); the remote tty
       // already maps \n→\r\n. Converting again corrupts full-screen TUIs

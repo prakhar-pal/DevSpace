@@ -45,12 +45,15 @@ fn spawn_pty_session(
         move |bytes| {
             let _ = out_handle.emit(&format!("pty-output:{out_pod}"), bytes);
         },
-        move || {
+        move |session| {
             notify::log(&format!("session closed pod={close_pod}"));
             // Remove the dead session BEFORE signalling the frontend, so a
             // reconnect triggered by `pty-closed` can't race `ensure`.
-            let success = sessions_close.close(&close_pod, true).unwrap_or(false);
-            let _ = close_handle.emit(&format!("pty-closed:{close_pod}"), success);
+            // We only emit the event if the session wasn't already explicitly closed
+            // (i.e. close_only_if_matches returns Some(success), not None).
+            if let Some(success) = sessions_close.close_only_if_matches(&close_pod, &session, true) {
+                let _ = close_handle.emit(&format!("pty-closed:{close_pod}"), success);
+            }
         },
     )
 }
