@@ -111,15 +111,17 @@ export function Terminal({
     // macOS-style copy/paste through the reliable Tauri clipboard. Returning
     // false stops xterm from also sending the keystroke to the PTY.
     term.attachCustomKeyEventHandler((e) => {
-      if (e.key === "Enter") {
-        console.log("[DevSpace Debug] Enter keydown - shiftKey:", e.shiftKey, "code:", e.code, "keyCode:", e.keyCode, "type:", e.type);
-      }
       if (e.type !== "keydown") return true;
 
+      // Shift+Enter → insert a newline instead of submitting. Claude Code binds
+      // its `chat:newline` action to Ctrl+J, i.e. a bare LF (0x0A). We MUST also
+      // preventDefault: returning false only stops xterm's keydown handling, not
+      // the browser's follow-up `keypress`, which xterm turns into a CR (0x0D) —
+      // submitting the prompt anyway. That trailing CR is why the earlier
+      // plain-LF and ESC+LF attempts failed.
       if (e.key === "Enter" && e.shiftKey) {
-        console.log("[DevSpace Debug] Intercepting Shift+Enter, sending key codes");
-        // Send ESC + LF (\x1b\n) for Shift+Enter to trigger a newline without executing across shells and Claude Code
-        writePty(podId, [27, 10]);
+        e.preventDefault();
+        writePty(podId, [10]);
         return false;
       }
 

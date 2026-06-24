@@ -1,10 +1,39 @@
 use serde::Deserialize;
 
+fn find_project_dir() -> std::path::PathBuf {
+    if let Some(val) = std::env::var_os("DEVSPACE_PROJECT_DIR") {
+        return std::path::PathBuf::from(val);
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        if cwd.join("src-tauri").exists() || cwd.join("package.json").exists() {
+            return cwd;
+        }
+        if cwd.join("Cargo.toml").exists() && cwd.file_name().map(|n| n == "src-tauri").unwrap_or(false) {
+            if let Some(parent) = cwd.parent() {
+                return parent.to_path_buf();
+            }
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let mut p = exe.as_path();
+        while let Some(parent) = p.parent() {
+            if parent.join("src-tauri").exists() || parent.join("package.json").exists() {
+                return parent.to_path_buf();
+            }
+            p = parent;
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| {
+        let home = std::env::var_os("HOME").unwrap_or_default();
+        std::path::PathBuf::from(home)
+    })
+}
+
 /// Append a diagnostic line to the DevSpace log file
-/// (`~/Library/Logs/DevSpace/devspace.log`). Used to trace the notification
+/// (`devspace.log` at the root of the project directory). Used to trace the notification
 /// path since GUI stderr is not easily captured. The file is created owner-only
-/// (0600) in a per-user directory, and callers MUST NOT pass secrets (e.g. the
-/// notify token) — log only non-sensitive fields.
+/// (0600), and callers MUST NOT pass secrets (e.g. the notify token) — log only
+/// non-sensitive fields.
 pub fn log(msg: &str) {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -12,14 +41,7 @@ pub fn log(msg: &str) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let Some(home) = std::env::var_os("HOME") else {
-        return;
-    };
-    let mut dir = std::path::PathBuf::from(home);
-    dir.push("Library/Logs/DevSpace");
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
+    let dir = find_project_dir();
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -29,6 +51,7 @@ pub fn log(msg: &str) {
         let _ = writeln!(f, "[{ts}] {msg}");
     }
 }
+
 
 /// Desktop-side port the notify HTTP listener binds.
 pub const LISTENER_PORT: u16 = 17865;
