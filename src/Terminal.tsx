@@ -111,11 +111,15 @@ export function Terminal({
     // macOS-style copy/paste through the reliable Tauri clipboard. Returning
     // false stops xterm from also sending the keystroke to the PTY.
     term.attachCustomKeyEventHandler((e) => {
+      if (e.key === "Enter") {
+        console.log("[DevSpace Debug] Enter keydown - shiftKey:", e.shiftKey, "code:", e.code, "keyCode:", e.keyCode, "type:", e.type);
+      }
       if (e.type !== "keydown") return true;
 
       if (e.key === "Enter" && e.shiftKey) {
-        // Send standard Line Feed (\n) for Shift+Enter to support multi-line input across shells and Claude Code
-        writePty(podId, [10]);
+        console.log("[DevSpace Debug] Intercepting Shift+Enter, sending key codes");
+        // Send ESC + LF (\x1b\n) for Shift+Enter to trigger a newline without executing across shells and Claude Code
+        writePty(podId, [27, 10]);
         return false;
       }
 
