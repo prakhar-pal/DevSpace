@@ -73,4 +73,5 @@ cd src-tauri && cargo test                # backend (Rust)
 ## Agent Rules
 
 - **Never commit files directly without asking the user.** Always present the changes and wait for explicit user approval before executing `git commit` or `git push`.
+- **Never make commits on the `main` branch.** Always create a feature branch for your edits, check out to it, and commit/push changes on the feature branch.
 - **Use `.tmp/` for temporary files.** Always write any scratchpad scripts, temporary test files, or other ephemeral data into the `.tmp` directory at the root of the project (which is `.gitignore`d).

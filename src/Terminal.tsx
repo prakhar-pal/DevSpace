@@ -114,8 +114,8 @@ export function Terminal({
       if (e.type !== "keydown") return true;
 
       if (e.key === "Enter" && e.shiftKey) {
-        // Send CSI u sequence for Shift+Enter to support multi-line text input
-        writePty(podId, Array.from(new TextEncoder().encode("\x1b[13;2u")));
+        // Send standard Line Feed (\n) for Shift+Enter to support multi-line input across shells and Claude Code
+        writePty(podId, [10]);
         return false;
       }
 
