@@ -113,9 +113,15 @@ export function Terminal({
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
 
+      // Shift+Enter → insert a newline instead of submitting. Claude Code binds
+      // its `chat:newline` action to Ctrl+J, i.e. a bare LF (0x0A). We MUST also
+      // preventDefault: returning false only stops xterm's keydown handling, not
+      // the browser's follow-up `keypress`, which xterm turns into a CR (0x0D) —
+      // submitting the prompt anyway. That trailing CR is why the earlier
+      // plain-LF and ESC+LF attempts failed.
       if (e.key === "Enter" && e.shiftKey) {
-        // Send CSI u sequence for Shift+Enter to support multi-line text input
-        writePty(podId, Array.from(new TextEncoder().encode("\x1b[13;2u")));
+        e.preventDefault();
+        writePty(podId, [10]);
         return false;
       }
 
