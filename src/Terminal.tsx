@@ -114,8 +114,8 @@ export function Terminal({
       if (e.type !== "keydown") return true;
 
       if (e.key === "Enter" && e.shiftKey) {
-        // Send standard Line Feed (\n) for Shift+Enter to support multi-line input across shells and Claude Code
-        writePty(podId, [10]);
+        // Send ESC + LF (\x1b\n) for Shift+Enter to trigger a newline without executing across shells and Claude Code
+        writePty(podId, [27, 10]);
         return false;
       }
 
