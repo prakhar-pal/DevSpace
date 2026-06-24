@@ -1,5 +1,10 @@
 use serde::Deserialize;
 
+/// Locate the project root so the dev-only diagnostic log lands in `.tmp/`.
+/// `DEVSPACE_PROJECT_DIR` overrides; otherwise we use the cwd (`tauri dev` runs
+/// cargo from `src-tauri/`, so also accept that and step up to its parent).
+/// Only compiled in debug builds — release logging is disabled entirely.
+#[cfg(debug_assertions)]
 fn find_project_dir() -> std::path::PathBuf {
     if let Some(val) = std::env::var_os("DEVSPACE_PROJECT_DIR") {
         return std::path::PathBuf::from(val);
@@ -8,32 +13,26 @@ fn find_project_dir() -> std::path::PathBuf {
         if cwd.join("src-tauri").exists() || cwd.join("package.json").exists() {
             return cwd;
         }
-        if cwd.join("Cargo.toml").exists() && cwd.file_name().map(|n| n == "src-tauri").unwrap_or(false) {
+        if cwd.join("Cargo.toml").exists()
+            && cwd.file_name().map(|n| n == "src-tauri").unwrap_or(false)
+        {
             if let Some(parent) = cwd.parent() {
                 return parent.to_path_buf();
             }
         }
+        return cwd;
     }
-    if let Ok(exe) = std::env::current_exe() {
-        let mut p = exe.as_path();
-        while let Some(parent) = p.parent() {
-            if parent.join("src-tauri").exists() || parent.join("package.json").exists() {
-                return parent.to_path_buf();
-            }
-            p = parent;
-        }
-    }
-    std::env::current_dir().unwrap_or_else(|_| {
-        let home = std::env::var_os("HOME").unwrap_or_default();
-        std::path::PathBuf::from(home)
-    })
+    std::path::PathBuf::from(".")
 }
 
-/// Append a diagnostic line to the DevSpace log file
-/// (`devspace.log` at the root of the project directory). Used to trace the notification
-/// path since GUI stderr is not easily captured. The file is created owner-only
-/// (0600), and callers MUST NOT pass secrets (e.g. the notify token) — log only
-/// non-sensitive fields.
+/// Append a diagnostic line to `.tmp/devspace.log` at the project root, to trace
+/// the notification path since GUI stderr is not easily captured. The `.tmp`
+/// dir is `.gitignore`d. The file is created owner-only (0600), and callers MUST
+/// NOT pass secrets (e.g. the notify token) — log only non-sensitive fields.
+///
+/// Disabled in release builds: this is a development-only diagnostic, so the
+/// production bundle writes nothing. (See the `not(debug_assertions)` no-op.)
+#[cfg(debug_assertions)]
 pub fn log(msg: &str) {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -41,7 +40,10 @@ pub fn log(msg: &str) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let dir = find_project_dir();
+    let dir = find_project_dir().join(".tmp");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -52,6 +54,9 @@ pub fn log(msg: &str) {
     }
 }
 
+/// Release builds: logging is a no-op (development-only diagnostic).
+#[cfg(not(debug_assertions))]
+pub fn log(_msg: &str) {}
 
 /// Desktop-side port the notify HTTP listener binds.
 pub const LISTENER_PORT: u16 = 17865;

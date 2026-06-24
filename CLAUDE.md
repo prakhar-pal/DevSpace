@@ -65,7 +65,8 @@ cd src-tauri && cargo test                # backend (Rust)
 
 ## Diagnostics
 
-- Runtime log (notification path, PTY lifecycle): `.tmp/devspace.log`.
+- Runtime log (notification path, PTY lifecycle): `.tmp/devspace.log` (debug
+  builds only — release builds write no log).
 - Manual notification trigger inside a pod: open the workspace in DevSpace, then
   run `~/.devspace-notify` in that terminal (it uses this session's reverse
   tunnel). `~/.devspace-notify Notification` sends a "needs input" event.
@@ -75,5 +76,5 @@ cd src-tauri && cargo test                # backend (Rust)
 - **Never commit files directly without asking the user.** Always present the changes and wait for explicit user approval before executing `git commit` or `git push`.
 - **Never make commits on the `main` branch.** Always create a feature branch for your edits, check out to it, and commit/push changes on the feature branch.
 - **Use `.tmp/` for temporary files.** Always write any scratchpad scripts, temporary test files, or other ephemeral data into the `.tmp` directory at the root of the project (which is `.gitignore`d).
-- **Always store application logs inside the project directory (e.g. `devspace.log` at the root).**
+- **Application logs go to `.tmp/devspace.log`** (inside the project, `.gitignore`d) and only in debug builds — production/release builds disable logging.
 - **Prefer commands that run inside the sandbox (BypassSandbox: false) first, and only bypass if blocked by standard sandbox constraints.**
