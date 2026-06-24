@@ -1,5 +1,14 @@
 # dev-space
 
+## 0.3.4
+
+### Patch Changes
+
+- 8d3b60e: fix: introduce delay in hooks::inject to prevent concurrent workspace lock conflicts
+- ba88343: fix: Shift+Enter inserts a newline in the terminal instead of submitting
+- be18062: fix: write the diagnostic log to .tmp/devspace.log in debug builds only; disable logging in release
+- dc3bc7d: chore: remove unused stop wrapper and its unit test
+
 ## 0.3.3
 
 ### Patch Changes
