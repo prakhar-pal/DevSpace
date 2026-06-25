@@ -1,7 +1,7 @@
 import { useState, type DragEvent } from "react";
 import { clsx } from "clsx";
-import { openIde } from "./api";
-import type { WorkspaceView, WorkspaceState } from "./api";
+import { openIde } from "../api";
+import type { WorkspaceView, WorkspaceState } from "../api";
 
 export function statusColor(state: WorkspaceState): string {
   switch (state) {
@@ -18,7 +18,6 @@ export function statusColor(state: WorkspaceState): string {
       return "red";
   }
 }
-
 
 function EyeIcon() {
   return (
@@ -107,6 +106,46 @@ function ReloadIcon() {
   );
 }
 
+function HelpIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.3}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="8" cy="8" r="6.5" />
+      <path d="M6.1 6.2a1.9 1.9 0 113.2 1.4c-.7.5-1.3.8-1.3 1.6" />
+      <circle cx="8" cy="11.4" r="0.55" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function ChevronIcon({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="12"
+      height="12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="transition-transform duration-150"
+      style={{ transform: collapsed ? "rotate(-90deg)" : "none" }}
+    >
+      <path d="M4 6l4 4 4-4" />
+    </svg>
+  );
+}
+
 function DotsVerticalIcon() {
   return (
     <svg
@@ -131,6 +170,9 @@ interface Props {
   starting: string[];
   opened: string[];
   aliases: Record<string, string>;
+  hiddenCollapsed: boolean;
+  onToggleHiddenCollapsed: () => void;
+  onOpenGuide: () => void;
   onSelect: (id: string) => void;
   onStop: (id: string) => void;
   onReload: (id: string) => void;
@@ -141,8 +183,16 @@ interface Props {
 }
 
 export function Sidebar(props: Props) {
-  const { visible, hidden, selectedId, badges, starting, opened, aliases } =
-    props;
+  const {
+    visible,
+    hidden,
+    selectedId,
+    badges,
+    starting,
+    opened,
+    aliases,
+    hiddenCollapsed,
+  } = props;
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{
@@ -172,7 +222,12 @@ export function Sidebar(props: Props) {
         {visible.map((w) => (
           <div
             key={w.id}
-            className={clsx("ws-row group flex items-center mx-2 my-[2px] rounded-md transition-colors duration-150", w.id === selectedId && "bg-[#3f3f46]", overId === w.id && "shadow-[inset_0_0_0_1px_rgba(59,130,246,0.5)] bg-blue-500/10")}
+            className={clsx(
+              "ws-row group flex items-center mx-2 my-[2px] rounded-md transition-colors duration-150",
+              w.id === selectedId && "bg-[#3f3f46]",
+              overId === w.id &&
+                "shadow-[inset_0_0_0_1px_rgba(59,130,246,0.5)] bg-blue-500/10"
+            )}
             draggable
             onDragStart={(e) => {
               setDragId(w.id);
@@ -194,10 +249,15 @@ export function Sidebar(props: Props) {
             }}
           >
             <button
-              className={clsx("flex ml-1.5 items-center gap-2 flex-1 min-w-0 p-2 pl-1 border-none bg-transparent cursor-pointer text-left text-[13px]", w.id === selectedId ? "text-white font-medium" : "text-[#d4d4d8]")}
+              className={clsx(
+                "flex ml-1.5 items-center gap-2 flex-1 min-w-0 p-2 pl-1 border-none bg-transparent cursor-pointer text-left text-[13px]",
+                w.id === selectedId
+                  ? "text-white font-medium"
+                  : "text-[#d4d4d8]"
+              )}
               onClick={() => props.onSelect(w.id)}
               title={
-                aliases[w.id] ? `${w.id} · ${w.source}` : (w.error ?? w.source)
+                aliases[w.id] ? `${w.id} · ${w.source}` : w.error ?? w.source
               }
             >
               {starting.includes(w.id) ? (
@@ -229,7 +289,12 @@ export function Sidebar(props: Props) {
             {w.state !== "Stopped" && (
               <button
                 type="button"
-                className={clsx("flex items-center justify-center flex-none w-[26px] h-[26px] mr-1.5 p-0 border-none bg-transparent rounded-md cursor-pointer text-[#9a9a9a] transition-all duration-100 hover:text-red-400 hover:bg-red-400/15", w.id === selectedId ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+                className={clsx(
+                  "flex items-center justify-center flex-none w-[26px] h-[26px] mr-1.5 p-0 border-none bg-transparent rounded-md cursor-pointer text-[#9a9a9a] transition-all duration-100 hover:text-red-400 hover:bg-red-400/15",
+                  w.id === selectedId
+                    ? "opacity-100"
+                    : "opacity-0 group-hover:opacity-100"
+                )}
                 title="Stop devpod"
                 aria-label={`Stop ${w.id}`}
                 onClick={(e) => {
@@ -242,7 +307,13 @@ export function Sidebar(props: Props) {
             )}
             <button
               type="button"
-              className={clsx("flex items-center justify-center flex-none w-[26px] h-[26px] p-0 border-none bg-transparent rounded-md cursor-pointer text-[#9a9a9a] transition-all duration-100 hover:text-white hover:bg-white/10", w.state === "Stopped" && "mr-1.5", w.id === selectedId ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+              className={clsx(
+                "flex items-center justify-center flex-none w-[26px] h-[26px] p-0 border-none bg-transparent rounded-md cursor-pointer text-[#9a9a9a] transition-all duration-100 hover:text-white hover:bg-white/10",
+                w.state === "Stopped" && "mr-1.5",
+                w.id === selectedId
+                  ? "opacity-100"
+                  : "opacity-0 group-hover:opacity-100"
+              )}
               title="More options"
               aria-label={`Options for ${w.id}`}
               onClick={(e) => {
@@ -261,51 +332,32 @@ export function Sidebar(props: Props) {
         ))}
       </div>
 
-      {hidden.length > 0 && (
-        <div className="border-t border-[#2a2a2a] mt-auto pb-2">
-          <div className="flex items-center gap-1.5 w-full px-3 pt-3 pb-2 text-[#777] text-left text-[11px] uppercase tracking-wider font-semibold">
-            Hidden ({hidden.length})
-          </div>
-          {hidden.map((w) => (
-            <div
-              key={w.id}
-              className={clsx("ws-row group flex items-center mx-2 my-[2px] rounded-md transition-colors duration-150", w.id === selectedId && "bg-[#3f3f46]")}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setMenu({ id: w.id, x: e.clientX, y: e.clientY, hidden: true });
-              }}
+      <div className="mt-auto">
+        {hidden.length > 0 && (
+          <div className="border-t border-[#2a2a2a] pb-2">
+            <button
+              type="button"
+              className="flex items-center gap-1.5 w-full px-3 pt-3 pb-2 border-none bg-transparent cursor-pointer text-[#777] hover:text-[#aaa] text-left text-[11px] uppercase tracking-wider font-semibold transition-colors duration-100"
+              aria-expanded={!hiddenCollapsed}
+              title={hiddenCollapsed ? "Show hidden workspaces" : "Hide section"}
+              onClick={props.onToggleHiddenCollapsed}
             >
-              <button
-                className={clsx("flex items-center gap-2 flex-1 min-w-0 py-2 pr-2 pl-3 border-none bg-transparent cursor-pointer text-left text-[13px]", w.id === selectedId ? "text-white font-medium" : "text-[#888]")}
-                onClick={() => props.onSelect(w.id)}
-                title={
-                  aliases[w.id]
-                    ? `${w.id} · ${w.source}`
-                    : (w.error ?? w.source)
-                }
-              >
-                {w.state === "Loading" ? (
-                  <span
-                    className="w-2.5 h-2.5 flex-none rounded-full border-2 border-[#444] border-t-[#888] animate-spin"
-                    aria-label="fetching status"
-                  />
-                ) : (
-                  <span
-                    className="w-2.5 h-2.5 rounded-full flex-none"
-                    style={{ background: statusColor(w.state) }}
-                  />
+              <ChevronIcon collapsed={hiddenCollapsed} />
+              <span>Hidden ({hidden.length})</span>
+            </button>
+            {/* When collapsed, still show the selected workspace so an active
+                session can't become invisible/unreachable in the list. */}
+            {hidden
+              .filter((w) => !hiddenCollapsed || w.id === selectedId)
+              .map((w) => (
+              <div
+                key={w.id}
+                className={clsx(
+                  "ws-row group flex items-center mx-2 my-[2px] rounded-md transition-colors duration-150",
+                  w.id === selectedId && "bg-[#3f3f46]"
                 )}
-                <span className="flex-1 overflow-hidden truncate whitespace-nowrap">
-                  {displayName(w.id)}
-                </span>
-              </button>
-              <button
-                type="button"
-                className={clsx("flex items-center justify-center flex-none w-[26px] h-[26px] mr-1.5 p-0 border-none bg-transparent rounded-md cursor-pointer text-[#9a9a9a] transition-all duration-100 hover:text-white hover:bg-white/10", w.id === selectedId ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
-                title="More options"
-                aria-label={`Options for ${w.id}`}
-                onClick={(e) => {
-                  e.stopPropagation();
+                onContextMenu={(e) => {
+                  e.preventDefault();
                   setMenu({
                     id: w.id,
                     x: e.clientX,
@@ -314,12 +366,74 @@ export function Sidebar(props: Props) {
                   });
                 }}
               >
-                <DotsVerticalIcon />
-              </button>
-            </div>
-          ))}
+                <button
+                  className={clsx(
+                    "flex items-center gap-2 flex-1 min-w-0 py-2 pr-2 pl-3 border-none bg-transparent cursor-pointer text-left text-[13px]",
+                    w.id === selectedId
+                      ? "text-white font-medium"
+                      : "text-[#888]"
+                  )}
+                  onClick={() => props.onSelect(w.id)}
+                  title={
+                    aliases[w.id]
+                      ? `${w.id} · ${w.source}`
+                      : w.error ?? w.source
+                  }
+                >
+                  {w.state === "Loading" ? (
+                    <span
+                      className="w-2.5 h-2.5 flex-none rounded-full border-2 border-[#444] border-t-[#888] animate-spin"
+                      aria-label="fetching status"
+                    />
+                  ) : (
+                    <span
+                      className="w-2.5 h-2.5 rounded-full flex-none"
+                      style={{ background: statusColor(w.state) }}
+                    />
+                  )}
+                  <span className="flex-1 overflow-hidden truncate whitespace-nowrap">
+                    {displayName(w.id)}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={clsx(
+                    "flex items-center justify-center flex-none w-[26px] h-[26px] mr-1.5 p-0 border-none bg-transparent rounded-md cursor-pointer text-[#9a9a9a] transition-all duration-100 hover:text-white hover:bg-white/10",
+                    w.id === selectedId
+                      ? "opacity-100"
+                      : "opacity-0 group-hover:opacity-100"
+                  )}
+                  title="More options"
+                  aria-label={`Options for ${w.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenu({
+                      id: w.id,
+                      x: e.clientX,
+                      y: e.clientY,
+                      hidden: true,
+                    });
+                  }}
+                >
+                  <DotsVerticalIcon />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="border-t border-[#2a2a2a] px-2 py-2">
+          <button
+            type="button"
+            className="flex items-center gap-2 w-full px-2 py-1.5 border-none bg-transparent rounded-md cursor-pointer text-[#9a9a9a] text-left text-[12px] transition-colors duration-100 hover:bg-white/10 hover:text-white"
+            title="How to use DevSpace"
+            aria-label="Open the DevSpace guide"
+            onClick={props.onOpenGuide}
+          >
+            <HelpIcon />
+            <span>Guide</span>
+          </button>
         </div>
-      )}
+      </div>
 
       {menu && (
         <div
@@ -361,7 +475,9 @@ export function Sidebar(props: Props) {
                 <span>Reload SSH Session</span>
               </button>
             )}
-            <div style={{ height: 1, background: '#2a2a2a', margin: '4px 0' }} />
+            <div
+              style={{ height: 1, background: "#2a2a2a", margin: "4px 0" }}
+            />
             <button
               className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white text-[13px]"
               onClick={() => {
@@ -370,11 +486,24 @@ export function Sidebar(props: Props) {
               }}
             >
               <div className="flex-none text-[#9a9a9a] group-hover/item:text-white">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                </svg>
               </div>
               <span>Open in Zed</span>
             </button>
-            <div style={{ height: 1, background: '#2a2a2a', margin: '4px 0' }} />
+            <div
+              style={{ height: 1, background: "#2a2a2a", margin: "4px 0" }}
+            />
             {menu.hidden ? (
               <button
                 className="group/item flex items-center gap-[9px] w-full px-3 py-2 border-none bg-transparent text-[#ddd] cursor-pointer text-left font-inherit rounded hover:bg-blue-600 hover:text-white text-[13px]"

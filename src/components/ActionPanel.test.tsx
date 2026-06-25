@@ -1,6 +1,6 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ActionPanel } from "./ActionPanel";
-import type { WorkspaceView } from "./api";
+import type { WorkspaceView } from "../api";
 
 const ws: WorkspaceView = {
   id: "wc-1",

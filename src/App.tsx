@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Sidebar } from "./Sidebar";
-import { ActionPanel } from "./ActionPanel";
-import { Terminal } from "./Terminal";
-import { StartLog } from "./StartLog";
-import { RenameModal } from "./RenameModal";
+import { Sidebar } from "./components/Sidebar";
+import { ActionPanel } from "./components/ActionPanel";
+import { Terminal } from "./components/Terminal";
+import { StartLog } from "./components/StartLog";
+import { RenameModal } from "./components/RenameModal";
+import { GuideModal } from "./components/GuideModal";
 import {
   onWorkspacesUpdated,
   onPodBadge,
@@ -33,11 +34,19 @@ export default function App() {
   const [order, setOrder] = useState<string[]>([]);
   const [hidden, setHidden] = useState<string[]>([]);
   const [aliases, setAliases] = useState<Record<string, string>>({});
+  // Whether the sidebar's "Hidden" section is collapsed (persisted).
+  const [hiddenCollapsed, setHiddenCollapsed] = useState(false);
   // Workspace id currently being renamed (drives the friendly-name modal).
   const [renaming, setRenaming] = useState<string | null>(null);
+  // Whether the in-app guide modal is open.
+  const [guideOpen, setGuideOpen] = useState(false);
 
   const selectedIdRef = useRef<string | null>(null);
   const visibleRef = useRef<WorkspaceView[]>([]);
+  // Tracks whether any modal is open, so the global keyboard shortcuts below
+  // don't fire behind an overlay. Updated via an effect (the keydown listener
+  // is registered once and reads this ref).
+  const modalOpenRef = useRef(false);
   // Gate saving until the initial load has applied, so we don't overwrite the
   // saved file with empty arrays before loadLayout resolves.
   const layoutLoaded = useRef(false);
@@ -45,6 +54,10 @@ export default function App() {
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
+
+  useEffect(() => {
+    modalOpenRef.current = guideOpen || renaming !== null;
+  }, [guideOpen, renaming]);
 
   const select = (id: string) => {
     setSelectedId(id);
@@ -58,6 +71,7 @@ export default function App() {
         setOrder(l.order ?? []);
         setHidden(l.hidden ?? []);
         setAliases(l.aliases ?? {});
+        setHiddenCollapsed(l.hidden_collapsed ?? false);
       })
       .catch(() => {})
       .finally(() => {
@@ -82,8 +96,8 @@ export default function App() {
   // Persist layout on change (after the initial load has applied).
   useEffect(() => {
     if (!layoutLoaded.current) return;
-    saveLayout(order, hidden, aliases).catch(() => {});
-  }, [order, hidden, aliases]);
+    saveLayout(order, hidden, aliases, hiddenCollapsed).catch(() => {});
+  }, [order, hidden, aliases, hiddenCollapsed]);
 
   // Keep `order` canonical: append new workspaces, drop removed ones; prune
   // hidden ids that no longer exist.
@@ -134,6 +148,8 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.metaKey || e.ctrlKey || e.altKey) return;
+      // An open modal owns the keyboard; don't act behind it.
+      if (modalOpenRef.current) return;
       if (e.key === "b" || e.key === "B") {
         e.preventDefault();
         e.stopPropagation();
@@ -284,6 +300,9 @@ export default function App() {
           starting={starting}
           opened={opened}
           aliases={aliases}
+          hiddenCollapsed={hiddenCollapsed}
+          onToggleHiddenCollapsed={() => setHiddenCollapsed((v) => !v)}
+          onOpenGuide={() => setGuideOpen(true)}
           onSelect={select}
           onStop={stop}
           onReload={reload}
@@ -366,6 +385,7 @@ export default function App() {
           onCancel={() => setRenaming(null)}
         />
       )}
+      {guideOpen && <GuideModal onClose={() => setGuideOpen(false)} />}
     </div>
   );
 }

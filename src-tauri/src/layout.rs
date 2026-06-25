@@ -12,6 +12,9 @@ pub struct Layout {
     pub hidden: Vec<String>,
     #[serde(default)]
     pub aliases: HashMap<String, String>,
+    /// Whether the sidebar's "Hidden" section is collapsed.
+    #[serde(default)]
+    pub hidden_collapsed: bool,
 }
 
 /// Tolerant parse: invalid/garbage JSON yields the default (empty) layout.
@@ -59,10 +62,12 @@ mod tests {
         l.order = vec!["a".into(), "b".into()];
         l.hidden = vec!["c".into()];
         l.aliases.insert("a".into(), "Alpha".into());
+        l.hidden_collapsed = true;
         let parsed = parse(&serialize(&l));
         assert_eq!(parsed.order, l.order);
         assert_eq!(parsed.hidden, l.hidden);
         assert_eq!(parsed.aliases.get("a").map(String::as_str), Some("Alpha"));
+        assert!(parsed.hidden_collapsed);
     }
 
     #[test]

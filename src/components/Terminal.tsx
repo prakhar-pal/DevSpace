@@ -11,7 +11,7 @@ import {
 } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
-import { connectPty, writePty, resizePty, onPtyOutput, onPtyClosed } from "./api";
+import { connectPty, writePty, resizePty, onPtyOutput, onPtyClosed } from "../api";
 
 // Prefer a monospaced Nerd Font so Powerline/Nerd Font prompt glyphs (folder,
 // git branch, etc. — all in the Unicode Private Use Area) render instead of
