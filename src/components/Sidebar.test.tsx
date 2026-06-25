@@ -1,6 +1,6 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { Sidebar, statusColor } from "./Sidebar";
-import type { WorkspaceView } from "./api";
+import type { WorkspaceView } from "../api";
 
 const ws = (over: Partial<WorkspaceView>): WorkspaceView => ({
   id: "wc-1",
@@ -15,25 +15,35 @@ const ws = (over: Partial<WorkspaceView>): WorkspaceView => ({
 const noop = () => {};
 
 function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
-  return render(
-    <Sidebar
-      visible={[ws({ id: "wc-1" }), ws({ id: "wc-2", state: "Stopped" })]}
-      hidden={[]}
-      selectedId={null}
-      badges={{}}
-      starting={[]}
-      opened={[]}
-      aliases={{}}
-      onSelect={noop}
-      onStop={noop}
-      onReload={noop}
-      onHide={noop}
-      onUnhide={noop}
-      onRename={noop}
-      onReorder={noop}
-      {...over}
-    />
-  );
+  const defaults: React.ComponentProps<typeof Sidebar> = {
+    visible: [ws({ id: "wc-1" }), ws({ id: "wc-2", state: "Stopped" })],
+    hidden: [],
+    selectedId: null,
+    badges: {},
+    starting: [],
+    opened: [],
+    aliases: {},
+    hiddenCollapsed: false,
+    onToggleHiddenCollapsed: noop,
+    onOpenGuide: noop,
+    onSelect: noop,
+    onStop: noop,
+    onReload: noop,
+    onHide: noop,
+    onUnhide: noop,
+    onRename: noop,
+    onReorder: noop,
+  };
+
+  const props = { ...defaults };
+  Object.keys(over).forEach((k) => {
+    const key = k as keyof typeof over;
+    if (over[key] !== undefined) {
+      (props as any)[key] = over[key];
+    }
+  });
+
+  return render(<Sidebar {...props} />);
 }
 
 test("maps state to dot color", () => {
@@ -126,4 +136,42 @@ test("right-click hidden row → Show calls onUnhide", () => {
   fireEvent.contextMenu(screen.getByText("wc-9"));
   fireEvent.click(screen.getByRole("button", { name: /^show$/i }));
   expect(onUnhide).toHaveBeenCalledWith("wc-9");
+});
+
+test("clicking the Hidden header toggles the collapse state", () => {
+  const onToggleHiddenCollapsed = vi.fn();
+  renderSidebar({
+    visible: [ws({ id: "wc-1" })],
+    hidden: [ws({ id: "wc-9", state: "Stopped" })],
+    onToggleHiddenCollapsed,
+  });
+  fireEvent.click(screen.getByText(/Hidden \(1\)/));
+  expect(onToggleHiddenCollapsed).toHaveBeenCalled();
+});
+
+test("collapsed Hidden section hides its workspace rows", () => {
+  renderSidebar({
+    visible: [ws({ id: "wc-1" })],
+    hidden: [ws({ id: "wc-9", state: "Stopped" })],
+    hiddenCollapsed: true,
+  });
+  // Header still shows, but the hidden row is not rendered.
+  expect(screen.getByText(/Hidden \(1\)/)).toBeInTheDocument();
+  expect(screen.queryByText("wc-9")).toBeNull();
+});
+
+test("collapsed Hidden section still shows the selected workspace", () => {
+  renderSidebar({
+    visible: [ws({ id: "wc-1" })],
+    hidden: [
+      ws({ id: "wc-9", state: "Stopped" }),
+      ws({ id: "wc-8", state: "Running" }),
+    ],
+    hiddenCollapsed: true,
+    selectedId: "wc-8",
+  });
+  // The selected hidden workspace stays reachable even while collapsed…
+  expect(screen.getByText("wc-8")).toBeInTheDocument();
+  // …but the other hidden rows are still tucked away.
+  expect(screen.queryByText("wc-9")).toBeNull();
 });

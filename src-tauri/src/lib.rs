@@ -158,8 +158,14 @@ fn save_layout(
     order: Vec<String>,
     hidden: Vec<String>,
     aliases: std::collections::HashMap<String, String>,
+    hidden_collapsed: bool,
 ) {
-    layout::save(&layout::Layout { order, hidden, aliases });
+    layout::save(&layout::Layout {
+        order,
+        hidden,
+        aliases,
+        hidden_collapsed,
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

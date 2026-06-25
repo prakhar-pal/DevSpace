@@ -43,11 +43,13 @@ export interface Layout {
   order: string[];
   hidden: string[];
   aliases: Record<string, string>;
+  hidden_collapsed: boolean;
 }
 
 export const loadLayout = () => invoke<Layout>("load_layout");
 export const saveLayout = (
   order: string[],
   hidden: string[],
-  aliases: Record<string, string>
-) => invoke<void>("save_layout", { order, hidden, aliases });
+  aliases: Record<string, string>,
+  hiddenCollapsed: boolean
+) => invoke<void>("save_layout", { order, hidden, aliases, hiddenCollapsed });

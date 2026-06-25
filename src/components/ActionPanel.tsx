@@ -1,4 +1,4 @@
-import type { WorkspaceView } from "./api";
+import type { WorkspaceView } from "../api";
 import { clsx } from "clsx";
 
 interface Props {
