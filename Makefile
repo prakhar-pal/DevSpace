@@ -2,13 +2,13 @@
 #
 # Builds with `swift build` and hand-assembles the .app bundle (Ronin-style),
 # deliberately avoiding `xcodebuild` so no Xcode simulator components are needed.
+# The Swift project lives at the repo root; the legacy Tauri tree is under tauri/.
 
 SHELL := /bin/bash
 
-MACOS    := macos
 LOG_PATH := $(CURDIR)/.tmp/devspace.log
-APP_DEV  := $(MACOS)/build/DevSpace Dev.app
-APP_REL  := $(MACOS)/build/DevSpace.app
+APP_DEV  := build/DevSpace Dev.app
+APP_REL  := build/DevSpace.app
 
 .PHONY: bootstrap build-dev build test run clean help
 
@@ -24,15 +24,15 @@ bootstrap:
 	@echo "Uses the Swift toolchain bundled with Xcode — nothing to install."
 
 build-dev:
-	swift build --package-path $(MACOS) --product DevSpaceApp
-	bash $(MACOS)/scripts/assemble-app.sh debug "DevSpace Dev" DevSpaceDev "$(LOG_PATH)"
+	swift build --product DevSpaceApp
+	bash scripts/assemble-app.sh debug "DevSpace Dev" DevSpaceDev "$(LOG_PATH)"
 
 build:
-	swift build -c release --package-path $(MACOS) --product DevSpaceApp
-	bash $(MACOS)/scripts/assemble-app.sh release "DevSpace" DevSpace ""
+	swift build -c release --product DevSpaceApp
+	bash scripts/assemble-app.sh release "DevSpace" DevSpace ""
 
 test:
-	swift test --package-path $(MACOS)
+	swift test
 
 run: build-dev
 	@pkill -x DevSpace 2>/dev/null || true
@@ -40,5 +40,5 @@ run: build-dev
 	open "$(APP_DEV)"
 
 clean:
-	swift package --package-path $(MACOS) clean
-	rm -rf $(MACOS)/build
+	swift package clean
+	rm -rf build

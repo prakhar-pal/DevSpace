@@ -1,80 +1,98 @@
 # DevSpace
 
-Tauri 2 (Rust) + React/TypeScript desktop app to manage DevPod workspaces: live
+Native macOS (Swift / SwiftUI) desktop app to manage DevPod workspaces: live
 status sidebar, start/stop/delete, an embedded `ssh <id>.devpod` terminal
-(xterm.js), and Claude Code notification routing over a reverse SSH tunnel.
+(libghostty), and Claude Code notification routing over a reverse SSH tunnel.
 
-- Backend: `src-tauri/src/` (`devpod`, `poller`, `notify`, `hooks`, `pty`, `lib`).
-- Frontend: `src/` (`App`, `Sidebar`, `ActionPanel`, `Terminal`, `api`).
+Rewritten from the original Tauri 2 (Rust) + React/TypeScript app — see
+`docs/adr/0001-rewrite-devspace-native-swift-libghostty.md`. The Swift project
+lives at the repo root; the legacy Tauri/React tree is retained under `tauri/`
+for reference (not built).
+
+- App (`Sources/App/`): SwiftUI UI — `DevSpaceApp`, `ContentView`, `Sidebar`,
+  `ActionPanel`, `TerminalPane`, `Modals`, `Notifier`, `AppModel` (the top-level
+  state machine).
+- Core (`Sources/Core/`): portable logic, UI-free and unit-tested — `Devpod`,
+  `Poller`, `PTY`, `SSH`, `Notify`, `Hooks`, `Layout`, `SidebarLayout`,
+  `PathEnv`, `Log`.
+- CPTY (`Sources/CPTY/`): tiny C shim for `forkpty`/`ioctl` (not callable from
+  Swift).
+- Terminal engine: **libghostty** via the `libghostty-spm` Swift package
+  (`GhosttyKit` + `GhosttyTerminal`). The host owns the PTY (`PTYSession`) and
+  feeds libghostty's `InMemoryTerminalSession`.
 
 ## Build & run
 
+Builds are pure **SwiftPM** driven by the `Makefile` (no `xcodebuild`/`.xcodeproj`):
+
 ```bash
-npm install                 # first time
-npm run tauri:dev           # DEV build: hot-reload + amber "DevSpace Dev" icon/name
-npm run tauri:prod          # PRODUCTION build: optimized .app + .dmg ("DevSpace")
+make build-dev   # DEV build: assembles "DevSpace Dev.app" (amber icon, logging on)
+make build       # RELEASE build: assembles "DevSpace.app"
+make test        # unit tests (swift test)
+make run         # build-dev then launch the app
+make clean       # remove build output
 ```
 
-**During development always use `npm run tauri:dev`.** It's the fast,
-hot-reloading debug build with the distinct amber "DevSpace Dev" icon/name. Do
-NOT run `npm run tauri:prod` (the slow optimized production bundle) for routine
-iteration — only for producing a release.
+**During development always use `make build-dev` / `make run`** (the amber
+"DevSpace Dev" build with logging to `.tmp/devspace.log`). Use `make build`
+(release "DevSpace") only for producing a distributable bundle.
 
-**Always confirm with the user before running `npm run tauri:prod` or before
-killing/quitting a running production bundle (the `.app`)** — even when
-diagnosing a production-only failure. Dev builds (`npm run tauri:dev`) and dev
-instances need no confirmation.
+**Always confirm with the user before running `make build` (release) or before
+killing/quitting a running release bundle (`DevSpace.app`)** — even when
+diagnosing a release-only failure. Dev builds (`make build-dev` / `make run`)
+and dev instances need no confirmation.
 
-Dev vs prod are visually distinct: `tauri:dev` merges `src-tauri/tauri.dev.conf.json`,
-which uses the amber icon set in `src-tauri/icons-dev/` and the product name
-"DevSpace Dev". Production uses `src-tauri/icons/` and "DevSpace".
+Dev vs prod are visually distinct: `scripts/assemble-app.sh` sets
+`CFBundleDisplayName` ("DevSpace Dev" vs "DevSpace") and the icon
+(`DevSpaceDev.icns` vs `DevSpace.icns`) per build configuration; the bundle id
+(`com.prakharp.devspace`) and Swift module name (`DevSpace`) stay the same.
 
-Production artifacts (release, arm64):
-- App:  `src-tauri/target/release/bundle/macos/DevSpace.app`
-- DMG:  `src-tauri/target/release/bundle/dmg/DevSpace_<version>_aarch64.dmg`
+Built bundles:
+- Dev:     `build/DevSpace Dev.app`
+- Release: `build/DevSpace.app`
 
-Run a built bundle (launch via LaunchServices, not the bare binary — macOS
-notifications/permissions depend on it):
-
-```bash
-open src-tauri/target/release/bundle/macos/DevSpace.app
-```
-
-## Tests
+Launch via LaunchServices (not the bare binary — macOS notifications/permissions
+depend on it):
 
 ```bash
-npm test                                  # frontend (Vitest)
-cd src-tauri && cargo test                # backend (Rust)
+open "build/DevSpace Dev.app"
 ```
 
 ## Environment notes
 
-- **cargo not on PATH:** if `cargo`/`rustc` aren't found (broken rustup shim),
-  prefix commands with the toolchain bin, e.g.:
-  ```bash
-  PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH" npm run tauri build
-  ```
-- **Do not regenerate `src-tauri/Cargo.lock`:** it pins `alloc-no-stdlib = 2.0.4`
-  to work around an upstream brotli/alloc-no-stdlib incompatibility. Adding deps
-  is fine; deleting/regenerating the lockfile reintroduces the build break.
-- **Signing:** builds are ad-hoc signed (no Developer ID). Gatekeeper will block
-  the app on other Macs (right-click → Open), and notification banners are
-  unreliable for an unsigned app on managed/MDM Macs — DevSpace falls back to a
-  dock-icon bounce + sidebar badge. A distributable build needs Developer ID
-  signing + notarization.
+- **`xcodebuild` is unusable here:** Xcode's `CoreSimulator.framework` is missing
+  and reinstalling it needs admin. Hence pure `swift build` + a hand-assembled
+  `.app` (Ronin-style) via the Makefile — never invoke `xcodebuild`.
+- **First build needs network:** the first `swift build` downloads libghostty's
+  prebuilt xcframework from GitHub releases (may hit a keychain `status -128`
+  when sandboxed — run it in a real terminal once; it's cached afterward).
+- **Signing:** ad-hoc signed (`codesign --sign -`), no Developer ID. Gatekeeper
+  blocks the app on other Macs (right-click → Open); notification banners are
+  unreliable on unsigned/MDM Macs, so DevSpace falls back to a dock-icon bounce
+  + sidebar badge. A distributable build needs Developer ID signing + notarization.
+
+## Tests
+
+```bash
+make test          # swift test (DevSpaceCore unit + listener integration tests)
+```
 
 ## Diagnostics
 
-- Runtime log (notification path, PTY lifecycle): `.tmp/devspace.log` (debug
-  builds only — release builds write no log).
+- Runtime log (notify path, PTY lifecycle): `.tmp/devspace.log` (debug builds
+  only — release builds write no log; controlled by the `DevSpaceLogPath`
+  Info.plist key the assembly script sets for Debug).
 - Manual notification trigger inside a pod: open the workspace in DevSpace, then
   run `~/.devspace-notify` in that terminal (it uses this session's reverse
   tunnel). `~/.devspace-notify Notification` sends a "needs input" event.
 
 ## Agent Rules
 
-- **Never commit files directly without asking the user.** Always present the changes and wait for explicit user approval before executing `git commit` or `git push`.
-- **Never make commits on the `main` branch.** Always create a feature branch for your edits, check out to it, and commit/push changes on the feature branch.
-- **Use `.tmp/` for temporary files.** Always write any scratchpad scripts, temporary test files, or other ephemeral data into the `.tmp` directory at the root of the project (which is `.gitignore`d).
-- **Application logs go to `.tmp/devspace.log`** (inside the project, `.gitignore`d) and only in debug builds — production/release builds disable logging.
-- **Prefer commands that run inside the sandbox (BypassSandbox: false) first, and only bypass if blocked by standard sandbox constraints.**
+- **Never commit files yourself.** Present the changes and the proposed commit
+  message (Conventional Commits) and let the user commit. Do not run
+  `git commit`/`git push`.
+- **Never make commits on the `main` branch.** Work on a feature branch.
+- **Use `.tmp/` for temporary files** (the project-root `.tmp`, which is
+  `.gitignore`d). Application logs go to `.tmp/devspace.log` (debug builds only).
+- **Prefer commands that run inside the sandbox first**, and only bypass if
+  blocked by standard sandbox constraints (e.g. the libghostty download).

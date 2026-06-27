@@ -16,6 +16,7 @@ struct ContentView: View {
         }
         .frame(minWidth: 900, minHeight: 600)
         .preferredColorScheme(.dark)
+        .onAppear { model.installKeyMonitor() }
         .sheet(isPresented: Binding(
             get: { model.renaming != nil },
             set: { if !$0 { model.renaming = nil } }
@@ -37,6 +38,8 @@ struct ContentView: View {
 
 private struct MainPane: View {
     @ObservedObject var model: AppModel
+    // Single source of focus truth: the pod id whose terminal owns the keyboard.
+    @FocusState private var focusedPane: String?
 
     var body: some View {
         ZStack {
@@ -56,6 +59,20 @@ private struct MainPane: View {
             overlay
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Move keyboard focus to the selected workspace's terminal whenever the
+        // selection changes or a pane is (re)created. Deferred a runloop tick so
+        // the surface is in the window before we make it first responder.
+        .onChange(of: model.selectedID) { scheduleFocus() }
+        .onChange(of: Set(model.panes.keys)) { scheduleFocus() }
+        .onAppear { scheduleFocus() }
+    }
+
+    private func scheduleFocus() {
+        DispatchQueue.main.async {
+            if let sel = model.selectedID, model.panes[sel] != nil {
+                focusedPane = sel
+            }
+        }
     }
 
     @ViewBuilder private func paneContainer(pid: String, pane: TerminalPaneModel) -> some View {
@@ -65,7 +82,7 @@ private struct MainPane: View {
             case .shuttingDown: logHeader("\(model.name(pid)) — shutting down…")
             default: EmptyView()
             }
-            TerminalPaneView(model: pane)
+            TerminalPaneView(model: pane, focusID: pid, focused: $focusedPane)
         }
     }
 

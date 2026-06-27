@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import DevSpaceCore
 
 /// Top-level UI state (the Swift analog of App.tsx): sidebar layout + the
@@ -6,7 +7,7 @@ import DevSpaceCore
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var workspaces: [WorkspaceView] = []
-    @Published var selectedID: String?
+    @Published var selectedID: String? { didSet { updateExcluded() } }
     @Published private(set) var badges: Set<String> = []
     @Published var sidebarOpen = true
     @Published var renaming: String?
@@ -14,7 +15,7 @@ final class AppModel: ObservableObject {
 
     // Persisted sidebar layout.
     @Published private(set) var order: [String] = []
-    @Published private(set) var hidden: [String] = []
+    @Published private(set) var hidden: [String] = [] { didSet { updateExcluded() } }
     @Published private(set) var aliases: [String: String] = [:]
     @Published var hiddenCollapsed = false { didSet { persist() } }
 
@@ -27,19 +28,77 @@ final class AppModel: ObservableObject {
 
     private let runner: CommandRunning
     private let loop: PollLoop
+    private let excluded = ExcludedIDs()
+    private let notifyToken: String
+    private var listener: NotifyListener?
     private var layoutLoaded = false
 
     init(runner: CommandRunning = DevpodCLI(), interval: TimeInterval = 5) {
         self.runner = runner
-        loop = PollLoop(runner: runner, interval: interval)
+        notifyToken = (try? Notify.loadOrCreateToken()) ?? ""
+        loop = PollLoop(runner: runner, interval: interval, excluded: excluded)
         let l = LayoutStore.load()
         order = l.order
         hidden = l.hidden
         aliases = l.aliases
-        hiddenCollapsed = l.hiddenCollapsed
+        // Always start with the Hidden section collapsed.
+        hiddenCollapsed = true
         layoutLoaded = true
+        updateExcluded() // didSet doesn't fire for init assignments
         loop.start { [weak self] views in
             DispatchQueue.main.async { self?.apply(views) }
+        }
+        startNotifyListener()
+        Notifier.requestPermission()
+    }
+
+    /// Skip status polling for hidden workspaces — but never the selected one,
+    /// so selecting a hidden workspace still resolves its live state.
+    private func updateExcluded() {
+        var ex = Set(hidden)
+        if let sel = selectedID { ex.remove(sel) }
+        excluded.set(ex)
+    }
+
+    // MARK: - Notifications
+
+    private func startNotifyListener() {
+        guard !notifyToken.isEmpty else {
+            Log.write("notify: no token — listener disabled")
+            return
+        }
+        let l = NotifyListener(expectedToken: notifyToken) { [weak self] podID, message in
+            DispatchQueue.main.async { self?.receiveNotification(podID: podID, message: message) }
+        }
+        do {
+            try l.start()
+            listener = l
+            Log.write("notify: listening on \(SSH.listenerPort)")
+        } catch {
+            Log.write("notify: listener bind failed: \(error)")
+        }
+    }
+
+    /// A pod posted a Claude Code notification: badge it (unless selected) and
+    /// show a banner / bounce the dock.
+    func receiveNotification(podID: String, message: String) {
+        if podID != selectedID { badges.insert(podID) }
+        Notifier.notify(title: name(podID), body: message)
+    }
+
+    /// Inject the Claude hooks over the tunnel after an SSH connect — off the
+    /// open path (it makes ssh round-trips) and best-effort.
+    private func injectHooks(_ id: String) {
+        guard !notifyToken.isEmpty else { return }
+        let r = runner
+        let token = notifyToken
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) {
+            do {
+                try Hooks.inject(r, podID: id, token: token)
+                Log.write("inject: hook written to pod=\(id)")
+            } catch {
+                Log.write("inject: FAILED pod=\(id): \(error)")
+            }
         }
     }
 
@@ -193,7 +252,7 @@ final class AppModel: ObservableObject {
         let pane = TerminalPaneModel(command: "ssh", args: SSH.args(podID: id))
         pane.onExit = { [weak self] _ in self?.onExited(id) }
         panes[id] = pane
-        // Stack 7: inject Claude hooks over the tunnel here (best-effort).
+        injectHooks(id)
     }
 
     /// SSH session ended (user typed `exit`): stop the pod, show the shutdown log.
@@ -225,5 +284,47 @@ final class AppModel: ObservableObject {
         LayoutStore.save(Layout(
             order: order, hidden: hidden, aliases: aliases, hiddenCollapsed: hiddenCollapsed
         ))
+    }
+
+    // MARK: - Keyboard shortcuts
+
+    private var keyMonitor: Any?
+
+    /// Cmd+1..9 selects the Nth visible workspace; Cmd+B toggles the sidebar.
+    /// A local monitor (capture-phase analog) consumes the event so a focused
+    /// terminal doesn't also receive it; suppressed while a modal is open.
+    func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handleKey(event) ?? event
+        }
+    }
+
+    private func handleKey(_ event: NSEvent) -> NSEvent? {
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        guard flags == [.command] else { return event }
+        guard let chars = event.charactersIgnoringModifiers else { return event }
+
+        // Cmd+Q must always quit — the libghostty surface otherwise swallows it
+        // (Ghostty binds cmd+q to a no-op "quit" action when embedded).
+        if chars == "q" {
+            NSApp.terminate(nil)
+            return nil
+        }
+
+        guard renaming == nil, !guideOpen else { return event } // modal owns the keyboard
+
+        if chars == "b" {
+            sidebarOpen.toggle()
+            return nil
+        }
+        if let n = Int(chars), (1 ... 9).contains(n) {
+            let visible = split.visible
+            if n - 1 < visible.count {
+                select(visible[n - 1].id)
+                return nil
+            }
+        }
+        return event
     }
 }

@@ -24,7 +24,10 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
     init(command: String, args: [String]) {
         self.command = command
         self.args = args
-        state = TerminalViewState()
+        // Use the same terminal settings as the Ghostty app (font, theme,
+        // colors, cursor) by loading the user's ghostty config if present.
+        // libghostty falls back to defaults if the file is missing/unparseable.
+        state = TerminalViewState(configFilePath: GhosttyConfig.path())
 
         session = InMemoryTerminalSession(
             write: { [pty] data in pty.write(data) },
@@ -58,13 +61,33 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
     func terminate() { pty.terminate() }
 }
 
+/// Locates the user's Ghostty config so the embedded terminal inherits the same
+/// settings as the Ghostty app. Checks the standard Ghostty search paths.
+enum GhosttyConfig {
+    static func path() -> String? {
+        let fm = FileManager.default
+        let home = NSHomeDirectory()
+        var candidates: [String] = []
+        if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
+            candidates.append("\(xdg)/ghostty/config")
+        }
+        candidates.append("\(home)/.config/ghostty/config")
+        candidates.append("\(home)/Library/Application Support/com.mitchellh.ghostty/config")
+        return candidates.first { fm.fileExists(atPath: $0) }
+    }
+}
+
 struct TerminalPaneView: View {
     @ObservedObject var model: TerminalPaneModel
-    @FocusState private var focused: Bool
+    let focusID: String
+    /// Shared, single-source focus binding owned by MainPane. Exactly one pane
+    /// (the selected one) is focused; others resign first responder, so a hidden
+    /// pane can't steal the keyboard from the visible terminal.
+    @FocusState.Binding var focused: String?
 
     var body: some View {
         TerminalSurfaceView(context: model.state)
-            .terminalFocusOnAppear($focused)
+            .terminalFocused($focused, equals: focusID)
             .background(Color(red: 0.067, green: 0.067, blue: 0.067)) // #111
     }
 }
