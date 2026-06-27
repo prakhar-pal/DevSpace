@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build & test (SwiftPM)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Swift toolchain
+        run: swift --version
+
+      # Cache the resolved SwiftPM deps + the prebuilt libghostty xcframework
+      # so only the first run pays the download.
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Test
+        run: make test
+
+      - name: Build dev app
+        run: make build-dev

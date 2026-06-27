@@ -7,7 +7,7 @@ import DevSpaceCore
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var workspaces: [WorkspaceView] = []
-    @Published var selectedID: String?
+    @Published var selectedID: String? { didSet { updateExcluded() } }
     @Published private(set) var badges: Set<String> = []
     @Published var sidebarOpen = true
     @Published var renaming: String?
@@ -15,7 +15,7 @@ final class AppModel: ObservableObject {
 
     // Persisted sidebar layout.
     @Published private(set) var order: [String] = []
-    @Published private(set) var hidden: [String] = []
+    @Published private(set) var hidden: [String] = [] { didSet { updateExcluded() } }
     @Published private(set) var aliases: [String: String] = [:]
     @Published var hiddenCollapsed = false { didSet { persist() } }
 
@@ -28,6 +28,7 @@ final class AppModel: ObservableObject {
 
     private let runner: CommandRunning
     private let loop: PollLoop
+    private let excluded = ExcludedIDs()
     private let notifyToken: String
     private var listener: NotifyListener?
     private var layoutLoaded = false
@@ -35,18 +36,28 @@ final class AppModel: ObservableObject {
     init(runner: CommandRunning = DevpodCLI(), interval: TimeInterval = 5) {
         self.runner = runner
         notifyToken = (try? Notify.loadOrCreateToken()) ?? ""
-        loop = PollLoop(runner: runner, interval: interval)
+        loop = PollLoop(runner: runner, interval: interval, excluded: excluded)
         let l = LayoutStore.load()
         order = l.order
         hidden = l.hidden
         aliases = l.aliases
-        hiddenCollapsed = l.hiddenCollapsed
+        // Always start with the Hidden section collapsed.
+        hiddenCollapsed = true
         layoutLoaded = true
+        updateExcluded() // didSet doesn't fire for init assignments
         loop.start { [weak self] views in
             DispatchQueue.main.async { self?.apply(views) }
         }
         startNotifyListener()
         Notifier.requestPermission()
+    }
+
+    /// Skip status polling for hidden workspaces — but never the selected one,
+    /// so selecting a hidden workspace still resolves its live state.
+    private func updateExcluded() {
+        var ex = Set(hidden)
+        if let sel = selectedID { ex.remove(sel) }
+        excluded.set(ex)
     }
 
     // MARK: - Notifications
@@ -292,8 +303,16 @@ final class AppModel: ObservableObject {
     private func handleKey(_ event: NSEvent) -> NSEvent? {
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
         guard flags == [.command] else { return event }
-        guard renaming == nil, !guideOpen else { return event } // modal owns the keyboard
         guard let chars = event.charactersIgnoringModifiers else { return event }
+
+        // Cmd+Q must always quit — the libghostty surface otherwise swallows it
+        // (Ghostty binds cmd+q to a no-op "quit" action when embedded).
+        if chars == "q" {
+            NSApp.terminate(nil)
+            return nil
+        }
+
+        guard renaming == nil, !guideOpen else { return event } // modal owns the keyboard
 
         if chars == "b" {
             sidebarOpen.toggle()

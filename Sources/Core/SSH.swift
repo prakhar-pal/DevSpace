@@ -9,26 +9,21 @@ public enum SSH {
     /// Pod-side reverse-tunnel port the in-pod hook POSTs to.
     public static let podForwardPort: UInt16 = 8765
 
-    /// TERM to advertise to the remote container. Validated/sanitized, defaulting
-    /// to xterm-256color (mirrors get_sanitized_term).
-    static func sanitizedTerm() -> String {
-        let term = ProcessInfo.processInfo.environment["TERM"] ?? ""
-        let ok = !term.isEmpty && term.allSatisfy {
-            ($0.isASCII && ($0.isLetter || $0.isNumber)) || $0 == "-" || $0 == "_"
-        }
-        return ok ? term : "xterm-256color"
-    }
+    /// TERM advertised to the remote container. Fixed to xterm-256color — a
+    /// widely available terminfo so prompts/editors render correctly inside the
+    /// pod, which won't have ghostty/host-specific terminfo entries. Injected via
+    /// `-o SetEnv=TERM=…` since container sshd often lacks `AcceptEnv TERM`.
+    public static let remoteTerm = "xterm-256color"
 
     public static func args(podID: String) -> [String] {
-        let term = sanitizedTerm()
-        return [
+        [
             "-tt",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "LogLevel=ERROR",
             "-o", "ServerAliveInterval=5",
             "-o", "ServerAliveCountMax=3",
-            "-o", "SetEnv=TERM=\(term)",
+            "-o", "SetEnv=TERM=\(remoteTerm)",
             "-R", "\(podForwardPort):localhost:\(listenerPort)",
             "\(podID).devpod",
         ]

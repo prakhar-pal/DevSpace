@@ -113,27 +113,43 @@ public enum Poller {
 /// after the fast `devpod list` (unknown statuses shown as Loading), then again
 /// once the per-workspace status sweep resolves. A status cache carried across
 /// cycles keeps last-known states instead of flickering to Loading.
+/// Thread-safe set of workspace ids to skip during status polling (hidden
+/// workspaces). Updated from the main actor, read from the poll thread.
+public final class ExcludedIDs: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ids: Set<String> = []
+    public init() {}
+    public func set(_ next: Set<String>) { lock.lock(); ids = next; lock.unlock() }
+    public func snapshot() -> Set<String> { lock.lock(); defer { lock.unlock() }; return ids }
+}
+
 public final class PollLoop: @unchecked Sendable {
     private let runner: CommandRunning
     private let interval: TimeInterval
+    private let excluded: ExcludedIDs
     private let stop = StopFlag()
 
-    public init(runner: CommandRunning, interval: TimeInterval = 5) {
+    public init(runner: CommandRunning, interval: TimeInterval = 5, excluded: ExcludedIDs = ExcludedIDs()) {
         self.runner = runner
         self.interval = interval
+        self.excluded = excluded
     }
 
     public func start(emit: @escaping @Sendable ([WorkspaceView]) -> Void) {
         guard !stop.isSet else { return }
         let runner = self.runner
         let interval = self.interval
+        let excluded = self.excluded
         let stop = self.stop
         Thread.detachNewThread {
             var cache: [String: Result<WorkspaceStatus, DevpodError>] = [:]
             while !stop.isSet {
                 if let workspaces = try? Devpod.list(runner) {
                     emit(Poller.merge(workspaces, cache))
-                    cache = Poller.fetchStatuses(runner, workspaces)
+                    // Skip `devpod status` for excluded (hidden) workspaces.
+                    let skip = excluded.snapshot()
+                    let toFetch = workspaces.filter { !skip.contains($0.id) }
+                    cache = Poller.fetchStatuses(runner, toFetch)
                     emit(Poller.merge(workspaces, cache))
                 }
                 Thread.sleep(forTimeInterval: interval)
