@@ -94,7 +94,11 @@ export function Terminal({
       // (e.g. neovim's line-number gutter rendered in the wrong columns).
       fontSize: 13,
       fontFamily: FONT_FAMILY,
-      cursorBlink: true,
+      // Only blink while this pane is actually on-screen. A blinking cursor
+      // keeps xterm's renderer scheduling animation frames forever — even when
+      // the terminal is display:none — so a backgrounded pod would churn the
+      // WebView heap indefinitely. The visibility effect below toggles this.
+      cursorBlink: visibleRef.current,
       cursorStyle: "block",
       cursorInactiveStyle: "outline",
       scrollback: 10000,
@@ -259,8 +263,13 @@ export function Terminal({
     if (!term || !fit) return;
     if (!visible) {
       term.blur();
+      // Stop the idle render loop while hidden. With cursorBlink off and no
+      // on-screen output, xterm's RenderService schedules no animation frames,
+      // so a backgrounded terminal stops churning the heap until reselected.
+      term.options.cursorBlink = false;
       return;
     }
+    term.options.cursorBlink = true;
     const raf = requestAnimationFrame(() => {
       try {
         fit.fit();
