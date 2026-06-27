@@ -12,7 +12,10 @@ concurrency:
 jobs:
   build-test:
     name: Build & test (SwiftPM)
-    runs-on: macos-14
+    # macos-15 ships Xcode 16 / Swift 6, required by libghostty-spm
+    # (swift-tools-version 6.0). macos-14 defaults to Swift 5.9 and can't even
+    # resolve the dependency.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 

@@ -305,11 +305,14 @@ final class AppModel: ObservableObject {
         guard flags == [.command] else { return event }
         guard let chars = event.charactersIgnoringModifiers else { return event }
 
-        // Cmd+Q must always quit — the libghostty surface otherwise swallows it
-        // (Ghostty binds cmd+q to a no-op "quit" action when embedded).
-        if chars == "q" {
-            NSApp.terminate(nil)
-            return nil
+        // Standard window/app shortcuts the libghostty surface otherwise swallows
+        // (Ghostty binds these to its own actions, which are no-ops when embedded).
+        switch chars {
+        case "q": NSApp.terminate(nil); return nil
+        case "m": NSApp.keyWindow?.performMiniaturize(nil); return nil
+        case "h": NSApp.hide(nil); return nil
+        case "w": NSApp.keyWindow?.performClose(nil); return nil
+        default: break
         }
 
         guard renaming == nil, !guideOpen else { return event } // modal owns the keyboard
