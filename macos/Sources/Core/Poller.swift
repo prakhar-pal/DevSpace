@@ -124,6 +124,7 @@ public final class PollLoop: @unchecked Sendable {
     }
 
     public func start(emit: @escaping @Sendable ([WorkspaceView]) -> Void) {
+        guard !stop.isSet else { return }
         let runner = self.runner
         let interval = self.interval
         let stop = self.stop
