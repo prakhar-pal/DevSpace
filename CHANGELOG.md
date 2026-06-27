@@ -1,5 +1,15 @@
 # dev-space
 
+## 0.4.0
+
+### Minor Changes
+
+- cbd4a03: feat: add GuideModal component and component restructure
+
+### Patch Changes
+
+- d320fa5: fix: memory churn
+
 ## 0.3.4
 
 ### Patch Changes
