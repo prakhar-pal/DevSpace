@@ -16,6 +16,7 @@ struct ContentView: View {
         }
         .frame(minWidth: 900, minHeight: 600)
         .preferredColorScheme(.dark)
+        .onAppear { model.installKeyMonitor() }
         .sheet(isPresented: Binding(
             get: { model.renaming != nil },
             set: { if !$0 { model.renaming = nil } }

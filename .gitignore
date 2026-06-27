@@ -1,10 +1,12 @@
 node_modules/
 .DS_Store
 dist/
-src-tauri/target/
 .tmp
 
+# Legacy Tauri tree (under tauri/)
+tauri/src-tauri/target/
+
 # macOS native app (SwiftPM build output + assembled bundle)
-macos/.build/
-macos/build/
-macos/.swiftpm/
+.build/
+build/
+.swiftpm/

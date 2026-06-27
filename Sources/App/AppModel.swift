@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import DevSpaceCore
 
 /// Top-level UI state (the Swift analog of App.tsx): sidebar layout + the
@@ -272,5 +273,39 @@ final class AppModel: ObservableObject {
         LayoutStore.save(Layout(
             order: order, hidden: hidden, aliases: aliases, hiddenCollapsed: hiddenCollapsed
         ))
+    }
+
+    // MARK: - Keyboard shortcuts
+
+    private var keyMonitor: Any?
+
+    /// Cmd+1..9 selects the Nth visible workspace; Cmd+B toggles the sidebar.
+    /// A local monitor (capture-phase analog) consumes the event so a focused
+    /// terminal doesn't also receive it; suppressed while a modal is open.
+    func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handleKey(event) ?? event
+        }
+    }
+
+    private func handleKey(_ event: NSEvent) -> NSEvent? {
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        guard flags == [.command] else { return event }
+        guard renaming == nil, !guideOpen else { return event } // modal owns the keyboard
+        guard let chars = event.charactersIgnoringModifiers else { return event }
+
+        if chars == "b" {
+            sidebarOpen.toggle()
+            return nil
+        }
+        if let n = Int(chars), (1 ... 9).contains(n) {
+            let visible = split.visible
+            if n - 1 < visible.count {
+                select(visible[n - 1].id)
+                return nil
+            }
+        }
+        return event
     }
 }
