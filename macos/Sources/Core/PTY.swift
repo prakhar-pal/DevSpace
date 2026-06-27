@@ -22,10 +22,11 @@ public final class PTYSession: @unchecked Sendable {
 
     public init() {}
 
-    /// Spawn `path` with `args` in a PTY of the given size. No-op if already
-    /// started. `path` must be an absolute executable path (no PATH search).
+    /// Spawn `program` with `args` in a PTY of the given size. No-op if already
+    /// started. `program` is resolved via PATH through `/usr/bin/env`, so a bare
+    /// name (`ssh`, `devpod`) or an absolute path (`/bin/zsh`) both work.
     public func start(
-        path: String,
+        path program: String,
         args: [String],
         cols: UInt16,
         rows: UInt16,
@@ -38,8 +39,8 @@ public final class PTYSession: @unchecked Sendable {
 
         // Build argv/envp in the PARENT so the child only makes async-signal-safe
         // calls (execve/_exit) — avoids the classic fork-in-a-threaded-process
-        // malloc deadlock.
-        var argv = Self.cArray([path] + args)
+        // malloc deadlock. Exec /usr/bin/env so `program` is resolved via PATH.
+        var argv = Self.cArray(["/usr/bin/env", program] + args)
         var envp = Self.cArray(Self.buildEnv(extraEnv))
 
         var master: Int32 = 0

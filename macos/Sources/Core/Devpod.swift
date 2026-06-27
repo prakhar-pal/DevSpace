@@ -153,4 +153,27 @@ public enum Devpod {
         try validateId(id)
         _ = try runner.run(["delete", "--", id])
     }
+
+    // MARK: - Action argument builders (run via a PTY for up/stop, detached for ide)
+
+    /// `devpod up --ide none -- <id>` — start a workspace, streaming its log.
+    public static func upArgs(_ id: String) -> [String] {
+        ["up", "--ide", "none", "--", id]
+    }
+
+    /// `devpod stop -- <id>` — stop a workspace, streaming its shutdown log.
+    /// `--` terminates flag parsing so the id can't be read as a flag.
+    public static func stopArgs(_ id: String) -> [String] {
+        ["stop", "--", id]
+    }
+
+    /// `devpod up --ide <ide> -- <id>` — open the workspace in an IDE.
+    public static func ideArgs(_ id: String, ide: String) -> [String] {
+        ["up", "--ide", ide, "--", id]
+    }
+
+    public static func validateIde(_ ide: String) throws {
+        let valid = ide.allSatisfy { ($0.isASCII && ($0.isLetter || $0.isNumber)) || $0 == "-" }
+        guard valid, !ide.isEmpty else { throw DevpodError("invalid ide: \"\(ide)\"") }
+    }
 }

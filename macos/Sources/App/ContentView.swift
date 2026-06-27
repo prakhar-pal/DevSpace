@@ -1,8 +1,8 @@
 import SwiftUI
 import DevSpaceCore
 
-/// Stack 5: real sidebar + a placeholder main pane. Stack 6 fills the main pane
-/// with the ActionPanel / StartLog / terminal lifecycle.
+/// Stack 6: sidebar + the session main pane (ActionPanel / start log / SSH
+/// terminal / shutdown log), driven by AppModel's lifecycle state machine.
 struct ContentView: View {
     @ObservedObject var model: AppModel
 
@@ -41,21 +41,57 @@ private struct MainPane: View {
     var body: some View {
         ZStack {
             Color(red: 0.067, green: 0.067, blue: 0.067) // #111
-            if let id = model.selectedID, let w = model.byID[id] {
-                VStack(spacing: 8) {
-                    Text(model.aliases[id] ?? id).font(.title2.bold())
-                    Text(w.state).foregroundStyle(.secondary)
-                    if !w.source.isEmpty {
-                        Text(w.source).font(.caption).foregroundStyle(.secondary)
-                    }
-                    Text("Actions + terminal arrive in Stack 6")
-                        .font(.caption2).foregroundStyle(.tertiary).padding(.top, 6)
+
+            // Keep every pane mounted (only the selected one visible) so SSH
+            // sessions and scrollback survive switching workspaces.
+            ForEach(Array(model.panes.keys), id: \.self) { pid in
+                if let pane = model.panes[pid] {
+                    paneContainer(pid: pid, pane: pane)
+                        .opacity(pid == model.selectedID ? 1 : 0)
+                        .allowsHitTesting(pid == model.selectedID)
+                        .id(ObjectIdentifier(pane))
                 }
-            } else {
-                Text("Select a workspace").foregroundStyle(.secondary)
             }
+
+            overlay
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder private func paneContainer(pid: String, pane: TerminalPaneModel) -> some View {
+        VStack(spacing: 0) {
+            switch model.phase(of: pid) {
+            case .starting: logHeader("Starting \(model.name(pid))…")
+            case .shuttingDown: logHeader("\(model.name(pid)) — shutting down…")
+            default: EmptyView()
+            }
+            TerminalPaneView(model: pane)
+        }
+    }
+
+    @ViewBuilder private var overlay: some View {
+        if let sel = model.selectedID {
+            if model.panes[sel] == nil, let w = model.byID[sel], w.state != "Running" {
+                ActionPanelView(
+                    workspace: w,
+                    displayName: model.name(sel),
+                    onStart: { model.start($0) }
+                )
+            }
+        } else {
+            Text("Select a workspace").foregroundStyle(.secondary)
+        }
+    }
+
+    private func logHeader(_ text: String) -> some View {
+        HStack {
+            Text(text).font(.system(size: 12))
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(white: 0.1))
+        .overlay(Divider(), alignment: .bottom)
     }
 }
 
