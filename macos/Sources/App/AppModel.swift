@@ -27,10 +27,13 @@ final class AppModel: ObservableObject {
 
     private let runner: CommandRunning
     private let loop: PollLoop
+    private let notifyToken: String
+    private var listener: NotifyListener?
     private var layoutLoaded = false
 
     init(runner: CommandRunning = DevpodCLI(), interval: TimeInterval = 5) {
         self.runner = runner
+        notifyToken = (try? Notify.loadOrCreateToken()) ?? ""
         loop = PollLoop(runner: runner, interval: interval)
         let l = LayoutStore.load()
         order = l.order
@@ -40,6 +43,50 @@ final class AppModel: ObservableObject {
         layoutLoaded = true
         loop.start { [weak self] views in
             DispatchQueue.main.async { self?.apply(views) }
+        }
+        startNotifyListener()
+        Notifier.requestPermission()
+    }
+
+    // MARK: - Notifications
+
+    private func startNotifyListener() {
+        guard !notifyToken.isEmpty else {
+            Log.write("notify: no token — listener disabled")
+            return
+        }
+        let l = NotifyListener(expectedToken: notifyToken) { [weak self] podID, message in
+            DispatchQueue.main.async { self?.receiveNotification(podID: podID, message: message) }
+        }
+        do {
+            try l.start()
+            listener = l
+            Log.write("notify: listening on \(SSH.listenerPort)")
+        } catch {
+            Log.write("notify: listener bind failed: \(error)")
+        }
+    }
+
+    /// A pod posted a Claude Code notification: badge it (unless selected) and
+    /// show a banner / bounce the dock.
+    func receiveNotification(podID: String, message: String) {
+        if podID != selectedID { badges.insert(podID) }
+        Notifier.notify(title: name(podID), body: message)
+    }
+
+    /// Inject the Claude hooks over the tunnel after an SSH connect — off the
+    /// open path (it makes ssh round-trips) and best-effort.
+    private func injectHooks(_ id: String) {
+        guard !notifyToken.isEmpty else { return }
+        let r = runner
+        let token = notifyToken
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) {
+            do {
+                try Hooks.inject(r, podID: id, token: token)
+                Log.write("inject: hook written to pod=\(id)")
+            } catch {
+                Log.write("inject: FAILED pod=\(id): \(error)")
+            }
         }
     }
 
@@ -193,7 +240,7 @@ final class AppModel: ObservableObject {
         let pane = TerminalPaneModel(command: "ssh", args: SSH.args(podID: id))
         pane.onExit = { [weak self] _ in self?.onExited(id) }
         panes[id] = pane
-        // Stack 7: inject Claude hooks over the tunnel here (best-effort).
+        injectHooks(id)
     }
 
     /// SSH session ended (user typed `exit`): stop the pod, show the shutdown log.
