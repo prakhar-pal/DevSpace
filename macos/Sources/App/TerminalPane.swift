@@ -60,11 +60,15 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
 
 struct TerminalPaneView: View {
     @ObservedObject var model: TerminalPaneModel
-    @FocusState private var focused: Bool
+    let focusID: String
+    /// Shared, single-source focus binding owned by MainPane. Exactly one pane
+    /// (the selected one) is focused; others resign first responder, so a hidden
+    /// pane can't steal the keyboard from the visible terminal.
+    @FocusState.Binding var focused: String?
 
     var body: some View {
         TerminalSurfaceView(context: model.state)
-            .terminalFocusOnAppear($focused)
+            .terminalFocused($focused, equals: focusID)
             .background(Color(red: 0.067, green: 0.067, blue: 0.067)) // #111
     }
 }
