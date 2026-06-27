@@ -62,9 +62,40 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
 }
 
 /// Locates the user's Ghostty config so the embedded terminal inherits the same
-/// settings as the Ghostty app. Checks the standard Ghostty search paths.
+/// settings as the Ghostty app, stripping keys the trimmed libghostty build
+/// doesn't support (which would otherwise make it reject the whole config).
 enum GhosttyConfig {
+    /// Keys dropped by the trimmed libghostty build. If present, libghostty
+    /// rejects the entire config and falls back to defaults — so strip them and
+    /// keep the rest (fonts/theme/colors/cursor).
+    private static let unsupportedKeyPrefixes = ["custom-shader"]
+
     static func path() -> String? {
+        guard let original = locate() else { return nil }
+        guard let contents = try? String(contentsOfFile: original, encoding: .utf8) else {
+            return original
+        }
+        // Fast path: nothing to strip — use the file as-is (zero risk).
+        guard unsupportedKeyPrefixes.contains(where: contents.contains) else {
+            return original
+        }
+        let filtered = contents
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { line in
+                let key = line.split(separator: "=", maxSplits: 1).first
+                    .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+                return !unsupportedKeyPrefixes.contains { key.hasPrefix($0) }
+            }
+            .joined(separator: "\n")
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("devspace-ghostty-\(UUID().uuidString).conf")
+        guard (try? filtered.write(to: tmp, atomically: true, encoding: .utf8)) != nil else {
+            return original
+        }
+        return tmp.path
+    }
+
+    private static func locate() -> String? {
         let fm = FileManager.default
         let home = NSHomeDirectory()
         var candidates: [String] = []
