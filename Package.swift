@@ -29,6 +29,7 @@ let package = Package(
                 "DevSpaceCore",
                 .product(name: "GhosttyKit", package: "libghostty-spm"),
                 .product(name: "GhosttyTerminal", package: "libghostty-spm"),
+                .product(name: "GhosttyTheme", package: "libghostty-spm"),
             ],
             path: "Sources/App"
         ),
