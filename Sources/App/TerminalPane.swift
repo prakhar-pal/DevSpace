@@ -1,5 +1,6 @@
 import SwiftUI
 import GhosttyTerminal
+import GhosttyTheme
 import DevSpaceCore
 
 /// A libghostty terminal surface backed by a host-managed ``PTYSession`` running
@@ -27,7 +28,12 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
         // Use the same terminal settings as the Ghostty app (font, theme,
         // colors, cursor) by loading the user's ghostty config if present.
         // libghostty falls back to defaults if the file is missing/unparseable.
-        state = TerminalViewState(configFilePath: GhosttyConfig.path())
+        // Pass an EMPTY theme so the user's ghostty config fully controls colors.
+        // The library's default theme (Afterglow/Alabaster) is otherwise rendered
+        // AFTER the user's config and overrides their colors/palette.
+        let cfg = GhosttyConfig.resolve()
+        let source: TerminalController.ConfigSource = cfg.path.map { .file($0) } ?? .none
+        state = TerminalViewState(configSource: source, theme: cfg.theme)
 
         session = InMemoryTerminalSession(
             write: { [pty] data in pty.write(data) },
@@ -61,38 +67,58 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
     func terminate() { pty.terminate() }
 }
 
-/// Locates the user's Ghostty config so the embedded terminal inherits the same
-/// settings as the Ghostty app, stripping keys the trimmed libghostty build
-/// doesn't support (which would otherwise make it reject the whole config).
+/// Resolves the user's Ghostty config for the embedded terminal.
+///
+/// libghostty rejects the ENTIRE config on any diagnostic, and in this embedded
+/// build it can't resolve `theme = <name>` (the built-in theme files aren't
+/// shipped — it only searches `~/.config/ghostty/themes`). So we resolve the
+/// theme ourselves from the compiled-in GhosttyTheme catalog (no resource files,
+/// location-independent) and strip the `theme =` line (plus the trimmed-out
+/// `custom-shader*`) from the config we hand to libghostty.
 enum GhosttyConfig {
-    /// Keys dropped by the trimmed libghostty build. If present, libghostty
-    /// rejects the entire config and falls back to defaults — so strip them and
-    /// keep the rest (fonts/theme/colors/cursor).
+    struct Resolved {
+        var path: String?
+        var theme: TerminalTheme
+    }
+
     private static let unsupportedKeyPrefixes = ["custom-shader"]
 
-    static func path() -> String? {
-        guard let original = locate() else { return nil }
+    static func resolve() -> Resolved {
+        guard let original = locate() else { return Resolved(path: nil, theme: TerminalTheme()) }
         guard let contents = try? String(contentsOfFile: original, encoding: .utf8) else {
-            return original
+            return Resolved(path: original, theme: TerminalTheme())
         }
-        // Fast path: nothing to strip — use the file as-is (zero risk).
-        guard unsupportedKeyPrefixes.contains(where: contents.contains) else {
-            return original
-        }
-        let filtered = contents
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .filter { line in
-                let key = line.split(separator: "=", maxSplits: 1).first
-                    .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
-                return !unsupportedKeyPrefixes.contains { key.hasPrefix($0) }
-            }
-            .joined(separator: "\n")
+
+        // Resolve `theme = <name>` (last one wins) via the compiled-in catalog.
+        let lines = contents.split(separator: "\n", omittingEmptySubsequences: false)
+        let themeName = lines.compactMap { line -> String? in
+            let parts = line.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2,
+                  parts[0].trimmingCharacters(in: .whitespaces) == "theme"
+            else { return nil }
+            return parts[1].trimmingCharacters(in: .whitespaces)
+        }.last
+        let theme = themeName
+            .flatMap { GhosttyThemeCatalog.theme(named: $0)?.toTerminalTheme() }
+            ?? TerminalTheme()
+
+        // Strip keys libghostty can't resolve here (theme, custom-shader*).
+        let mustSanitize = themeName != nil || unsupportedKeyPrefixes.contains(where: contents.contains)
+        guard mustSanitize else { return Resolved(path: original, theme: theme) }
+
+        let filtered = lines.filter { line in
+            let key = line.split(separator: "=", maxSplits: 1).first
+                .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+            if key == "theme" { return false }
+            return !unsupportedKeyPrefixes.contains { key.hasPrefix($0) }
+        }.joined(separator: "\n")
+
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("devspace-ghostty-\(UUID().uuidString).conf")
         guard (try? filtered.write(to: tmp, atomically: true, encoding: .utf8)) != nil else {
-            return original
+            return Resolved(path: original, theme: theme)
         }
-        return tmp.path
+        return Resolved(path: tmp.path, theme: theme)
     }
 
     private static func locate() -> String? {
