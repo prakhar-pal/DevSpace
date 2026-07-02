@@ -3,8 +3,10 @@
 <!--
   Base Info.plist. The Makefile copies this into the assembled .app and then
   overrides per-config keys (CFBundleDisplayName, CFBundleName, CFBundleIconFile,
-  and, for Debug, DevSpaceLogPath) via PlistBuddy. Release uses the values here
-  verbatim.
+  and, for Debug, DevSpaceLogPath) via PlistBuddy. CFBundleVersion is also
+  overridden on every build (debug and release) to the current git commit
+  count — see scripts/assemble-app.sh. The value below is only the fallback
+  used when building outside a git checkout.
 -->
 <plist version="1.0">
 <dict>

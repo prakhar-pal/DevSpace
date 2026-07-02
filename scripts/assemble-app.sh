@@ -41,6 +41,16 @@ done
 "$PB" -c "Set :CFBundleDisplayName $DISPLAY" "$APP/Contents/Info.plist"
 "$PB" -c "Set :CFBundleName $DISPLAY" "$APP/Contents/Info.plist"
 "$PB" -c "Set :CFBundleIconFile $ICON" "$APP/Contents/Info.plist"
+
+# CFBundleVersion (the build number shown as "Version X.Y.Z (N)" in the About
+# panel) is the total commit count — monotonically increasing and valid Apple
+# format, distinct from CFBundleShortVersionString (the marketing version the
+# release pipeline bumps). Falls back to the Info.plist default when building
+# outside a git checkout (e.g. from a source tarball).
+BUILD_NUMBER="$(git -C "$MACOS_DIR" rev-list --count HEAD 2>/dev/null || true)"
+if [ -n "$BUILD_NUMBER" ]; then
+    "$PB" -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
+fi
 if [ -n "$LOG_PATH" ]; then
     "$PB" -c "Add :DevSpaceLogPath string $LOG_PATH" "$APP/Contents/Info.plist" 2>/dev/null \
         || "$PB" -c "Set :DevSpaceLogPath $LOG_PATH" "$APP/Contents/Info.plist"
