@@ -136,15 +136,12 @@ enum GhosttyConfig {
 
 struct TerminalPaneView: View {
     @ObservedObject var model: TerminalPaneModel
-    let focusID: String
-    /// Shared, single-source focus binding owned by MainPane. Exactly one pane
-    /// (the selected one) is focused; others resign first responder, so a hidden
-    /// pane can't steal the keyboard from the visible terminal.
-    @FocusState.Binding var focused: String?
 
     var body: some View {
+        // Focus is driven imperatively by MainPane.focusSelectedTerminal() (the
+        // library's FocusState-based `.terminalFocused` binding does not
+        // propagate here), so no focus modifier is attached.
         TerminalSurfaceView(context: model.state)
-            .terminalFocused($focused, equals: focusID)
             .background(Color(red: 0.067, green: 0.067, blue: 0.067)) // #111
     }
 }
