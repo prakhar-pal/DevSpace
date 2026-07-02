@@ -1,5 +1,18 @@
 # dev-space
 
+## v0.4.0 - 2026-07-02
+
+### Features
+- feat(action-panel): show "Last used" in the local timezone (d01b03e)
+
+### Fixes
+- fix: handle text pasting inside claude-code (c75a650)
+- fix(terminal): focus the selected terminal via first-responder, not @FocusState (ac4ede0)
+
+### Other
+- ci: skip build in release PR (d26b7f3)
+
+
 ## 0.3.4
 
 ### Patch Changes
