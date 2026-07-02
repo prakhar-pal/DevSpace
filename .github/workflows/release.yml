@@ -1,12 +1,21 @@
-# DISABLED: legacy changesets/npm release for the original Tauri app (now under
-# tauri/). The native Swift rewrite doesn't use it, and package.json no longer
-# lives at the repo root, so this must not run automatically. Kept for reference
-# and manual dispatch only. A native-app release pipeline (Developer ID signing
-# + notarization) is a separate future task.
-name: Release (legacy Tauri — disabled)
+# Git-native release automation for the native macOS app (no Node/changesets).
+#
+# On every push to main, two message-independent steps run in order:
+#   1. Tag-if-untagged: if Info.plist's version has no matching v<version> tag,
+#      create and push it. This fires when a "chore: release" PR merges (the
+#      bump already landed the new version on main) and tags that commit.
+#   2. Refresh release PR: compute the next version from conventional-commit
+#      titles since the last tag; if there's anything to release, force-update
+#      the `release/main` branch with the Info.plist bump + regenerated
+#      CHANGELOG.md and open/update a "chore: release vX.Y.Z" PR into main.
+#
+# Merging that PR lands the bump (step 1 next run tags it). This only manages the
+# version bump — it does NOT build/sign/notarize the app (separate pipeline).
+name: Release
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
@@ -16,7 +25,7 @@ permissions:
 
 jobs:
   release:
-    name: Release
+    name: Tag & release PR
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repo
@@ -24,20 +33,44 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Install Dependencies
-        run: npm install
+      # 1) Tag the current version if it isn't tagged yet (release-PR merges).
+      - name: Tag if untagged
+        run: |
+          version="$(grep -A1 CFBundleShortVersionString Info.plist \
+            | grep '<string>' | sed -E 's/.*<string>([^<]*)<\/string>.*/\1/' | head -1)"
+          if git rev-parse "v${version}" >/dev/null 2>&1; then
+            echo "v${version} already tagged."
+          else
+            git tag -a "v${version}" -m "Release v${version}"
+            git push origin "v${version}"
+            echo "Tagged v${version}."
+          fi
 
-      - name: Create Release Pull Request
-        id: changesets
-        uses: changesets/action@v1
-        with:
-          version: npm run version-packages
-          commit: "chore: update versions and changelog"
-          title: "chore: update versions and changelog"
+      # 2) Compute the next version and refresh the release PR.
+      - name: Refresh release PR
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          eval "$(scripts/next-version.sh)"   # sets bump, version
+          if [ "$bump" = "none" ]; then
+            echo "Nothing to release."
+            exit 0
+          fi
+          echo "Preparing release v${version} (${bump})."
+          git checkout -B release/main
+          scripts/prepare-release.sh
+          git add Info.plist CHANGELOG.md
+          git commit -m "chore: release v${version}"
+          git push --force origin release/main
+          if gh pr view release/main --json number >/dev/null 2>&1; then
+            gh pr edit release/main --title "chore: release v${version}"
+          else
+            gh pr create --base main --head release/main \
+              --title "chore: release v${version}" \
+              --body "Automated release PR. Merging it bumps the app version to v${version} and tags the merge commit. Review the CHANGELOG below."
+          fi
