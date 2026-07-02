@@ -12,6 +12,15 @@ concurrency:
 jobs:
   build-test:
     name: Build & test (SwiftPM)
+    # Skip for the automated release flow (.github/workflows/release.yml):
+    # release/main PRs and their merges only touch Info.plist + CHANGELOG.md,
+    # never Swift source, so a macOS build/test run is wasted. Matches the PR
+    # source branch (pull_request) or the merge commit message (push to main —
+    # covers both squash merges, where the message IS the PR title, and merge
+    # commits, where the PR title is in the body).
+    if: >-
+      github.head_ref != 'release/main' &&
+      !contains(github.event.head_commit.message, 'chore: release v')
     # macos-15 ships Xcode 16 / Swift 6, required by libghostty-spm
     # (swift-tools-version 6.0). macos-14 defaults to Swift 5.9 and can't even
     # resolve the dependency.
