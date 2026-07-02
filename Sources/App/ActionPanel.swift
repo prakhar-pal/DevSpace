@@ -21,7 +21,7 @@ struct ActionPanelView: View {
 
                 field("Provider", workspace.provider)
                 field("Source", workspace.source)
-                field("Last used", workspace.lastUsed)
+                field("Last used", Self.formatLastUsed(workspace.lastUsed))
 
                 if workspace.state != "Loading" {
                     Button { onStart(workspace.id) } label: {
@@ -61,6 +61,23 @@ struct ActionPanelView: View {
         default: .red
         }
     }
+
+    /// `lastUsed` is devpod's `lastUsed` — an ISO-8601 UTC timestamp
+    /// (e.g. "2026-06-23T12:56:56Z"). Render it in the viewer's local timezone.
+    private static func formatLastUsed(_ value: String) -> String {
+        guard !value.isEmpty else { return "" }
+        guard let date = isoParser.date(from: value) else { return value }
+        return displayFormatter.string(from: date)
+    }
+
+    private static let isoParser = ISO8601DateFormatter()
+
+    private static let displayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter // defaults to the current locale and local timezone
+    }()
 
     @ViewBuilder private func field(_ label: String, _ value: String) -> some View {
         HStack(alignment: .top, spacing: 16) {
