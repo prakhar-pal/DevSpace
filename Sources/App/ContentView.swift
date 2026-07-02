@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import GhosttyTerminal
 import DevSpaceCore
 
 /// Stack 6: sidebar + the session main pane (ActionPanel / start log / SSH
@@ -38,8 +40,6 @@ struct ContentView: View {
 
 private struct MainPane: View {
     @ObservedObject var model: AppModel
-    // Single source of focus truth: the pod id whose terminal owns the keyboard.
-    @FocusState private var focusedPane: String?
 
     var body: some View {
         ZStack {
@@ -60,19 +60,48 @@ private struct MainPane: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Move keyboard focus to the selected workspace's terminal whenever the
-        // selection changes or a pane is (re)created. Deferred a runloop tick so
-        // the surface is in the window before we make it first responder.
-        .onChange(of: model.selectedID) { scheduleFocus() }
-        .onChange(of: Set(model.panes.keys)) { scheduleFocus() }
-        .onAppear { scheduleFocus() }
+        // selection changes or a pane is (re)created.
+        .onChange(of: model.selectedID) { focusSelectedTerminal() }
+        .onChange(of: Set(model.panes.keys)) { focusSelectedTerminal() }
+        .onAppear { focusSelectedTerminal() }
     }
 
-    private func scheduleFocus() {
-        DispatchQueue.main.async {
-            if let sel = model.selectedID, model.panes[sel] != nil {
-                focusedPane = sel
-            }
+    /// Imperatively make the selected pane's terminal the window's first
+    /// responder. The library's `.terminalFocused` binding relies on a SwiftUI
+    /// `@FocusState`, but nothing anchors it with a `.focused()` modifier, so
+    /// programmatic writes never propagate and `makeFirstResponder` is never
+    /// driven on selection change — leaving keystrokes going to the previously
+    /// focused terminal. We drive first-responder directly instead, matching the
+    /// pane by its `TerminalController` identity, and retry briefly because the
+    /// surface NSView may not be in the window yet right after a pane is created.
+    private func focusSelectedTerminal(attempt: Int = 0) {
+        guard let sel = model.selectedID, let pane = model.panes[sel] else { return }
+        let controller = pane.state.controller
+        if let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }),
+           let view = Self.terminalView(in: window.contentView, controller: controller)
+        {
+            if window.firstResponder !== view { window.makeFirstResponder(view) }
+            return
         }
+        // View not mounted yet — retry for up to ~1s.
+        guard attempt < 20 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            // Bail if the selection moved on while we were waiting.
+            guard model.selectedID == sel else { return }
+            focusSelectedTerminal(attempt: attempt + 1)
+        }
+    }
+
+    /// Depth-first search for the `AppTerminalView` bound to `controller`.
+    private static func terminalView(
+        in view: NSView?, controller: TerminalController
+    ) -> AppTerminalView? {
+        guard let view else { return nil }
+        if let term = view as? AppTerminalView, term.controller === controller { return term }
+        for sub in view.subviews {
+            if let found = terminalView(in: sub, controller: controller) { return found }
+        }
+        return nil
     }
 
     @ViewBuilder private func paneContainer(pid: String, pane: TerminalPaneModel) -> some View {
@@ -82,7 +111,7 @@ private struct MainPane: View {
             case .shuttingDown: logHeader("\(model.name(pid)) — shutting down…")
             default: EmptyView()
             }
-            TerminalPaneView(model: pane, focusID: pid, focused: $focusedPane)
+            TerminalPaneView(model: pane)
         }
     }
 

@@ -14,6 +14,7 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
     let id = UUID()
     let state: TerminalViewState
     private let pty = PTYSession()
+    private let pasteNormalizer = PasteNewlineNormalizer()
     private var session: InMemoryTerminalSession!
     private var didStart = false
     private let command: String
@@ -36,7 +37,13 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
         state = TerminalViewState(configSource: source, theme: cfg.theme)
 
         session = InMemoryTerminalSession(
-            write: { [pty] data in pty.write(data) },
+            write: { [pty, pasteNormalizer] data in
+                // Host-managed libghostty forwards a bracketed paste's raw LF
+                // (\n) bytes; standard terminals send CR (\r) for pasted
+                // newlines. Normalize LF→CR inside the paste so kitty-protocol
+                // apps (Claude Code) don't read \n as the Ctrl+J key.
+                pty.write(pasteNormalizer.normalize(data))
+            },
             resize: { [weak self] viewport in
                 DispatchQueue.main.async { self?.handleResize(viewport) }
             }
@@ -65,6 +72,49 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
     }
 
     func terminate() { pty.terminate() }
+}
+
+/// Normalizes pasted newlines in the host→pty byte stream.
+///
+/// libghostty's host-managed I/O backend forwards a bracketed paste's raw LF
+/// (`\n`, 0x0A) bytes unchanged, whereas a normal terminal (and standalone
+/// Ghostty's exec backend) send CR (`\r`, 0x0D) for pasted newlines — the same
+/// byte the Enter key produces. Apps that enable the kitty keyboard protocol
+/// (e.g. Claude Code) read a bare `\n` inside a paste as the *Ctrl+J key* and
+/// insert a literal `j`, garbling multi-line paste.
+///
+/// libghostty emits the paste as three separate writes — the start marker
+/// (`ESC[200~`), the body, then the end marker (`ESC[201~`) — so we just track
+/// whether we're between the markers and convert LF→CR (collapsing CRLF→CR) in
+/// the body. A genuine Ctrl+J keypress outside a paste is its own write and is
+/// left untouched.
+final class PasteNewlineNormalizer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var inPaste = false
+
+    private static let start = Data([0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e]) // ESC[200~
+    private static let end = Data([0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]) // ESC[201~
+
+    func normalize(_ data: Data) -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if data == Self.start { inPaste = true; return data }
+        if data == Self.end { inPaste = false; return data }
+        guard inPaste else { return data }
+
+        var out = Data(capacity: data.count)
+        var prev: UInt8 = 0
+        for b in data {
+            if b == 0x0a {
+                if prev != 0x0d { out.append(0x0d) } // LF→CR; drop the LF of a CRLF pair
+            } else {
+                out.append(b)
+            }
+            prev = b
+        }
+        return out
+    }
 }
 
 /// Resolves the user's Ghostty config for the embedded terminal.
@@ -136,15 +186,12 @@ enum GhosttyConfig {
 
 struct TerminalPaneView: View {
     @ObservedObject var model: TerminalPaneModel
-    let focusID: String
-    /// Shared, single-source focus binding owned by MainPane. Exactly one pane
-    /// (the selected one) is focused; others resign first responder, so a hidden
-    /// pane can't steal the keyboard from the visible terminal.
-    @FocusState.Binding var focused: String?
 
     var body: some View {
+        // Focus is driven imperatively by MainPane.focusSelectedTerminal() (the
+        // library's FocusState-based `.terminalFocused` binding does not
+        // propagate here), so no focus modifier is attached.
         TerminalSurfaceView(context: model.state)
-            .terminalFocused($focused, equals: focusID)
             .background(Color(red: 0.067, green: 0.067, blue: 0.067)) // #111
     }
 }
