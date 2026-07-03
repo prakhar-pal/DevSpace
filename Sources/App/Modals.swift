@@ -56,6 +56,7 @@ struct GuideSheet: View {
                         row("⌘B", "Toggle the sidebar to give the terminal more room.")
                         row("⌘R", "Reload the selected workspace's SSH session.")
                         row("⌘O", "Open the selected workspace's folder in Zed.")
+                        row("⌘T", "Open another terminal tab for the selected workspace.")
                         row("⌘⌥↑ / ⌘⌥↓", "Move the selected workspace up / down in the sidebar.")
                         row("Esc", "Close this guide.")
                     }
@@ -73,6 +74,7 @@ struct GuideSheet: View {
                         row("Copy / paste", "⌘C copies the selection, ⌘V pastes. URLs are ⌘-clickable.")
                         row("Newline", "⇧Enter inserts a newline without sending.")
                         row("Reload session", "⌘R, or right-click a running workspace → Reload SSH Session.")
+                        row("Multiple terminals", "⌘T (or the + in the tab strip) opens extra shells to the same pod. Closing the last one stops the pod; extra tabs just close.")
                     }
                     section("Organize the sidebar") {
                         row("Reorder", "Right-click → Move Up / Move Down (or ⌘⌥↑ / ⌘⌥↓) — the order is saved.")

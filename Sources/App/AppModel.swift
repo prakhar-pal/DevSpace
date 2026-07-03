@@ -23,8 +23,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var opened: Set<String> = []       // pods with an SSH terminal
     @Published private(set) var starting: Set<String> = []     // pods running `devpod up`
     @Published private(set) var shuttingDown: Set<String> = [] // pods running `devpod stop`
-    /// One PTY-backed pane per pod (devpod up log, SSH shell, or devpod stop log).
-    @Published private(set) var panes: [String: TerminalPaneModel] = [:]
+    /// PTY-backed panes per pod (a devpod up/stop log, or one or more SSH
+    /// terminals). Terminals are tabs: index 0 is the primary session (it
+    /// carries the reverse notify tunnel); further ones are extra shells.
+    @Published private(set) var panes: [String: [TerminalPaneModel]] = [:]
+    /// Which of a pod's panes is the visible/active tab.
+    @Published private(set) var activePane: [String: UUID] = [:]
 
     private let runner: CommandRunning
     private let loop: PollLoop
@@ -247,7 +251,7 @@ final class AppModel: ObservableObject {
         starting.insert(id)
         let pane = TerminalPaneModel(command: "devpod", args: Devpod.upArgs(id))
         pane.onExit = { [weak self] _ in self?.onUpFinished(id) }
-        panes[id] = pane
+        setPanes(id, [pane])
     }
 
     /// `devpod up` finished: leave the starting state and optimistically mark the
@@ -271,7 +275,7 @@ final class AppModel: ObservableObject {
         closePane(id)
         shuttingDown.insert(id)
         let pane = TerminalPaneModel(command: "devpod", args: Devpod.stopArgs(id))
-        panes[id] = pane
+        setPanes(id, [pane])
     }
 
     func delete(_ id: String) {
@@ -330,35 +334,107 @@ final class AppModel: ObservableObject {
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    /// Reconnect the SSH shell without restarting the pod.
+    /// Reconnect the active SSH terminal without restarting the pod (or the
+    /// other terminals). Replaced in place so the tab keeps its position; the
+    /// primary tab keeps the reverse notify tunnel.
     func reload(_ id: String) {
         guard validID(id) else { return }
-        closePane(id)
-        opened.remove(id)
-        openSSHIfNeeded(id)
+        guard opened.contains(id), let list = panes[id], !list.isEmpty else {
+            // No session (e.g. it already died): fall back to a full reopen.
+            closePane(id)
+            opened.remove(id)
+            openSSHIfNeeded(id)
+            return
+        }
+        let idx = list.firstIndex { $0.id == activePane[id] } ?? 0
+        let old = list[idx]
+        old.onExit = nil // its exit must not run the tab-close/stop-pod path
+        old.terminate()
+        let fresh = makeTerminal(id, tunnel: idx == 0)
+        panes[id]?[idx] = fresh
+        activePane[id] = fresh.id
     }
 
     private func openSSHIfNeeded(_ id: String) {
         guard validID(id) else { return }
         guard !opened.contains(id), !starting.contains(id), !shuttingDown.contains(id) else { return }
         opened.insert(id)
-        let pane = TerminalPaneModel(command: "ssh", args: SSH.args(podID: id))
-        pane.onExit = { [weak self] _ in self?.onExited(id) }
-        panes[id] = pane
+        setPanes(id, [makeTerminal(id, tunnel: true)])
         injectHooks(id)
     }
 
-    /// SSH session ended (user typed `exit`): stop the pod, show the shutdown log.
-    private func onExited(_ id: String) {
-        opened.remove(id)
-        closePane(id)
-        select(id)
-        stop(id)
+    // MARK: - Terminal tabs
+
+    /// Open another shell to the same pod, as a new active tab.
+    func newTerminal(_ id: String) {
+        guard validID(id), opened.contains(id), !(panes[id] ?? []).isEmpty else { return }
+        let pane = makeTerminal(id, tunnel: false) // the primary carries the tunnel
+        panes[id]?.append(pane)
+        activePane[id] = pane.id
+    }
+
+    /// Close one terminal tab (never the last — exit the shell to stop the pod).
+    func closeTerminal(_ id: String, paneID: UUID) {
+        guard let list = panes[id], list.count > 1,
+              let pane = list.first(where: { $0.id == paneID }) else { return }
+        pane.onExit = nil
+        pane.terminate()
+        removePane(id, paneID: paneID)
+    }
+
+    func setActivePane(_ id: String, paneID: UUID) {
+        guard panes[id]?.contains(where: { $0.id == paneID }) == true else { return }
+        activePane[id] = paneID
+    }
+
+    /// The pane the pod's view should show (its active tab).
+    func activeModel(_ id: String) -> TerminalPaneModel? {
+        guard let list = panes[id], !list.isEmpty else { return nil }
+        return list.first { $0.id == activePane[id] } ?? list[0]
+    }
+
+    private func makeTerminal(_ id: String, tunnel: Bool) -> TerminalPaneModel {
+        let pane = TerminalPaneModel(command: "ssh", args: SSH.args(podID: id, tunnel: tunnel))
+        pane.onExit = { [weak self] _ in self?.paneExited(id, paneID: pane.id) }
+        return pane
+    }
+
+    /// An SSH terminal ended (user typed `exit`, or the connection died).
+    /// Extra tabs just close; the LAST terminal keeps the original semantics:
+    /// stop the pod and show the shutdown log.
+    private func paneExited(_ id: String, paneID: UUID) {
+        guard let list = panes[id], list.contains(where: { $0.id == paneID }) else { return }
+        if list.count > 1 {
+            removePane(id, paneID: paneID)
+        } else {
+            opened.remove(id)
+            closePane(id)
+            select(id)
+            stop(id)
+        }
+    }
+
+    private func removePane(_ id: String, paneID: UUID) {
+        guard var list = panes[id], let idx = list.firstIndex(where: { $0.id == paneID }) else { return }
+        list.remove(at: idx)
+        panes[id] = list
+        if activePane[id] == paneID, !list.isEmpty {
+            activePane[id] = list[max(0, idx - 1)].id
+        }
+    }
+
+    private func setPanes(_ id: String, _ list: [TerminalPaneModel]) {
+        panes[id] = list
+        activePane[id] = list.first?.id
     }
 
     private func closePane(_ id: String) {
-        panes[id]?.terminate()
+        for pane in panes[id] ?? [] {
+            pane.onExit = nil
+            pane.terminate()
+        }
         panes[id] = nil
+        activePane[id] = nil
     }
 
     // MARK: - Phase (drives the main pane)
@@ -368,7 +444,7 @@ final class AppModel: ObservableObject {
     func phase(of id: String) -> Phase {
         if starting.contains(id) { return .starting }
         if shuttingDown.contains(id) { return .shuttingDown }
-        if opened.contains(id), panes[id] != nil { return .terminal }
+        if opened.contains(id), !(panes[id] ?? []).isEmpty { return .terminal }
         return .none
     }
 
@@ -440,6 +516,13 @@ final class AppModel: ObservableObject {
         if chars == "o" {
             if let id = selectedID, byID[id]?.state == "Running" {
                 openInZed(id)
+            }
+            return nil
+        }
+        // Cmd+T: open another terminal tab for the selected workspace.
+        if chars == "t" {
+            if let id = selectedID, phase(of: id) == .terminal {
+                newTerminal(id)
             }
             return nil
         }

@@ -165,6 +165,7 @@ private struct WorkspaceRow: View {
         Button("Set friendly name…") { model.beginRename(workspace.id) }
         if model.opened.contains(workspace.id) {
             Button("Reload SSH Session") { model.reload(workspace.id) }
+            Button("New Terminal") { model.newTerminal(workspace.id) }
         }
         // Explicit reorder controls — List drag-reorder is unreliable on macOS
         // with rows this interactive (the selection tap claims mouse-downs).
