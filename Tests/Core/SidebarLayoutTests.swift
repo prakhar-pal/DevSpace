@@ -45,6 +45,20 @@ final class SidebarLayoutTests: XCTestCase {
         XCTAssertEqual(result, ["d", "b", "a", "c"])
     }
 
+    func testMoveVisibleUpAndDown() {
+        XCTAssertEqual(SidebarLayout.moveVisible(["a", "b", "c"], id: "b", delta: -1), ["b", "a", "c"])
+        XCTAssertEqual(SidebarLayout.moveVisible(["a", "b", "c"], id: "b", delta: 1), ["a", "c", "b"])
+    }
+
+    func testMoveVisibleClampsAtEdges() {
+        XCTAssertEqual(SidebarLayout.moveVisible(["a", "b", "c"], id: "a", delta: -1), ["a", "b", "c"])
+        XCTAssertEqual(SidebarLayout.moveVisible(["a", "b", "c"], id: "c", delta: 1), ["a", "b", "c"])
+    }
+
+    func testMoveVisibleUnknownIDIsNoOp() {
+        XCTAssertEqual(SidebarLayout.moveVisible(["a", "b"], id: "zzz", delta: 1), ["a", "b"])
+    }
+
     func testSetAliasClearsOnEmptyOrEqualToID() {
         var a = SidebarLayout.setAlias([:], id: "wc-1", name: "Frontend")
         XCTAssertEqual(a["wc-1"], "Frontend")

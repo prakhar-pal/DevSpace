@@ -166,6 +166,17 @@ private struct WorkspaceRow: View {
         if model.opened.contains(workspace.id) {
             Button("Reload SSH Session") { model.reload(workspace.id) }
         }
+        // Explicit reorder controls — List drag-reorder is unreliable on macOS
+        // with rows this interactive (the selection tap claims mouse-downs).
+        // Visible rows only; the Hidden section keeps its own fixed order.
+        if !isHidden {
+            Divider()
+            let ids = model.split.visible.map(\.id)
+            Button("Move Up") { model.move(workspace.id, by: -1) }
+                .disabled(ids.first == workspace.id)
+            Button("Move Down") { model.move(workspace.id, by: 1) }
+                .disabled(ids.last == workspace.id)
+        }
         // Only for running pods: the remote open rides the live SSH alias, and
         // opening a stopped pod's folder isn't possible without starting it.
         if workspace.state == "Running" {

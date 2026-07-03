@@ -220,6 +220,16 @@ final class AppModel: ObservableObject {
         persist()
     }
 
+    /// Move a visible workspace one step up (-1) or down (+1) in the sidebar.
+    /// The explicit counterpart to List drag-reorder, which is unreliable on
+    /// macOS with rows this interactive (the selection tap claims mouse-downs).
+    func move(_ id: String, by delta: Int) {
+        let ids = split.visible.map(\.id)
+        let moved = SidebarLayout.moveVisible(ids, id: id, delta: delta)
+        guard moved != ids else { return }
+        applyVisibleOrder(moved)
+    }
+
     // MARK: - Session lifecycle actions
 
     /// Defense-in-depth: reject ids that could smuggle CLI flags into an exec
@@ -385,8 +395,20 @@ final class AppModel: ObservableObject {
 
     private func handleKey(_ event: NSEvent) -> NSEvent? {
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        guard flags == [.command] else { return event }
         guard let chars = event.charactersIgnoringModifiers else { return event }
+
+        // ⌘⌥↑ / ⌘⌥↓ — move the selected workspace up/down in the sidebar.
+        if flags == [.command, .option], renaming == nil, !guideOpen {
+            let up = Character(UnicodeScalar(NSUpArrowFunctionKey)!)
+            let down = Character(UnicodeScalar(NSDownArrowFunctionKey)!)
+            if let c = chars.first, c == up || c == down {
+                if let id = selectedID { move(id, by: c == up ? -1 : 1) }
+                return nil
+            }
+            return event
+        }
+
+        guard flags == [.command] else { return event }
 
         // Standard window/app shortcuts the libghostty surface otherwise swallows
         // (Ghostty binds these to its own actions, which are no-ops when embedded).
