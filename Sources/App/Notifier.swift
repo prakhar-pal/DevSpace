@@ -9,12 +9,25 @@ enum Notifier {
     /// launches), where UNUserNotificationCenter.current() traps.
     private static var inBundle: Bool { Bundle.main.bundleIdentifier != nil }
 
+    /// Retained delegate; UNUserNotificationCenter keeps only a weak reference.
+    private static var delegate: NotifierDelegate?
+
     static func requestPermission() {
         guard inBundle else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    static func notify(title: String, body: String) {
+    /// Route notification taps to the app: clicking a notification selects the
+    /// workspace it came from. Must be installed at launch, before any
+    /// notification can be delivered.
+    static func onTap(_ handler: @escaping @MainActor (String) -> Void) {
+        guard inBundle else { return }
+        let d = NotifierDelegate(onSelect: handler)
+        delegate = d
+        UNUserNotificationCenter.current().delegate = d
+    }
+
+    static func notify(title: String, body: String, podID: String? = nil) {
         guard inBundle else {
             DispatchQueue.main.async { NSApp.requestUserAttention(.criticalRequest) }
             return
@@ -27,12 +40,47 @@ enum Notifier {
                 content.title = title
                 content.body = body
                 content.sound = .default
+                if let podID { content.userInfo = ["podID": podID] }
                 center.add(UNNotificationRequest(
                     identifier: UUID().uuidString, content: content, trigger: nil
                 ))
             default:
                 DispatchQueue.main.async { NSApp.requestUserAttention(.criticalRequest) }
             }
+        }
+    }
+}
+
+/// Handles notification delivery + taps. Kept tiny: banners show even while
+/// the app is frontmost (the event may concern a non-selected workspace), and
+/// a tap activates the app and selects the originating workspace.
+private final class NotifierDelegate: NSObject, UNUserNotificationCenterDelegate {
+    private let onSelect: @MainActor (String) -> Void
+
+    init(onSelect: @escaping @MainActor (String) -> Void) {
+        self.onSelect = onSelect
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let podID = response.notification.request.content.userInfo["podID"] as? String
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            if let podID {
+                MainActor.assumeIsolated { self.onSelect(podID) }
+            }
+            completionHandler()
         }
     }
 }

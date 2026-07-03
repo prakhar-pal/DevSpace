@@ -32,6 +32,11 @@ final class AppModel: ObservableObject {
     private let notifyToken: String
     private var listener: NotifyListener?
     private var layoutLoaded = false
+    /// Last *definitive* (Running/Stopped) state per pod, for start/stop event
+    /// notifications. Tracking only the definitive endpoints means transient
+    /// Loading/Busy/Unknown blips can't fire or swallow a transition.
+    private var lastDefinitiveState: [String: String] = [:]
+    private var statesBaselined = false
 
     init(runner: CommandRunning = DevpodCLI(), interval: TimeInterval = 5) {
         self.runner = runner
@@ -50,6 +55,11 @@ final class AppModel: ObservableObject {
         }
         startNotifyListener()
         Notifier.requestPermission()
+        // Clicking a notification switches to the workspace it came from.
+        Notifier.onTap { [weak self] podID in
+            guard let self, byID[podID] != nil else { return }
+            select(podID)
+        }
     }
 
     /// Skip status polling for hidden workspaces — but never the selected one,
@@ -83,7 +93,7 @@ final class AppModel: ObservableObject {
     /// show a banner / bounce the dock.
     func receiveNotification(podID: String, message: String) {
         if podID != selectedID { badges.insert(podID) }
-        Notifier.notify(title: name(podID), body: message)
+        Notifier.notify(title: name(podID), body: message, podID: podID)
     }
 
     /// Inject the Claude hooks over the tunnel after an SSH connect — off the
@@ -105,6 +115,7 @@ final class AppModel: ObservableObject {
     // MARK: - Poll updates
 
     private func apply(_ views: [WorkspaceView]) {
+        notifyStateTransitions(views)
         workspaces = views
         let ids = views.map(\.id)
         let newOrder = SidebarLayout.normalizeOrder(order, ids: ids)
@@ -114,6 +125,25 @@ final class AppModel: ObservableObject {
         if newHidden != hidden { hidden = newHidden; changed = true }
         if changed { persist() }
         reconcileLifecycle()
+    }
+
+    /// Notify on definitive devpod state transitions (Stopped→Running and
+    /// Running→Stopped) observed by the poller. The first poll only baselines
+    /// (no launch-time noise), pods first seen mid-session baseline silently,
+    /// and the event is suppressed when the pod is selected while the app is
+    /// active — you're already looking at it (covers self-initiated actions,
+    /// whose start/stop logs are on screen).
+    private func notifyStateTransitions(_ views: [WorkspaceView]) {
+        defer { statesBaselined = true }
+        for w in views where w.state == "Running" || w.state == "Stopped" {
+            let old = lastDefinitiveState.updateValue(w.state, forKey: w.id)
+            guard statesBaselined, let old, old != w.state else { continue }
+            if w.id == selectedID, NSApp.isActive { continue }
+            let event = w.state == "Running" ? "started" : "stopped"
+            if w.id != selectedID { badges.insert(w.id) }
+            Notifier.notify(title: name(w.id), body: "Workspace \(event)", podID: w.id)
+            Log.write("notify: pod=\(w.id) \(event) (was \(old))")
+        }
     }
 
     /// Mirror of the App.tsx lifecycle effects: auto-open running pods, drop
