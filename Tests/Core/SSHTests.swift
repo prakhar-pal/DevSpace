@@ -18,6 +18,53 @@ final class SSHTests: XCTestCase {
     }
 }
 
+// The `zed ssh://…` remote-open path: workdir parsing from the devpod-managed
+// ~/.ssh/config host alias, and the URL handed to the zed CLI.
+final class ZedRemoteTests: XCTestCase {
+    private let config = """
+    # DevPod Start wc-1.devpod
+    Host wc-1.devpod
+      ForwardAgent yes
+      ProxyCommand "/Users/x/.local/bin/devpod" ssh --stdio --context default --user node wc-1 --workdir "/workspace"
+      User node
+    # DevPod End wc-1.devpod
+    Host wc-2.devpod
+      ProxyCommand "/Users/x/.local/bin/devpod" ssh --stdio --user node wc-2 --workdir /workspaces/webclients
+      User node
+    Host other-host
+      ProxyCommand something --workdir "/decoy"
+    """
+
+    func testParsesQuotedWorkdirFromHostBlock() {
+        XCTAssertEqual(SSH.parseWorkdir(sshConfig: config, podID: "wc-1"), "/workspace")
+    }
+
+    func testParsesUnquotedWorkdir() {
+        XCTAssertEqual(SSH.parseWorkdir(sshConfig: config, podID: "wc-2"), "/workspaces/webclients")
+    }
+
+    func testIgnoresOtherHostBlocks() {
+        XCTAssertNil(SSH.parseWorkdir(sshConfig: config, podID: "wc-9"))
+    }
+
+    func testMissingWorkdirIsNil() {
+        let bare = "Host wc-3.devpod\n  ProxyCommand devpod ssh --stdio wc-3\n"
+        XCTAssertNil(SSH.parseWorkdir(sshConfig: bare, podID: "wc-3"))
+    }
+
+    func testZedRemoteURL() {
+        XCTAssertEqual(
+            SSH.zedRemoteURL(podID: "wc-1", workdir: "/workspace"),
+            "ssh://wc-1.devpod/workspace"
+        )
+        // A relative workdir is normalized to an absolute path component.
+        XCTAssertEqual(
+            SSH.zedRemoteURL(podID: "wc-1", workdir: "workspace"),
+            "ssh://wc-1.devpod/workspace"
+        )
+    }
+}
+
 final class ActionArgsTests: XCTestCase {
     func testUpArgs() {
         XCTAssertEqual(Devpod.upArgs("wc-1"), ["up", "--ide", "none", "--", "wc-1"])

@@ -270,13 +270,54 @@ final class AppModel: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { try? Devpod.delete(r, id: id) }
     }
 
+    /// Open the workspace folder in Zed over the existing SSH alias
+    /// (`zed ssh://<id>.devpod/<workdir>`) — effectively instant, unlike the
+    /// old `devpod up --ide zed`, which re-runs the whole up/provision flow.
+    /// The workdir comes from the alias' ProxyCommand in ~/.ssh/config; the
+    /// legacy devpod path remains only as a fallback when the `zed` CLI is
+    /// not installed. Only offered for Running workspaces (Sidebar gates it).
     func openInZed(_ id: String) {
         guard validID(id) else { return }
         let r = runner
         DispatchQueue.global(qos: .userInitiated).async {
+            let url = SSH.zedRemoteURL(podID: id, workdir: SSH.workdir(podID: id))
+            if let cli = Self.zedCLI() {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: cli)
+                proc.arguments = [url]
+                do {
+                    try proc.run()
+                    proc.waitUntilExit()
+                    if proc.terminationStatus == 0 {
+                        Log.write("zed: opened \(url) via \(cli)")
+                        return
+                    }
+                    Log.write("zed: \(cli) exit \(proc.terminationStatus) for \(url) — falling back to devpod")
+                } catch {
+                    Log.write("zed: \(cli) not runnable (\(error)) — falling back to devpod")
+                }
+            } else {
+                Log.write("zed: cli not found — falling back to devpod")
+            }
             guard (try? Devpod.validateIde("zed")) != nil else { return }
             _ = try? r.run(Devpod.ideArgs(id, ide: "zed"))
         }
+    }
+
+    /// The zed CLI binary. "Install CLI" symlinks it into a bin dir, but plenty
+    /// of setups only have the app bundle (whose embedded `cli` is the same
+    /// binary) or a shell alias we can't exec — so check known locations
+    /// directly instead of trusting PATH.
+    private nonisolated static func zedCLI() -> String? {
+        let home = NSHomeDirectory()
+        let candidates = [
+            "\(home)/.local/bin/zed",
+            "/usr/local/bin/zed",
+            "/opt/homebrew/bin/zed",
+            "/Applications/Zed.app/Contents/MacOS/cli",
+            "\(home)/Applications/Zed.app/Contents/MacOS/cli",
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     /// Reconnect the SSH shell without restarting the pod.
