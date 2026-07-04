@@ -435,6 +435,14 @@ final class AppModel: ObservableObject {
             }
             return nil // consume even when a no-op so the terminal never sees ⌘R
         }
+        // Cmd+O: open the selected workspace's folder in Zed (same action as
+        // the context menu's "Open in Zed"; Running pods only, like the menu).
+        if chars == "o" {
+            if let id = selectedID, byID[id]?.state == "Running" {
+                openInZed(id)
+            }
+            return nil
+        }
         if let n = Int(chars), (1 ... 9).contains(n) {
             let visible = split.visible
             if n - 1 < visible.count {
