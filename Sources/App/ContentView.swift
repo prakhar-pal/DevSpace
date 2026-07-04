@@ -141,30 +141,12 @@ private struct MainPane: View {
     private func tabBar(pid: String, panes: [TerminalPaneModel], activeID: UUID?) -> some View {
         HStack(spacing: 4) {
             ForEach(Array(panes.enumerated()), id: \.element.id) { i, pane in
-                HStack(spacing: 4) {
-                    Spacer(minLength: 0)
-                    Text("\(i + 1)")
-                        .font(.system(size: 11, weight: pane.id == activeID ? .semibold : .regular))
-                    if panes.count > 1 {
-                        Button {
-                            model.closeTerminal(pid, paneID: pane.id)
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 7, weight: .bold))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .help("Close this terminal")
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .frame(maxWidth: .infinity)
-                .background(pane.id == activeID ? Color(white: 0.27) : .clear)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-                .contentShape(Rectangle())
-                .onTapGesture { model.setActivePane(pid, paneID: pane.id) }
+                TerminalTab(
+                    number: i + 1,
+                    isActive: pane.id == activeID,
+                    onSelect: { model.setActivePane(pid, paneID: pane.id) },
+                    onClose: { model.closeTerminal(pid, paneID: pane.id) }
+                )
             }
             Button {
                 model.newTerminal(pid)
@@ -207,6 +189,47 @@ private struct MainPane: View {
         .padding(.vertical, 8)
         .background(Color(white: 0.1))
         .overlay(Divider(), alignment: .bottom)
+    }
+}
+
+/// One terminal tab, macOS-native style: the close × sits on the LEFT edge and
+/// only appears while the tab is hovered (like Safari/Terminal tabs). A
+/// mirrored empty slot on the right keeps the tab number optically centered.
+private struct TerminalTab: View {
+    let number: Int
+    let isActive: Bool
+    let onSelect: () -> Void
+    let onClose: () -> Void
+    @State private var hovering = false
+
+    private static let closeSlot: CGFloat = 16
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .frame(width: Self.closeSlot, height: Self.closeSlot)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .opacity(hovering ? 1 : 0)
+            .help("Close this terminal")
+            Spacer(minLength: 0)
+            Text("\(number)")
+                .font(.system(size: 11, weight: isActive ? .semibold : .regular))
+            Spacer(minLength: 0)
+            Color.clear.frame(width: Self.closeSlot, height: Self.closeSlot)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity)
+        .background(isActive ? Color(white: 0.27) : (hovering ? Color(white: 0.18) : .clear))
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .onHover { hovering = $0 }
     }
 }
 
