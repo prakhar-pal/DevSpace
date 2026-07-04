@@ -70,6 +70,11 @@ final class ZedRemoteTests: XCTestCase {
             SSH.zedRemoteURL(podID: "wc-1", workdir: "workspace"),
             "ssh://wc-1.devpod/workspace"
         )
+        // URL-reserved characters in the workdir are percent-encoded.
+        XCTAssertEqual(
+            SSH.zedRemoteURL(podID: "wc-1", workdir: "/my project"),
+            "ssh://wc-1.devpod/my%20project"
+        )
     }
 }
 

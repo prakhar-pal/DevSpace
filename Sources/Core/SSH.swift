@@ -68,10 +68,12 @@ public enum SSH {
 
     /// `ssh://<id>.devpod/<workdir>` — the URL `zed` opens a remote folder
     /// with. The host alias carries user + ProxyCommand via ~/.ssh/config, so
-    /// no credentials appear here.
+    /// no credentials appear here. The workdir is percent-encoded (it lands in
+    /// a URL's path component; a space would make the URL unparseable).
     public static func zedRemoteURL(podID: String, workdir: String) -> String {
         let path = workdir.hasPrefix("/") ? workdir : "/\(workdir)"
-        return "ssh://\(podID).devpod\(path)"
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+        return "ssh://\(podID).devpod\(encoded)"
     }
 
     /// Workdir for a pod from the user's ~/.ssh/config (devpod default

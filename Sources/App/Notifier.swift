@@ -17,12 +17,16 @@ enum Notifier {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    /// Route notification taps to the app: clicking a notification selects the
-    /// workspace it came from. Must be installed at launch, before any
-    /// notification can be delivered.
-    static func onTap(_ handler: @escaping @MainActor (String) -> Void) {
+    /// Install the notification delegate at launch, before any notification
+    /// can be delivered. `onTap` routes a click to the workspace it came
+    /// from; `shouldPresent` decides whether a banner shows while the app is
+    /// frontmost (suppressed for the pod whose terminal is already on screen).
+    static func install(
+        onTap: @escaping @MainActor (String) -> Void,
+        shouldPresent: @escaping @MainActor (String?) -> Bool
+    ) {
         guard inBundle else { return }
-        let d = NotifierDelegate(onSelect: handler)
+        let d = NotifierDelegate(onSelect: onTap, shouldPresent: shouldPresent)
         delegate = d
         UNUserNotificationCenter.current().delegate = d
     }
@@ -51,14 +55,20 @@ enum Notifier {
     }
 }
 
-/// Handles notification delivery + taps. Kept tiny: banners show even while
-/// the app is frontmost (the event may concern a non-selected workspace), and
-/// a tap activates the app and selects the originating workspace.
+/// Handles notification delivery + taps. Foreground banners show when the
+/// event concerns a workspace other than the one on screen (`shouldPresent`
+/// suppresses the selected pod's — its terminal is already visible), and a
+/// tap activates the app and selects the originating workspace.
 private final class NotifierDelegate: NSObject, UNUserNotificationCenterDelegate {
     private let onSelect: @MainActor (String) -> Void
+    private let shouldPresent: @MainActor (String?) -> Bool
 
-    init(onSelect: @escaping @MainActor (String) -> Void) {
+    init(
+        onSelect: @escaping @MainActor (String) -> Void,
+        shouldPresent: @escaping @MainActor (String?) -> Bool
+    ) {
         self.onSelect = onSelect
+        self.shouldPresent = shouldPresent
     }
 
     func userNotificationCenter(
@@ -66,7 +76,11 @@ private final class NotifierDelegate: NSObject, UNUserNotificationCenterDelegate
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .sound])
+        let podID = notification.request.content.userInfo["podID"] as? String
+        DispatchQueue.main.async {
+            let show = MainActor.assumeIsolated { self.shouldPresent(podID) }
+            completionHandler(show ? [.banner, .sound] : [])
+        }
     }
 
     func userNotificationCenter(

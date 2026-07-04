@@ -59,11 +59,18 @@ final class AppModel: ObservableObject {
         }
         startNotifyListener()
         Notifier.requestPermission()
-        // Clicking a notification switches to the workspace it came from.
-        Notifier.onTap { [weak self] podID in
-            guard let self, byID[podID] != nil else { return }
-            select(podID)
-        }
+        // Clicking a notification switches to the workspace it came from;
+        // foreground banners are suppressed for the pod already on screen.
+        Notifier.install(
+            onTap: { [weak self] podID in
+                guard let self, byID[podID] != nil else { return }
+                select(podID)
+            },
+            shouldPresent: { [weak self] podID in
+                guard let self, let podID else { return true }
+                return !(podID == selectedID && NSApp.isActive)
+            }
+        )
     }
 
     /// Skip status polling for hidden workspaces — but never the selected one,
@@ -200,6 +207,10 @@ final class AppModel: ObservableObject {
     // MARK: - Sidebar actions
 
     func select(_ id: String) {
+        // A hidden pod resumes status polling when selected; its cached state
+        // is stale, so re-baseline silently instead of firing a catch-up
+        // start/stop notification for a long-past transition.
+        if hidden.contains(id) { lastDefinitiveState[id] = nil }
         selectedID = id
         badges.remove(id)
     }
@@ -209,7 +220,11 @@ final class AppModel: ObservableObject {
         hidden.append(id); persist()
     }
 
-    func unhide(_ id: String) { hidden.removeAll { $0 == id }; persist() }
+    func unhide(_ id: String) {
+        lastDefinitiveState[id] = nil // resumes polling — re-baseline silently
+        hidden.removeAll { $0 == id }
+        persist()
+    }
     func beginRename(_ id: String) { renaming = id }
 
     func setAlias(_ id: String, _ name: String) {
@@ -295,26 +310,38 @@ final class AppModel: ObservableObject {
         let r = runner
         DispatchQueue.global(qos: .userInitiated).async {
             let url = SSH.zedRemoteURL(podID: id, workdir: SSH.workdir(podID: id))
-            if let cli = Self.zedCLI() {
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: cli)
-                proc.arguments = [url]
-                do {
-                    try proc.run()
-                    proc.waitUntilExit()
-                    if proc.terminationStatus == 0 {
-                        Log.write("zed: opened \(url) via \(cli)")
-                        return
-                    }
-                    Log.write("zed: \(cli) exit \(proc.terminationStatus) for \(url) — falling back to devpod")
-                } catch {
-                    Log.write("zed: \(cli) not runnable (\(error)) — falling back to devpod")
-                }
-            } else {
+            guard let cli = Self.zedCLI() else {
                 Log.write("zed: cli not found — falling back to devpod")
+                Self.openViaDevpod(id, runner: r)
+                return
             }
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: cli)
+            proc.arguments = [url]
+            // Observe the exit asynchronously — a hung zed process must not
+            // pin a shared global-QoS worker the way a blocking wait would.
+            proc.terminationHandler = { p in
+                if p.terminationStatus == 0 {
+                    Log.write("zed: opened \(url) via \(cli)")
+                } else {
+                    Log.write("zed: \(cli) exit \(p.terminationStatus) for \(url) — falling back to devpod")
+                    Self.openViaDevpod(id, runner: r)
+                }
+            }
+            do {
+                try proc.run()
+            } catch {
+                Log.write("zed: \(cli) not runnable (\(error)) — falling back to devpod")
+                Self.openViaDevpod(id, runner: r)
+            }
+        }
+    }
+
+    /// Legacy fallback: `devpod up --ide zed` (slow — re-runs the up flow).
+    private nonisolated static func openViaDevpod(_ id: String, runner: CommandRunning) {
+        DispatchQueue.global(qos: .userInitiated).async {
             guard (try? Devpod.validateIde("zed")) != nil else { return }
-            _ = try? r.run(Devpod.ideArgs(id, ide: "zed"))
+            _ = try? runner.run(Devpod.ideArgs(id, ide: "zed"))
         }
     }
 
