@@ -143,6 +143,7 @@ private struct MainPane: View {
             ForEach(Array(panes.enumerated()), id: \.element.id) { i, pane in
                 TerminalTab(
                     number: i + 1,
+                    state: pane.state,
                     isActive: pane.id == activeID,
                     onSelect: { model.setActivePane(pid, paneID: pane.id) },
                     onClose: { model.closeTerminal(pid, paneID: pane.id) }
@@ -194,15 +195,26 @@ private struct MainPane: View {
 
 /// One terminal tab, macOS-native style: the close × sits on the LEFT edge and
 /// only appears while the tab is hovered (like Safari/Terminal tabs). A
-/// mirrored empty slot on the right keeps the tab number optically centered.
+/// mirrored empty slot on the right keeps the title optically centered.
+/// Titled by the shell's working directory (reported over OSC 7 by the
+/// DevSpace shell integration in the pod) with the tab number as fallback
+/// until the first prompt reports in.
 private struct TerminalTab: View {
     let number: Int
+    @ObservedObject var state: TerminalViewState
     let isActive: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
     @State private var hovering = false
 
     private static let closeSlot: CGFloat = 16
+
+    /// Last path component of the shell's cwd; "/" stays "/".
+    private var title: String {
+        guard let wd = state.workingDirectory, !wd.isEmpty else { return "\(number)" }
+        let name = URL(fileURLWithPath: wd).lastPathComponent
+        return name.isEmpty ? wd : name
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -217,8 +229,11 @@ private struct TerminalTab: View {
             .opacity(hovering ? 1 : 0)
             .help("Close this terminal")
             Spacer(minLength: 0)
-            Text("\(number)")
+            Text(title)
                 .font(.system(size: 11, weight: isActive ? .semibold : .regular))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(state.workingDirectory ?? "Terminal \(number)")
             Spacer(minLength: 0)
             Color.clear.frame(width: Self.closeSlot, height: Self.closeSlot)
         }

@@ -120,6 +120,12 @@ final class AppModel: ObservableObject {
             } catch {
                 Log.write("inject: FAILED pod=\(id): \(error)")
             }
+            do {
+                try ShellIntegration.inject(r, podID: id)
+                Log.write("inject: shell integration (OSC 7) written to pod=\(id)")
+            } catch {
+                Log.write("inject: shell integration FAILED pod=\(id): \(error)")
+            }
         }
     }
 
