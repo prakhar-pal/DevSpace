@@ -115,7 +115,12 @@ private struct MainPane: View {
             switch model.phase(of: pid) {
             case .starting: logHeader("Starting \(model.name(pid))…")
             case .shuttingDown: logHeader("\(model.name(pid)) — shutting down…")
-            case .terminal: tabBar(pid: pid, panes: panes, activeID: activeID)
+            // The tab strip only appears once a second terminal exists — a
+            // single tab needs no chrome (⌘T / right-click → New Terminal
+            // create the second one).
+            case .terminal where panes.count > 1:
+                tabBar(pid: pid, panes: panes, activeID: activeID)
+            case .terminal: EmptyView()
             case .none: EmptyView()
             }
             // All tabs stay mounted; only the active one is visible, so
@@ -132,10 +137,12 @@ private struct MainPane: View {
 
     /// Slim terminal tab strip: numbered tabs (with a close × when there's
     /// more than one) and a + that opens another shell to the same pod (⌘T).
+    /// Tabs flex — they share the row width equally (the + stays fixed-size).
     private func tabBar(pid: String, panes: [TerminalPaneModel], activeID: UUID?) -> some View {
         HStack(spacing: 4) {
             ForEach(Array(panes.enumerated()), id: \.element.id) { i, pane in
                 HStack(spacing: 4) {
+                    Spacer(minLength: 0)
                     Text("\(i + 1)")
                         .font(.system(size: 11, weight: pane.id == activeID ? .semibold : .regular))
                     if panes.count > 1 {
@@ -149,9 +156,11 @@ private struct MainPane: View {
                         .foregroundStyle(.secondary)
                         .help("Close this terminal")
                     }
+                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
+                .frame(maxWidth: .infinity)
                 .background(pane.id == activeID ? Color(white: 0.27) : .clear)
                 .clipShape(RoundedRectangle(cornerRadius: 5))
                 .contentShape(Rectangle())
@@ -168,7 +177,6 @@ private struct MainPane: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .help("New terminal (⌘T)")
-            Spacer()
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
