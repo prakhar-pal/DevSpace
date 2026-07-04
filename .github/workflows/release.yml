@@ -56,7 +56,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          eval "$(scripts/next-version.sh)"   # sets bump, version
+          out="$(scripts/next-version.sh)" || { echo "next-version.sh failed"; exit 1; }
+          eval "$out"   # sets bump, version
+          # Guard against a partial/failed computation proceeding with an
+          # empty version (would commit/tag "v").
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "invalid computed version: '${version}'"; exit 1 ;;
+          esac
           if [ "$bump" = "none" ]; then
             echo "Nothing to release."
             exit 0
@@ -67,8 +74,12 @@ jobs:
           git add Info.plist CHANGELOG.md
           git commit -m "chore: release v${version}"
           git push --force origin release/main
-          if gh pr view release/main --json number >/dev/null 2>&1; then
-            gh pr edit release/main --title "chore: release v${version}"
+          # `gh pr view release/main` resolves the branch's most recent PR even
+          # when it's MERGED/CLOSED, which would retitle a dead PR and never
+          # open a new one — look up OPEN PRs for the head branch explicitly.
+          open_pr="$(gh pr list --head release/main --state open --json number --jq '.[0].number')"
+          if [ -n "$open_pr" ]; then
+            gh pr edit "$open_pr" --title "chore: release v${version}"
           else
             gh pr create --base main --head release/main \
               --title "chore: release v${version}" \
