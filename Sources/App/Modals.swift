@@ -75,7 +75,7 @@ struct GuideSheet: View {
                         row("Copy / paste", "⌘C copies the selection, ⌘V pastes. URLs are ⌘-clickable.")
                         row("Newline", "⇧Enter inserts a newline without sending.")
                         row("Reload session", "⌘R, or right-click a running workspace → Reload SSH Session.")
-                        row("Multiple terminals", "⌘T (or right-click → New Terminal) opens another shell to the same pod; the tab strip appears once a second terminal is open. Closing the last one stops the pod; extra tabs just close.")
+                        row("Multiple terminals", "⌘T (or right-click → New Terminal) opens another shell to the same pod; the tab strip appears once a second terminal is open. Tabs are titled by the shell's current folder. Closing the last one stops the pod; extra tabs just close.")
                     }
                     section("Organize the sidebar") {
                         row("Reorder", "Right-click → Move Up / Move Down (or ⌘⌥↑ / ⌘⌥↓) — the order is saved.")
