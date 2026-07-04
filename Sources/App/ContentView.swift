@@ -18,6 +18,9 @@ struct ContentView: View {
         }
         .frame(minWidth: 900, minHeight: 600)
         .preferredColorScheme(.dark)
+        // Title bar shows "N · workspace" for the selection (N = its ⌘N
+        // sequence number in the visible sidebar list).
+        .navigationTitle(model.windowTitle)
         .onAppear { model.installKeyMonitor() }
         .sheet(isPresented: Binding(
             get: { model.renaming != nil },
