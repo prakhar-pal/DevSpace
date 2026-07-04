@@ -49,6 +49,18 @@ public enum SidebarLayout {
         return (visible, hiddenWs)
     }
 
+    /// Move `id` by `delta` steps (-1 = up, +1 = down) within a visible-ids
+    /// list. Clamped at the edges; unknown ids are a no-op.
+    public static func moveVisible(_ ids: [String], id: String, delta: Int) -> [String] {
+        guard let i = ids.firstIndex(of: id) else { return ids }
+        let j = min(max(i + delta, 0), ids.count - 1)
+        guard j != i else { return ids }
+        var out = ids
+        out.remove(at: i)
+        out.insert(id, at: j)
+        return out
+    }
+
     /// Rebuild the master `order` after the visible rows were reordered (e.g. by
     /// a List move), leaving hidden ids in their original slots.
     public static func reorderVisible(

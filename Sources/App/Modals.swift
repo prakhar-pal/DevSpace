@@ -55,6 +55,7 @@ struct GuideSheet: View {
                         row("⌘1…⌘9", "Jump to the Nth visible workspace.")
                         row("⌘B", "Toggle the sidebar to give the terminal more room.")
                         row("⌘R", "Reload the selected workspace's SSH session.")
+                        row("⌘⌥↑ / ⌘⌥↓", "Move the selected workspace up / down in the sidebar.")
                         row("Esc", "Close this guide.")
                     }
                     section("Workspaces") {
@@ -73,7 +74,7 @@ struct GuideSheet: View {
                         row("Reload session", "⌘R, or right-click a running workspace → Reload SSH Session.")
                     }
                     section("Organize the sidebar") {
-                        row("Reorder", "Drag workspaces up or down — the order is saved.")
+                        row("Reorder", "Right-click → Move Up / Move Down (or ⌘⌥↑ / ⌘⌥↓) — the order is saved.")
                         row("Rename", "Right-click → Set friendly name… The real ID is untouched.")
                         row("Hide / show", "Right-click → Hide tucks a workspace into the Hidden section; Show brings it back.")
                         row("Open in Zed", "Right-click → Open in Zed launches the Zed editor in the workspace.")
