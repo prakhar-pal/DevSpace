@@ -48,24 +48,25 @@ private struct MainPane: View {
         ZStack {
             Color(red: 0.067, green: 0.067, blue: 0.067) // #111
 
-            // Keep every pane mounted (only the selected one visible) so SSH
-            // sessions and scrollback survive switching workspaces.
+            // Keep every pane of every pod mounted (only the selected pod's
+            // active tab visible) so SSH sessions and scrollback survive
+            // switching workspaces and tabs.
             ForEach(Array(model.panes.keys), id: \.self) { pid in
-                if let pane = model.panes[pid] {
-                    paneContainer(pid: pid, pane: pane)
+                if !(model.panes[pid] ?? []).isEmpty {
+                    paneContainer(pid: pid)
                         .opacity(pid == model.selectedID ? 1 : 0)
                         .allowsHitTesting(pid == model.selectedID)
-                        .id(ObjectIdentifier(pane))
                 }
             }
 
             overlay
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Move keyboard focus to the selected workspace's terminal whenever the
-        // selection changes or a pane is (re)created.
+        // Move keyboard focus to the selected workspace's active terminal
+        // whenever the selection, tab set, or active tab changes.
         .onChange(of: model.selectedID) { focusSelectedTerminal() }
-        .onChange(of: Set(model.panes.keys)) { focusSelectedTerminal() }
+        .onChange(of: model.panes.mapValues { $0.map(\.id) }) { focusSelectedTerminal() }
+        .onChange(of: model.activePane) { focusSelectedTerminal() }
         .onAppear { focusSelectedTerminal() }
     }
 
@@ -78,7 +79,7 @@ private struct MainPane: View {
     /// pane by its `TerminalController` identity, and retry briefly because the
     /// surface NSView may not be in the window yet right after a pane is created.
     private func focusSelectedTerminal(attempt: Int = 0) {
-        guard let sel = model.selectedID, let pane = model.panes[sel] else { return }
+        guard let sel = model.selectedID, let pane = model.activeModel(sel) else { return }
         let controller = pane.state.controller
         if let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }),
            let view = Self.terminalView(in: window.contentView, controller: controller)
@@ -107,20 +108,77 @@ private struct MainPane: View {
         return nil
     }
 
-    @ViewBuilder private func paneContainer(pid: String, pane: TerminalPaneModel) -> some View {
+    @ViewBuilder private func paneContainer(pid: String) -> some View {
+        let panes = model.panes[pid] ?? []
+        let activeID = model.activeModel(pid)?.id
         VStack(spacing: 0) {
             switch model.phase(of: pid) {
             case .starting: logHeader("Starting \(model.name(pid))…")
             case .shuttingDown: logHeader("\(model.name(pid)) — shutting down…")
-            default: EmptyView()
+            case .terminal: tabBar(pid: pid, panes: panes, activeID: activeID)
+            case .none: EmptyView()
             }
-            TerminalPaneView(model: pane)
+            // All tabs stay mounted; only the active one is visible, so
+            // background shells keep running and keep their scrollback.
+            ZStack {
+                ForEach(panes) { pane in
+                    TerminalPaneView(model: pane)
+                        .opacity(pane.id == activeID ? 1 : 0)
+                        .allowsHitTesting(pane.id == activeID)
+                }
+            }
         }
+    }
+
+    /// Slim terminal tab strip: numbered tabs (with a close × when there's
+    /// more than one) and a + that opens another shell to the same pod (⌘T).
+    private func tabBar(pid: String, panes: [TerminalPaneModel], activeID: UUID?) -> some View {
+        HStack(spacing: 4) {
+            ForEach(Array(panes.enumerated()), id: \.element.id) { i, pane in
+                HStack(spacing: 4) {
+                    Text("\(i + 1)")
+                        .font(.system(size: 11, weight: pane.id == activeID ? .semibold : .regular))
+                    if panes.count > 1 {
+                        Button {
+                            model.closeTerminal(pid, paneID: pane.id)
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 7, weight: .bold))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Close this terminal")
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(pane.id == activeID ? Color(white: 0.27) : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+                .onTapGesture { model.setActivePane(pid, paneID: pane.id) }
+            }
+            Button {
+                model.newTerminal(pid)
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("New terminal (⌘T)")
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(white: 0.1))
+        .overlay(Divider(), alignment: .bottom)
     }
 
     @ViewBuilder private var overlay: some View {
         if let sel = model.selectedID {
-            if model.panes[sel] == nil, let w = model.byID[sel], w.state != "Running" {
+            if (model.panes[sel] ?? []).isEmpty, let w = model.byID[sel], w.state != "Running" {
                 ActionPanelView(
                     workspace: w,
                     displayName: model.name(sel),

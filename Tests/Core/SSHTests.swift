@@ -16,6 +16,14 @@ final class SSHTests: XCTestCase {
         XCTAssertEqual(SSH.listenerPort, 17865)
         XCTAssertEqual(SSH.podForwardPort, 8765)
     }
+
+    func testSecondaryTerminalSkipsReverseTunnel() {
+        let args = SSH.args(podID: "wc-1", tunnel: false)
+        XCTAssertFalse(args.contains("-R"))
+        XCTAssertEqual(args.last, "wc-1.devpod")
+        // The default (primary) still carries the tunnel.
+        XCTAssertTrue(SSH.args(podID: "wc-1").contains("-R"))
+    }
 }
 
 // The `zed ssh://…` remote-open path: workdir parsing from the devpod-managed

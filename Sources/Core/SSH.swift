@@ -15,8 +15,12 @@ public enum SSH {
     /// `-o SetEnv=TERM=…` since container sshd often lacks `AcceptEnv TERM`.
     public static let remoteTerm = "xterm-256color"
 
-    public static func args(podID: String) -> [String] {
-        [
+    /// `tunnel: false` skips the reverse notification tunnel — used by the
+    /// second and later terminals of a pod, where the primary session already
+    /// holds the remote port (a second bind would fail and print a warning
+    /// into the terminal).
+    public static func args(podID: String, tunnel: Bool = true) -> [String] {
+        var args = [
             "-tt",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
@@ -24,9 +28,12 @@ public enum SSH {
             "-o", "ServerAliveInterval=5",
             "-o", "ServerAliveCountMax=3",
             "-o", "SetEnv=TERM=\(remoteTerm)",
-            "-R", "\(podForwardPort):localhost:\(listenerPort)",
-            "\(podID).devpod",
         ]
+        if tunnel {
+            args += ["-R", "\(podForwardPort):localhost:\(listenerPort)"]
+        }
+        args.append("\(podID).devpod")
+        return args
     }
 
     // MARK: - Remote workspace folder (for `zed ssh://…`)
