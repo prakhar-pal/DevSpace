@@ -28,4 +28,51 @@ public enum SSH {
             "\(podID).devpod",
         ]
     }
+
+    // MARK: - Remote workspace folder (for `zed ssh://…`)
+
+    /// The workspace folder inside the pod, parsed from the `--workdir "…"`
+    /// devpod bakes into the host alias' ProxyCommand in ~/.ssh/config:
+    ///
+    ///   Host wc-1.devpod
+    ///     ProxyCommand "…/devpod" ssh --stdio … wc-1 --workdir "/workspace"
+    ///
+    /// Cheap and local — no round-trip to the pod. Returns nil when the alias
+    /// or workdir is absent (callers fall back to the devpod default).
+    public static func parseWorkdir(sshConfig: String, podID: String) -> String? {
+        var inBlock = false
+        for line in sshConfig.split(separator: "\n", omittingEmptySubsequences: false) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.lowercased().hasPrefix("host ") {
+                inBlock = t.dropFirst(5).trimmingCharacters(in: .whitespaces) == "\(podID).devpod"
+                continue
+            }
+            guard inBlock, t.hasPrefix("ProxyCommand"), let r = t.range(of: "--workdir") else { continue }
+            let rest = t[r.upperBound...].trimmingCharacters(in: .whitespaces)
+            if rest.hasPrefix("\"") {
+                let inner = rest.dropFirst()
+                if let end = inner.firstIndex(of: "\"") { return String(inner[..<end]) }
+            } else if let word = rest.split(separator: " ").first {
+                return String(word)
+            }
+        }
+        return nil
+    }
+
+    /// `ssh://<id>.devpod/<workdir>` — the URL `zed` opens a remote folder
+    /// with. The host alias carries user + ProxyCommand via ~/.ssh/config, so
+    /// no credentials appear here.
+    public static func zedRemoteURL(podID: String, workdir: String) -> String {
+        let path = workdir.hasPrefix("/") ? workdir : "/\(workdir)"
+        return "ssh://\(podID).devpod\(path)"
+    }
+
+    /// Workdir for a pod from the user's ~/.ssh/config (devpod default
+    /// "/workspace" when unavailable).
+    public static func workdir(podID: String) -> String {
+        let config = (try? String(
+            contentsOfFile: NSHomeDirectory() + "/.ssh/config", encoding: .utf8
+        )) ?? ""
+        return parseWorkdir(sshConfig: config, podID: podID) ?? "/workspace"
+    }
 }

@@ -166,8 +166,12 @@ private struct WorkspaceRow: View {
         if model.opened.contains(workspace.id) {
             Button("Reload SSH Session") { model.reload(workspace.id) }
         }
-        Divider()
-        Button("Open in Zed") { model.openInZed(workspace.id) }
+        // Only for running pods: the remote open rides the live SSH alias, and
+        // opening a stopped pod's folder isn't possible without starting it.
+        if workspace.state == "Running" {
+            Divider()
+            Button("Open in Zed") { model.openInZed(workspace.id) }
+        }
         Divider()
         if isHidden {
             Button("Show") { model.unhide(workspace.id) }
