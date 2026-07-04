@@ -57,6 +57,7 @@ struct GuideSheet: View {
                         row("⌘R", "Reload the selected workspace's SSH session.")
                         row("⌘O", "Open the selected workspace's folder in Zed.")
                         row("⌘T", "Open another terminal tab for the selected workspace.")
+                        row("⌘⇧[ / ⌘⇧]", "Switch to the previous / next terminal tab.")
                         row("⌘⌥↑ / ⌘⌥↓", "Move the selected workspace up / down in the sidebar.")
                         row("Esc", "Close this guide.")
                     }

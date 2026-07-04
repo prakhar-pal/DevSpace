@@ -414,6 +414,13 @@ final class AppModel: ObservableObject {
         activePane[id] = paneID
     }
 
+    /// Switch to the next (+1) or previous (-1) terminal tab, wrapping around.
+    func cycleTab(_ id: String, by delta: Int) {
+        guard let list = panes[id], list.count > 1 else { return }
+        let idx = list.firstIndex { $0.id == activePane[id] } ?? 0
+        activePane[id] = list[(idx + delta + list.count) % list.count].id
+    }
+
     /// The pane the pod's view should show (its active tab).
     func activeModel(_ id: String) -> TerminalPaneModel? {
         guard let list = panes[id], !list.isEmpty else { return nil }
@@ -506,6 +513,21 @@ final class AppModel: ObservableObject {
             let down = Character(UnicodeScalar(NSDownArrowFunctionKey)!)
             if let c = chars.first, c == up || c == down {
                 if let id = selectedID { move(id, by: c == up ? -1 : 1) }
+                return nil
+            }
+            return event
+        }
+
+        // ⌘⇧[ / ⌘⇧] — previous / next terminal tab (macOS tab convention).
+        // charactersIgnoringModifiers ignores every modifier EXCEPT Shift, so
+        // with ⌘⇧ held it yields "{"/"}"; derive the true unshifted key the
+        // way libghostty does (characters(byApplyingModifiers: [])).
+        if flags == [.command, .shift], renaming == nil, !guideOpen {
+            let unshifted = event.characters(byApplyingModifiers: []) ?? chars
+            if unshifted == "[" || unshifted == "]" {
+                if let id = selectedID, phase(of: id) == .terminal {
+                    cycleTab(id, by: unshifted == "]" ? 1 : -1)
+                }
                 return nil
             }
             return event
