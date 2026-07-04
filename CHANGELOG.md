@@ -1,5 +1,29 @@
 # dev-space
 
+## v0.5.0 - 2026-07-04
+
+### Features
+- feat(terminal): title tabs with the shell's working directory (43b5714)
+- feat(shortcuts): add Cmd+Shift+[ / Cmd+Shift+] to switch terminal tabs (a28e1cc)
+- feat(terminal): support multiple terminal tabs per devpod workspace (dca3be9)
+- feat(shortcuts): add Cmd+O to open the selected workspace's folder in Zed (852380b)
+- feat(notify): notify on devpod start/stop and switch workspace on notification click (7016a3b)
+- feat(window): show workspace sequence number and name in the window title (b030e6c)
+- feat(shortcuts): add Cmd+R to reload the selected workspace's SSH session (0b05b59)
+
+### Fixes
+- fix(terminal): macOS-native tab close button (cef4935)
+- fix(notify,zed): address stack review findings (dff34b2)
+- fix(terminal): tabs share the strip width equally (60ebd83)
+- fix(terminal): show the tab strip only when more than one tab is open (2d55ab1)
+- fix(sidebar): add explicit Move Up/Down workspace reordering (fd5ed40)
+- fix(zed): open the workspace folder remotely instead of devpod up --ide zed (e179381)
+
+### Other
+- ci(release): fix release-PR lookup to consider only open PRs (346a60a)
+- chore: bundle version calculation (3773e47)
+
+
 ## v0.4.0 - 2026-07-02
 
 ### Features
