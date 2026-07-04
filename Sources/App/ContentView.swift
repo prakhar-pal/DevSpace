@@ -115,7 +115,12 @@ private struct MainPane: View {
             switch model.phase(of: pid) {
             case .starting: logHeader("Starting \(model.name(pid))…")
             case .shuttingDown: logHeader("\(model.name(pid)) — shutting down…")
-            case .terminal: tabBar(pid: pid, panes: panes, activeID: activeID)
+            // The tab strip only appears once a second terminal exists — a
+            // single tab needs no chrome (⌘T / right-click → New Terminal
+            // create the second one).
+            case .terminal where panes.count > 1:
+                tabBar(pid: pid, panes: panes, activeID: activeID)
+            case .terminal: EmptyView()
             case .none: EmptyView()
             }
             // All tabs stay mounted; only the active one is visible, so
