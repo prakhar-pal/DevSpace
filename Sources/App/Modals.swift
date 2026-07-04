@@ -54,6 +54,7 @@ struct GuideSheet: View {
                     section("Keyboard shortcuts") {
                         row("⌘1…⌘9", "Jump to the Nth visible workspace.")
                         row("⌘B", "Toggle the sidebar to give the terminal more room.")
+                        row("⌘R", "Reload the selected workspace's SSH session.")
                         row("Esc", "Close this guide.")
                     }
                     section("Workspaces") {
@@ -69,7 +70,7 @@ struct GuideSheet: View {
                         row("Auto-connect", "Running workspaces SSH in automatically and reconnect when the network returns.")
                         row("Copy / paste", "⌘C copies the selection, ⌘V pastes. URLs are ⌘-clickable.")
                         row("Newline", "⇧Enter inserts a newline without sending.")
-                        row("Reload session", "Right-click a running workspace → Reload SSH Session.")
+                        row("Reload session", "⌘R, or right-click a running workspace → Reload SSH Session.")
                     }
                     section("Organize the sidebar") {
                         row("Reorder", "Drag workspaces up or down — the order is saved.")

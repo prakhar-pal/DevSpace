@@ -321,6 +321,15 @@ final class AppModel: ObservableObject {
             sidebarOpen.toggle()
             return nil
         }
+        // Cmd+R: reconnect the selected workspace's SSH shell (same action as
+        // the context menu's "Reload SSH Session") — only meaningful when a
+        // session is actually open.
+        if chars == "r" {
+            if let id = selectedID, phase(of: id) == .terminal {
+                reload(id)
+            }
+            return nil // consume even when a no-op so the terminal never sees ⌘R
+        }
         if let n = Int(chars), (1 ... 9).contains(n) {
             let visible = split.visible
             if n - 1 < visible.count {
