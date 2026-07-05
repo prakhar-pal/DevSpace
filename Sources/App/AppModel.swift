@@ -36,11 +36,9 @@ final class AppModel: ObservableObject {
     private let notifyToken: String
     private var listener: NotifyListener?
     private var layoutLoaded = false
-    /// Last *definitive* (Running/Stopped) state per pod, for start/stop event
-    /// notifications. Tracking only the definitive endpoints means transient
-    /// Loading/Busy/Unknown blips can't fire or swallow a transition.
-    private var lastDefinitiveState: [String: String] = [:]
-    private var statesBaselined = false
+    /// Start/stop notification gate: "stopped" fires on the observed
+    /// transition; "started" waits until this app has SSH'd into the workspace.
+    private var notifyGate = StateNotifyGate()
 
     init(runner: CommandRunning = DevpodCLI(), interval: TimeInterval = 5) {
         self.runner = runner
@@ -108,25 +106,42 @@ final class AppModel: ObservableObject {
     }
 
     /// Inject the Claude hooks over the tunnel after an SSH connect — off the
-    /// open path (it makes ssh round-trips) and best-effort.
+    /// open path (it makes ssh round-trips) and best-effort. Each injection is
+    /// itself a `devpod ssh` into the workspace, so a success doubles as the
+    /// proof-of-connectivity that releases the deferred "started" notification.
     private func injectHooks(_ id: String) {
-        guard !notifyToken.isEmpty else { return }
         let r = runner
         let token = notifyToken
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) {
-            do {
-                try Hooks.inject(r, podID: id, token: token)
-                Log.write("inject: hook written to pod=\(id)")
-            } catch {
-                Log.write("inject: FAILED pod=\(id): \(error)")
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) { [weak self] in
+            var sshOK = false
+            if token.isEmpty {
+                Log.write("inject: no token — skipping hook injection for pod=\(id)")
+            } else {
+                do {
+                    try Hooks.inject(r, podID: id, token: token)
+                    sshOK = true
+                    Log.write("inject: hook written to pod=\(id)")
+                } catch {
+                    Log.write("inject: FAILED pod=\(id): \(error)")
+                }
             }
             do {
                 try ShellIntegration.inject(r, podID: id)
+                sshOK = true
                 Log.write("inject: shell integration (OSC 7) written to pod=\(id)")
             } catch {
                 Log.write("inject: shell integration FAILED pod=\(id): \(error)")
             }
+            if sshOK {
+                DispatchQueue.main.async { self?.sshConfirmed(id) }
+            }
         }
+    }
+
+    /// We reached the pod's workspace over SSH — fire a pending "started"
+    /// notification, if the poller's transition is still waiting on it.
+    private func sshConfirmed(_ id: String) {
+        if notifyGate.confirmSSH(id) { emitStateEvent(id, "started") }
     }
 
     // MARK: - Poll updates
@@ -145,22 +160,22 @@ final class AppModel: ObservableObject {
     }
 
     /// Notify on definitive devpod state transitions (Stopped→Running and
-    /// Running→Stopped) observed by the poller. The first poll only baselines
-    /// (no launch-time noise), pods first seen mid-session baseline silently,
-    /// and the event is suppressed when the pod is selected while the app is
+    /// Running→Stopped) observed by the poller. The gate defers "started"
+    /// until this app has SSH'd into the workspace (see sshConfirmed(_:));
+    /// the event is suppressed when the pod is selected while the app is
     /// active — you're already looking at it (covers self-initiated actions,
     /// whose start/stop logs are on screen).
     private func notifyStateTransitions(_ views: [WorkspaceView]) {
-        defer { statesBaselined = true }
-        for w in views where w.state == "Running" || w.state == "Stopped" {
-            let old = lastDefinitiveState.updateValue(w.state, forKey: w.id)
-            guard statesBaselined, let old, old != w.state else { continue }
-            if w.id == selectedID, NSApp.isActive { continue }
-            let event = w.state == "Running" ? "started" : "stopped"
-            if w.id != selectedID { badges.insert(w.id) }
-            Notifier.notify(title: name(w.id), body: "Workspace \(event)", podID: w.id)
-            Log.write("notify: pod=\(w.id) \(event) (was \(old))")
+        for (id, event) in notifyGate.observe(views) {
+            emitStateEvent(id, event)
         }
+    }
+
+    private func emitStateEvent(_ id: String, _ event: String) {
+        if id == selectedID, NSApp.isActive { return }
+        if id != selectedID { badges.insert(id) }
+        Notifier.notify(title: name(id), body: "Workspace \(event)", podID: id)
+        Log.write("notify: pod=\(id) \(event)")
     }
 
     /// Mirror of the App.tsx lifecycle effects: auto-open running pods, drop
@@ -216,7 +231,7 @@ final class AppModel: ObservableObject {
         // A hidden pod resumes status polling when selected; its cached state
         // is stale, so re-baseline silently instead of firing a catch-up
         // start/stop notification for a long-past transition.
-        if hidden.contains(id) { lastDefinitiveState[id] = nil }
+        if hidden.contains(id) { notifyGate.reset(id) }
         selectedID = id
         badges.remove(id)
     }
@@ -227,7 +242,7 @@ final class AppModel: ObservableObject {
     }
 
     func unhide(_ id: String) {
-        lastDefinitiveState[id] = nil // resumes polling — re-baseline silently
+        notifyGate.reset(id) // resumes polling — re-baseline silently
         hidden.removeAll { $0 == id }
         persist()
     }
