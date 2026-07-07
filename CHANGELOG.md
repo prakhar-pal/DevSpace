@@ -1,5 +1,14 @@
 # dev-space
 
+## v0.5.1 - 2026-07-07
+
+### Fixes
+- fix: defer workspace-started notification until SSH into the pod succeeds (c707b18)
+
+### Other
+- build: add `make install` target for the release app (1d14de0)
+
+
 ## v0.5.0 - 2026-07-04
 
 ### Features
