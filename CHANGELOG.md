@@ -1,5 +1,14 @@
 # dev-space
 
+## v0.5.2 - 2026-07-07
+
+### Fixes
+- fix: don't open duplicate Zed windows for the same devpod folder (1c86ecf)
+
+### Other
+- docs: rewrite README for the native Swift app (4bd0abe)
+
+
 ## v0.5.1 - 2026-07-07
 
 ### Fixes
