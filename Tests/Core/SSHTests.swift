@@ -76,6 +76,31 @@ final class ZedRemoteTests: XCTestCase {
             "ssh://wc-1.devpod/my%20project"
         )
     }
+
+    // Real process-table lines captured while Zed had wc-2 open remotely.
+    private let zedMaster = "ssh -N -o ControlPersist=no -o ControlMaster=yes "
+        + "-o ControlPath=/var/folders/30/T/zed-ssh-sessionU9kVda/ssh.sock wc-2.devpod"
+    private let zedProxy = "ssh -o ControlMaster=no "
+        + "-o ControlPath=/var/folders/30/T/zed-ssh-sessionU9kVda/ssh.sock wc-2.devpod "
+        + "-T cd; env .zed_server/zed-remote-server-stable-1.9.0 proxy --identifier workspace-66"
+    private let devspaceSSH = "ssh -tt -o StrictHostKeyChecking=no -R 8765:localhost:17865 wc-2.devpod"
+
+    func testZedSessionActiveMatchesZedControlMasterForPod() {
+        let ps = [devspaceSSH, zedMaster, zedProxy].joined(separator: "\n")
+        XCTAssertTrue(SSH.zedSessionActive(psOutput: ps, podID: "wc-2"))
+    }
+
+    func testZedSessionActiveIgnoresOtherPodsAndPrefixIDs() {
+        let ps = [zedMaster, zedProxy].joined(separator: "\n")
+        XCTAssertFalse(SSH.zedSessionActive(psOutput: ps, podID: "wc-1"))
+        // "wc-2" session must not count for pod "wc-2a" (and vice versa).
+        XCTAssertFalse(SSH.zedSessionActive(psOutput: ps, podID: "wc-2a"))
+    }
+
+    func testZedSessionActiveIgnoresDevspaceOwnSSH() {
+        // DevSpace's own terminal ssh mentions the alias but is not a Zed session.
+        XCTAssertFalse(SSH.zedSessionActive(psOutput: devspaceSSH, podID: "wc-2"))
+    }
 }
 
 final class ActionArgsTests: XCTestCase {
