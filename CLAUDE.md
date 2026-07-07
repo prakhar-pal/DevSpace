@@ -30,6 +30,7 @@ make build-dev   # DEV build: assembles "DevSpace Dev.app" (amber icon, logging 
 make build       # RELEASE build: assembles "DevSpace.app"
 make test        # unit tests (swift test)
 make run         # build-dev then launch the app
+make install     # release build + install to $APP_INSTALL_LOCATION (default /Applications)
 make clean       # remove build output
 ```
 

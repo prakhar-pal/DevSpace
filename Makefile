@@ -10,7 +10,10 @@ LOG_PATH := $(CURDIR)/.tmp/devspace.log
 APP_DEV  := build/DevSpace Dev.app
 APP_REL  := build/DevSpace.app
 
-.PHONY: bootstrap build-dev build test run clean help
+# Where `make install` puts the release app (override: make install APP_INSTALL_LOCATION=~/Apps).
+APP_INSTALL_LOCATION ?= /Applications
+
+.PHONY: bootstrap build-dev build test run clean install help
 
 help:
 	@echo "DevSpace native build targets:"
@@ -18,6 +21,7 @@ help:
 	@echo "  make build      - Release build + assemble \"DevSpace.app\""
 	@echo "  make test       - run unit tests (swift test)"
 	@echo "  make run        - build-dev and launch the app"
+	@echo "  make install    - release build + install to \$$APP_INSTALL_LOCATION (default /Applications)"
 	@echo "  make clean      - remove build output"
 
 bootstrap:
@@ -38,6 +42,15 @@ run: build-dev
 	@pkill -x DevSpace 2>/dev/null || true
 	@sleep 0.3
 	open "$(APP_DEV)"
+
+install: build
+	@if pgrep -fq "$(APP_INSTALL_LOCATION)/DevSpace.app/Contents/MacOS/DevSpace"; then \
+	  echo "error: DevSpace.app at $(APP_INSTALL_LOCATION) is running — quit it first."; exit 1; \
+	fi
+	mkdir -p "$(APP_INSTALL_LOCATION)"
+	rm -rf "$(APP_INSTALL_LOCATION)/DevSpace.app"
+	ditto "$(APP_REL)" "$(APP_INSTALL_LOCATION)/DevSpace.app"
+	@echo "✓ installed $(APP_INSTALL_LOCATION)/DevSpace.app"
 
 clean:
 	swift package clean
