@@ -76,6 +76,19 @@ public enum SSH {
         return "ssh://\(podID).devpod\(encoded)"
     }
 
+    /// Whether Zed already has a remote session to this pod, judged from a
+    /// process table (`ps axww -o command=`). While a Zed window has the
+    /// project open it keeps ssh processes whose ControlPath lives under a
+    /// `zed-ssh-session…` temp dir and that target `<id>.devpod`; they exit
+    /// when the window closes (ControlPersist=no). Used to focus the existing
+    /// window instead of opening a duplicate. Substring-matching the full
+    /// alias ("wc-2.devpod") can't cross-match prefix ids ("wc-2a.devpod").
+    public static func zedSessionActive(psOutput: String, podID: String) -> Bool {
+        psOutput.split(separator: "\n").contains {
+            $0.contains("zed-ssh-session") && $0.contains("\(podID).devpod")
+        }
+    }
+
     /// Workdir for a pod from the user's ~/.ssh/config (devpod default
     /// "/workspace" when unavailable).
     public static func workdir(podID: String) -> String {

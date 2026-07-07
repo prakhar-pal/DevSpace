@@ -330,6 +330,14 @@ final class AppModel: ObservableObject {
         guard validID(id) else { return }
         let r = runner
         DispatchQueue.global(qos: .userInitiated).async {
+            // Zed opens a NEW window per `zed ssh://…` invocation, so repeated
+            // ⌘O/menu opens would pile up duplicates of the same folder. If
+            // Zed already holds a remote session to this pod, focus it instead.
+            if SSH.zedSessionActive(psOutput: Self.processTable(), podID: id) {
+                Log.write("zed: session for \(id) already open — activating Zed")
+                Self.activateZed()
+                return
+            }
             let url = SSH.zedRemoteURL(podID: id, workdir: SSH.workdir(podID: id))
             guard let cli = Self.zedCLI() else {
                 Log.write("zed: cli not found — falling back to devpod")
@@ -356,6 +364,34 @@ final class AppModel: ObservableObject {
                 Self.openViaDevpod(id, runner: r)
             }
         }
+    }
+
+    /// The current process table (`ps axww -o command=`), for detecting an
+    /// existing Zed remote session. Empty string on failure (treated as "no
+    /// session" — worst case we open the duplicate we would have opened anyway).
+    private nonisolated static func processTable() -> String {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["axww", "-o", "command="]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        do {
+            try proc.run()
+        } catch {
+            return ""
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Bring Zed to the front (the pod's project window is already open).
+    private nonisolated static func activateZed() {
+        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "dev.zed.Zed") else {
+            Log.write("zed: app bundle not found — cannot activate")
+            return
+        }
+        NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
     }
 
     /// Legacy fallback: `devpod up --ide zed` (slow — re-runs the up flow).
