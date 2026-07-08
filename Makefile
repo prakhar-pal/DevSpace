@@ -39,7 +39,9 @@ test:
 	swift test
 
 run: build-dev
-	@pkill -x DevSpace 2>/dev/null || true
+	@# Match by bundle path — `pkill -x DevSpace` would also kill the installed
+	@# production app (both bundles share the executable name).
+	@pkill -f "$(CURDIR)/$(APP_DEV)/Contents/MacOS/DevSpace" 2>/dev/null || true
 	@sleep 0.3
 	open "$(APP_DEV)"
 

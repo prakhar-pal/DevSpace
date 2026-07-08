@@ -43,6 +43,13 @@ killing/quitting a running release bundle (`DevSpace.app`)** — even when
 diagnosing a release-only failure. Dev builds (`make build-dev` / `make run`)
 and dev instances need no confirmation.
 
+**Never close the production app during development.** The installed release
+bundle (`DevSpace.app` at its install location) is the user's daily driver and
+must keep running while dev builds are tested alongside it. Both bundles
+share the executable name `DevSpace`, so `pkill -x DevSpace` kills BOTH —
+always match dev instances by bundle path:
+`pkill -f "build/DevSpace Dev.app"`.
+
 Dev vs prod are visually distinct: `scripts/assemble-app.sh` sets
 `CFBundleDisplayName` ("DevSpace Dev" vs "DevSpace") and the icon
 (`DevSpaceDev.icns` vs `DevSpace.icns`) per build configuration; the bundle id
