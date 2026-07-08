@@ -11,6 +11,8 @@ struct DevSpaceApp: App {
         // on PATH (e.g. launched from a terminal).
         PathEnv.repair()
         Log.write("DevSpace launched (logging enabled: \(Log.isEnabled))")
+        // Fix macOS dictation in the embedded terminal (see the patch's doc).
+        TerminalDictationPatch.install()
         // Construct the model eagerly (a `let`, not the deferred autoclosure
         // form) so AppModel.init — which starts the poll loop — runs at app
         // launch rather than waiting for the scene to install StateObject.
