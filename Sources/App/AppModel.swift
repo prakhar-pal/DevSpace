@@ -332,18 +332,24 @@ final class AppModel: ObservableObject {
         guard validID(id) else { return }
         let r = runner
         DispatchQueue.global(qos: .userInitiated).async {
-            // Zed opens a NEW window per `zed ssh://…` invocation, so repeated
-            // ⌘O/menu opens would pile up duplicates of the same folder. If
-            // Zed already holds a remote session to this pod, focus it instead.
-            if SSH.zedSessionActive(psOutput: Self.processTable(), podID: id) {
-                Log.write("zed: session for \(id) already open — activating Zed")
-                Self.activateZed()
-                return
-            }
+            // Always hand Zed the pod's URL: the CLI focuses the existing
+            // window when the project is already open (verified live — no
+            // duplicate workspace is created). App-level activation, the old
+            // dedupe, raised Zed's LAST-FOCUSED window, which could be a
+            // different pod's project (⌘O appeared to open the wrong
+            // workspace). The session check now only guards the fallbacks:
+            // re-running the devpod provision flow while a session exists is
+            // what duplicates windows.
+            let sessionActive = SSH.zedSessionActive(psOutput: Self.processTable(), podID: id)
             let url = SSH.zedRemoteURL(podID: id, workdir: SSH.workdir(podID: id))
             guard let cli = Self.zedCLI() else {
-                Log.write("zed: cli not found — falling back to devpod")
-                Self.openViaDevpod(id, runner: r)
+                if sessionActive {
+                    Log.write("zed: cli not found; session for \(id) already open — activating Zed")
+                    Self.activateZed()
+                } else {
+                    Log.write("zed: cli not found — falling back to devpod")
+                    Self.openViaDevpod(id, runner: r)
+                }
                 return
             }
             let proc = Process()
@@ -354,6 +360,9 @@ final class AppModel: ObservableObject {
             proc.terminationHandler = { p in
                 if p.terminationStatus == 0 {
                     Log.write("zed: opened \(url) via \(cli)")
+                } else if sessionActive {
+                    Log.write("zed: \(cli) exit \(p.terminationStatus) for \(url); session open — activating instead of devpod fallback")
+                    Self.activateZed()
                 } else {
                     Log.write("zed: \(cli) exit \(p.terminationStatus) for \(url) — falling back to devpod")
                     Self.openViaDevpod(id, runner: r)
@@ -362,8 +371,13 @@ final class AppModel: ObservableObject {
             do {
                 try proc.run()
             } catch {
-                Log.write("zed: \(cli) not runnable (\(error)) — falling back to devpod")
-                Self.openViaDevpod(id, runner: r)
+                if sessionActive {
+                    Log.write("zed: \(cli) not runnable (\(error)); session open — activating instead of devpod fallback")
+                    Self.activateZed()
+                } else {
+                    Log.write("zed: \(cli) not runnable (\(error)) — falling back to devpod")
+                    Self.openViaDevpod(id, runner: r)
+                }
             }
         }
     }
