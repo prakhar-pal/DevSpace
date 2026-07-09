@@ -215,12 +215,18 @@ final class AppModel: ObservableObject {
 
     func name(_ id: String) -> String { aliases[id] ?? id }
 
+    /// The bundle's display name — "DevSpaceDev" for dev builds, "DevSpace"
+    /// for release (set per-config by scripts/assemble-app.sh). Hardcoding
+    /// "DevSpace" here would mislabel the dev build's title bar.
+    private static let appDisplayName =
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "DevSpace"
+
     /// Window title: "N · name" for the selected workspace, where N is its
     /// 1-based position in the visible sidebar list (the same number ⌘N jumps
     /// to). Hidden-but-selected workspaces have no sequence number, so they
     /// show just the name; no selection falls back to the app name.
     var windowTitle: String {
-        guard let id = selectedID else { return "DevSpace" }
+        guard let id = selectedID else { return Self.appDisplayName }
         if let i = split.visible.firstIndex(where: { $0.id == id }) {
             return "\(i + 1) · \(name(id))"
         }

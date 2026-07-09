@@ -55,7 +55,7 @@ The in-app **Guide** (sidebar footer) lists everything.
 ## Build & install
 
 ```bash
-make build-dev   # DEV build: "DevSpace Dev.app" (amber icon, logging on)
+make build-dev   # DEV build: "DevSpaceDev.app" (amber icon, logging on)
 make run         # build-dev + launch
 make test        # unit tests (swift test)
 make build       # RELEASE build: "DevSpace.app"
@@ -70,7 +70,7 @@ running instance.
 Launch via LaunchServices — notification permissions depend on it:
 
 ```bash
-open "build/DevSpace Dev.app"
+open "build/DevSpaceDev.app"
 ```
 
 Notes:
