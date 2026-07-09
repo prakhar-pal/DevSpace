@@ -10,6 +10,8 @@ final class RunningDebouncerTests: XCTestCase {
         [id: .success(WorkspaceStatus(id: id, state: "Stopped"))]
     }
 
+    /// State after the filter, as Poller.merge would see it: a dropped entry
+    /// is nil (merge renders it as the non-definitive "Loading").
     private func state(_ out: [String: Result<WorkspaceStatus, DevpodError>], _ id: String) -> String? {
         if case let .success(s) = out[id] { return s.state }
         return nil
@@ -23,8 +25,10 @@ final class RunningDebouncerTests: XCTestCase {
     func testStoppedToRunningNeedsTwoConsecutiveFetches() {
         var d = RunningDebouncer()
         _ = d.filter(stopped("a"))
-        // First Running after Stopped is held back as Stopped…
-        XCTAssertEqual(state(d.filter(running("a")), "a"), "Stopped")
+        // First Running after Stopped is held back — the entry is dropped
+        // (renders as Loading), NOT rewritten to Stopped: a fabricated Stopped
+        // would close the terminal a self-initiated `devpod up` just opened.
+        XCTAssertNil(d.filter(running("a"))["a"])
         // …the second consecutive Running is accepted.
         XCTAssertEqual(state(d.filter(running("a")), "a"), "Running")
     }
@@ -33,10 +37,10 @@ final class RunningDebouncerTests: XCTestCase {
         // The k8s teardown flap: Stopped, one false Running, Stopped again.
         var d = RunningDebouncer()
         _ = d.filter(stopped("a"))
-        XCTAssertEqual(state(d.filter(running("a")), "a"), "Stopped") // blip held
+        XCTAssertNil(d.filter(running("a"))["a"]) // blip held
         XCTAssertEqual(state(d.filter(stopped("a")), "a"), "Stopped")
         // A later real start still needs two fetches (streak was reset).
-        XCTAssertEqual(state(d.filter(running("a")), "a"), "Stopped")
+        XCTAssertNil(d.filter(running("a"))["a"])
         XCTAssertEqual(state(d.filter(running("a")), "a"), "Running")
     }
 
@@ -50,10 +54,10 @@ final class RunningDebouncerTests: XCTestCase {
     func testNonDefinitiveStateBreaksTheRunningStreak() {
         var d = RunningDebouncer()
         _ = d.filter(stopped("a"))
-        XCTAssertEqual(state(d.filter(running("a")), "a"), "Stopped") // held
+        XCTAssertNil(d.filter(running("a"))["a"]) // held
         _ = d.filter(["a": .success(WorkspaceStatus(id: "a", state: "Busy"))])
         // The Busy broke the consecutive-Running streak: hold again.
-        XCTAssertEqual(state(d.filter(running("a")), "a"), "Stopped")
+        XCTAssertNil(d.filter(running("a"))["a"])
         XCTAssertEqual(state(d.filter(running("a")), "a"), "Running")
     }
 
@@ -69,7 +73,7 @@ final class RunningDebouncerTests: XCTestCase {
         var d = RunningDebouncer()
         _ = d.filter(stopped("a").merging(running("b")) { a, _ in a })
         let out = d.filter(running("a").merging(running("b")) { a, _ in a })
-        XCTAssertEqual(state(out, "a"), "Stopped") // a: held (was Stopped)
+        XCTAssertNil(out["a"])                     // a: held (was Stopped)
         XCTAssertEqual(state(out, "b"), "Running") // b: unaffected
     }
 }
