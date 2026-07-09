@@ -50,10 +50,12 @@ share the executable name `DevSpace`, so `pkill -x DevSpace` kills BOTH —
 always match dev instances by bundle path:
 `pkill -f "build/DevSpaceDev.app"`.
 
-Dev vs prod are visually distinct: `scripts/assemble-app.sh` sets
-`CFBundleDisplayName` ("DevSpaceDev" vs "DevSpace") and the icon
-(`DevSpaceDev.icns` vs `DevSpace.icns`) per build configuration; the bundle id
-(`com.prakharp.devspace`) and Swift module name (`DevSpace`) stay the same.
+Dev vs prod are fully distinct to macOS: `scripts/assemble-app.sh` sets
+`CFBundleDisplayName` ("DevSpaceDev" vs "DevSpace"), the icon
+(`DevSpaceDev.icns` vs `DevSpace.icns`), and the bundle id
+(`com.prakharp.devspace.dev` vs `com.prakharp.devspace`) per build
+configuration — separate ids keep LaunchServices/Notification Center/TCC
+identities apart. The Swift module name (`DevSpace`) stays the same.
 
 Built bundles:
 - Dev:     `build/DevSpaceDev.app`

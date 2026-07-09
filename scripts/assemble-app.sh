@@ -42,6 +42,15 @@ done
 "$PB" -c "Set :CFBundleName $DISPLAY" "$APP/Contents/Info.plist"
 "$PB" -c "Set :CFBundleIconFile $ICON" "$APP/Contents/Info.plist"
 
+# Dev builds get their own bundle id so macOS (LaunchServices, Notification
+# Center, TCC) treats them as a separate app from the installed production
+# DevSpace. With a shared id, notifications from EITHER bundle are labeled
+# with whichever copy registered the id most recently — prod banners showed
+# the dev name/icon after any dev build ran.
+if [ "$CONFIG" = "debug" ]; then
+    "$PB" -c "Set :CFBundleIdentifier com.prakharp.devspace.dev" "$APP/Contents/Info.plist"
+fi
+
 # CFBundleVersion (the build number shown as "Version X.Y.Z (N)" in the About
 # panel) is the total commit count — monotonically increasing and valid Apple
 # format, distinct from CFBundleShortVersionString (the marketing version the
