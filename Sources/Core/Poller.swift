@@ -143,13 +143,16 @@ public final class PollLoop: @unchecked Sendable {
         let stop = self.stop
         Thread.detachNewThread {
             var cache: [String: Result<WorkspaceStatus, DevpodError>] = [:]
+            // Applied per FRESH fetch (not per emit — each fetch is emitted
+            // twice) to suppress k8s' transient Running-after-stop reports.
+            var debouncer = RunningDebouncer()
             while !stop.isSet {
                 if let workspaces = try? Devpod.list(runner) {
                     emit(Poller.merge(workspaces, cache))
                     // Skip `devpod status` for excluded (hidden) workspaces.
                     let skip = excluded.snapshot()
                     let toFetch = workspaces.filter { !skip.contains($0.id) }
-                    cache = Poller.fetchStatuses(runner, toFetch)
+                    cache = debouncer.filter(Poller.fetchStatuses(runner, toFetch))
                     emit(Poller.merge(workspaces, cache))
                 }
                 Thread.sleep(forTimeInterval: interval)

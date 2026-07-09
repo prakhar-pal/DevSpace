@@ -40,7 +40,9 @@ final class AppModel: ObservableObject {
     /// transition; "started" waits until this app has SSH'd into the workspace.
     private var notifyGate = StateNotifyGate()
 
-    init(runner: CommandRunning = DevpodCLI(), interval: TimeInterval = 5) {
+    // 10s status polling: halves the devpod/kubectl load of 5s while keeping
+    // state changes (with the poller's 2-fetch revival debounce) under ~20s.
+    init(runner: CommandRunning = DevpodCLI(), interval: TimeInterval = 10) {
         self.runner = runner
         notifyToken = (try? Notify.loadOrCreateToken()) ?? ""
         loop = PollLoop(runner: runner, interval: interval, excluded: excluded)
