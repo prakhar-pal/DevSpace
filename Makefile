@@ -2,7 +2,7 @@
 #
 # Builds with `swift build` and hand-assembles the .app bundle (Ronin-style),
 # deliberately avoiding `xcodebuild` so no Xcode simulator components are needed.
-# The Swift project lives at the repo root; the legacy Tauri tree is under tauri/.
+# The Swift project lives at the repo root.
 
 SHELL := /bin/bash
 

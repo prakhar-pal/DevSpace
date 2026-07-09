@@ -3,9 +3,6 @@ node_modules/
 dist/
 .tmp
 
-# Legacy Tauri tree (under tauri/)
-tauri/src-tauri/target/
-
 # macOS native app (SwiftPM build output + assembled bundle)
 .build/
 build/
