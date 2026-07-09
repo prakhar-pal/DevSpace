@@ -6,8 +6,8 @@ status sidebar, start/stop/delete, an embedded `ssh <id>.devpod` terminal
 
 Rewritten from the original Tauri 2 (Rust) + React/TypeScript app — see
 `docs/adr/0001-rewrite-devspace-native-swift-libghostty.md`. The Swift project
-lives at the repo root; the legacy Tauri/React tree is retained under `tauri/`
-for reference (not built).
+lives at the repo root; the legacy Tauri/React tree was removed (it remains in
+git history before this commit).
 
 - App (`Sources/App/`): SwiftUI UI — `DevSpaceApp`, `ContentView`, `Sidebar`,
   `ActionPanel`, `TerminalPane`, `Modals`, `Notifier`, `AppModel` (the top-level

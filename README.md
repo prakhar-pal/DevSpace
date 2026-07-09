@@ -9,7 +9,7 @@ input without watching the terminal.
 
 Built with Swift / SwiftUI. Rewritten from a Tauri 2 (Rust + React) app — see
 [ADR 0001](docs/adr/0001-rewrite-devspace-native-swift-libghostty.md); the
-legacy tree is kept under `tauri/` for reference and is not built.
+legacy tree lives in git history.
 
 ## Features
 
