@@ -1,5 +1,14 @@
 # dev-space
 
+## v0.5.3 - 2026-07-09
+
+### Fixes
+- fix: make macOS dictation insert text into the embedded terminal (4fbcf53)
+
+### Other
+- chore: never kill the production app during development (0b42d16)
+
+
 ## v0.5.2 - 2026-07-07
 
 ### Fixes
