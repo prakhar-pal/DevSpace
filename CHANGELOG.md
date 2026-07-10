@@ -1,5 +1,18 @@
 # dev-space
 
+## v0.5.4 - 2026-07-10
+
+### Fixes
+- fix: hold debounced revivals as absent (Loading), not fabricated Stopped (f8a2998)
+- fix: ⌘O focuses the selected pod's Zed window, not the last-used one (04e7159)
+- fix: debounce k8s' false Running-after-stop status flips; poll every 10s (09d6597)
+
+### Other
+- build: give dev builds their own bundle id (com.prakharp.devspace.dev) (eea585e)
+- build: rename the dev build to DevSpaceDev and fix the title-bar name (b93825a)
+- chore: remove the legacy Tauri/React tree (4e5740e)
+
+
 ## v0.5.3 - 2026-07-09
 
 ### Fixes
