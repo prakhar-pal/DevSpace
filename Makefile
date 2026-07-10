@@ -7,7 +7,7 @@
 SHELL := /bin/bash
 
 LOG_PATH := $(CURDIR)/.tmp/devspace.log
-APP_DEV  := build/DevSpace Dev.app
+APP_DEV  := build/DevSpaceDev.app
 APP_REL  := build/DevSpace.app
 
 # Where `make install` puts the release app (override: make install APP_INSTALL_LOCATION=~/Apps).
@@ -17,7 +17,7 @@ APP_INSTALL_LOCATION ?= /Applications
 
 help:
 	@echo "DevSpace native build targets:"
-	@echo "  make build-dev  - Debug build + assemble \"DevSpace Dev.app\" (amber icon)"
+	@echo "  make build-dev  - Debug build + assemble \"DevSpaceDev.app\" (amber icon)"
 	@echo "  make build      - Release build + assemble \"DevSpace.app\""
 	@echo "  make test       - run unit tests (swift test)"
 	@echo "  make run        - build-dev and launch the app"
@@ -29,7 +29,7 @@ bootstrap:
 
 build-dev:
 	swift build --product DevSpaceApp
-	bash scripts/assemble-app.sh debug "DevSpace Dev" DevSpaceDev "$(LOG_PATH)"
+	bash scripts/assemble-app.sh debug "DevSpaceDev" DevSpaceDev "$(LOG_PATH)"
 
 build:
 	swift build -c release --product DevSpaceApp

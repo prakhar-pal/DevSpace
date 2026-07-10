@@ -26,7 +26,7 @@ git history before this commit).
 Builds are pure **SwiftPM** driven by the `Makefile` (no `xcodebuild`/`.xcodeproj`):
 
 ```bash
-make build-dev   # DEV build: assembles "DevSpace Dev.app" (amber icon, logging on)
+make build-dev   # DEV build: assembles "DevSpaceDev.app" (amber icon, logging on)
 make build       # RELEASE build: assembles "DevSpace.app"
 make test        # unit tests (swift test)
 make run         # build-dev then launch the app
@@ -35,7 +35,7 @@ make clean       # remove build output
 ```
 
 **During development always use `make build-dev` / `make run`** (the amber
-"DevSpace Dev" build with logging to `.tmp/devspace.log`). Use `make build`
+"DevSpaceDev" build with logging to `.tmp/devspace.log`). Use `make build`
 (release "DevSpace") only for producing a distributable bundle.
 
 **Always confirm with the user before running `make build` (release) or before
@@ -48,22 +48,22 @@ bundle (`DevSpace.app` at its install location) is the user's daily driver and
 must keep running while dev builds are tested alongside it. Both bundles
 share the executable name `DevSpace`, so `pkill -x DevSpace` kills BOTH —
 always match dev instances by bundle path:
-`pkill -f "build/DevSpace Dev.app"`.
+`pkill -f "build/DevSpaceDev.app"`.
 
 Dev vs prod are visually distinct: `scripts/assemble-app.sh` sets
-`CFBundleDisplayName` ("DevSpace Dev" vs "DevSpace") and the icon
+`CFBundleDisplayName` ("DevSpaceDev" vs "DevSpace") and the icon
 (`DevSpaceDev.icns` vs `DevSpace.icns`) per build configuration; the bundle id
 (`com.prakharp.devspace`) and Swift module name (`DevSpace`) stay the same.
 
 Built bundles:
-- Dev:     `build/DevSpace Dev.app`
+- Dev:     `build/DevSpaceDev.app`
 - Release: `build/DevSpace.app`
 
 Launch via LaunchServices (not the bare binary — macOS notifications/permissions
 depend on it):
 
 ```bash
-open "build/DevSpace Dev.app"
+open "build/DevSpaceDev.app"
 ```
 
 ## Environment notes
