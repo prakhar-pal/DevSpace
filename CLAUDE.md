@@ -89,7 +89,9 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
 
 ## Diagnostics
 
-- Runtime log (notify path, PTY lifecycle): `.tmp/devspace.log` (debug builds
+- Runtime log (notify path, PTY lifecycle): `.tmp/devspace.log` — a symlink
+  to `~/Library/Logs/DevSpaceDev.log`, kept outside the TCC-gated ~/Documents
+  so the ad-hoc dev build never blocks on a consent prompt (debug builds
   only — release builds write no log; controlled by the `DevSpaceLogPath`
   Info.plist key the assembly script sets for Debug).
 - Manual notification trigger inside a pod: open the workspace in DevSpace, then
@@ -103,6 +105,7 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
   `git commit`/`git push`.
 - **Never make commits on the `main` branch.** Work on a feature branch.
 - **Use `.tmp/` for temporary files** (the project-root `.tmp`, which is
-  `.gitignore`d). Application logs go to `.tmp/devspace.log` (debug builds only).
+  `.gitignore`d). Application logs go to `.tmp/devspace.log` (a symlink to
+  `~/Library/Logs/DevSpaceDev.log`; debug builds only).
 - **Prefer commands that run inside the sandbox first**, and only bypass if
   blocked by standard sandbox constraints (e.g. the libghostty download).

@@ -6,7 +6,13 @@
 
 SHELL := /bin/bash
 
-LOG_PATH := $(CURDIR)/.tmp/devspace.log
+# The debug log lives OUTSIDE the repo: the repo sits under ~/Documents, which
+# is TCC-gated — the ad-hoc-signed dev build's code identity changes on every
+# rebuild, so macOS re-prompts for Documents access and the app's very first
+# Log.write blocks on the consent dialog (observed as a hang at launch).
+# ~/Library/Logs needs no consent; .tmp/devspace.log stays a symlink to it so
+# existing tail workflows keep working.
+LOG_PATH := $(HOME)/Library/Logs/DevSpaceDev.log
 APP_DEV  := build/DevSpaceDev.app
 APP_REL  := build/DevSpace.app
 
@@ -30,6 +36,7 @@ bootstrap:
 build-dev:
 	swift build --product DevSpaceApp
 	bash scripts/assemble-app.sh debug "DevSpaceDev" DevSpaceDev "$(LOG_PATH)"
+	@mkdir -p .tmp && ln -sfn "$(LOG_PATH)" .tmp/devspace.log
 
 build:
 	swift build -c release --product DevSpaceApp

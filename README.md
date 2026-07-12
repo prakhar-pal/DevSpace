@@ -20,7 +20,9 @@ legacy tree lives in git history.
   ligatures) over `ssh <id>.devpod`; multiple tabs per workspace (⌘T), tab
   titles follow the shell's working directory (OSC 7).
 - **Lifecycle** — start (`devpod up` with live log), stop, delete, reload the
-  SSH session in place (⌘R); exiting the last shell stops the pod.
+  SSH session in place (⌘R); exiting the last shell disconnects and shows the
+  status card (Connect/Stop) — the workspace keeps running, and DevSpace never
+  wakes a stopped workspace on its own.
 - **Open in Zed** (⌘O) — instant `zed ssh://<id>.devpod/<workdir>` remote open.
 - **Notifications** — workspace started/stopped events (started fires only
   once the app has actually SSH'd into the workspace), plus Claude Code
@@ -96,7 +98,9 @@ To test from an open workspace terminal: run `~/.devspace-notify`.
   notify listener, hook injection, layout persistence) with unit tests in
   `Tests/Core/`.
 - `Sources/CPTY/` — C shim for `forkpty`.
-- Debug builds log to `.tmp/devspace.log`; release builds write no log.
+- Debug builds log to `.tmp/devspace.log` (a symlink to
+  `~/Library/Logs/DevSpaceDev.log` — outside the TCC-protected Documents
+  folder); release builds write no log.
 - Sidebar layout persists at
   `~/Library/Application Support/DevSpace/layout.json`.
 
