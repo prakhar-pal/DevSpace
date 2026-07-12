@@ -169,11 +169,15 @@ private struct MainPane: View {
 
     @ViewBuilder private var overlay: some View {
         if let sel = model.selectedID {
-            if (model.panes[sel] ?? []).isEmpty, let w = model.byID[sel], w.state != "Running" {
+            // Any selected pod without panes shows its status card — including
+            // a RUNNING pod the user disconnected from (Connect reopens it).
+            if (model.panes[sel] ?? []).isEmpty, let w = model.byID[sel] {
                 ActionPanelView(
                     workspace: w,
                     displayName: model.name(sel),
-                    onStart: { model.start($0) }
+                    onStart: { model.start($0) },
+                    onConnect: { model.connect($0) },
+                    onStop: { model.stop($0) }
                 )
             }
         } else {

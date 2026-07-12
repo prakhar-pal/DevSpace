@@ -37,8 +37,17 @@ final class AppModel: ObservableObject {
     private var listener: NotifyListener?
     private var layoutLoaded = false
     /// Start/stop notification gate: "stopped" fires on the observed
-    /// transition; "started" waits until this app has SSH'd into the workspace.
+    /// transition; "started" waits until this app has SSH'd into the workspace
+    /// (or, for pods we don't connect to, until reconcile releases it).
     private var notifyGate = StateNotifyGate()
+    /// Pods this app intends to keep a session with: Running at first
+    /// sighting, or user started/connected/reloaded. Withdrawn when the pod
+    /// stops or the user closes its last shell — reconcile never opens a
+    /// session outside this set (`devpod ssh` would wake a stopped pod).
+    private var autoConnect: Set<String> = []
+    /// Pods whose definitive (Running/Stopped) state has been seen at least
+    /// once — first Running sighting seeds `autoConnect`.
+    private var seenDefinitive: Set<String> = []
 
     // 10s status polling: halves the devpod/kubectl load of 5s while keeping
     // state changes (with the poller's 2-fetch revival debounce) under ~20s.
@@ -180,22 +189,48 @@ final class AppModel: ObservableObject {
         Log.write("notify: pod=\(id) \(event)")
     }
 
-    /// Mirror of the App.tsx lifecycle effects: auto-open running pods, drop
+    /// Lifecycle reconciliation: keep sessions for intended pods, drop
     /// terminals for stopped/gone pods, clear shutting-down once confirmed.
+    ///
+    /// Sessions are opened only for pods in `autoConnect` — pods this app has
+    /// a standing reason to be connected to (Running at first sighting, or
+    /// user started/connected/reloaded). `devpod ssh` WAKES a stopped
+    /// workspace, so connecting on any unsolicited Running report resurrects
+    /// pods that stopped externally (e.g. a server-side resource optimizer)
+    /// whenever a stale Running report slips through. Externally started pods
+    /// get the "started" notification (released below) and a Connect card
+    /// instead of an automatic session.
     private func reconcileLifecycle() {
         let states = byID
-        // Auto-connect any running workspace (not mid start/stop).
+        // First DEFINITIVE sighting of a pod (launch, or created mid-session):
+        // if it's Running, a session is expected — that's the app's core UX.
+        for w in workspaces where w.state == "Running" || w.state == "Stopped" {
+            if seenDefinitive.insert(w.id).inserted, w.state == "Running" {
+                autoConnect.insert(w.id)
+            }
+        }
         for w in workspaces where w.state == "Running" {
-            openSSHIfNeeded(w.id)
+            if autoConnect.contains(w.id) { openSSHIfNeeded(w.id) }
         }
         // Drop terminals once a pod is explicitly Stopped or gone (not on a
-        // transient Unknown/Loading blip).
+        // transient Unknown/Loading blip) — and withdraw the standing intent:
+        // whoever starts it next (user via Start/Connect, or someone external)
+        // decides whether a session opens.
+        for w in workspaces where w.state == "Stopped" {
+            if !starting.contains(w.id) { autoConnect.remove(w.id) }
+        }
         for id in opened {
             let s = states[id]?.state
             if s == "Stopped" || states[id] == nil { closePane(id); opened.remove(id) }
         }
         for id in shuttingDown {
             if states[id]?.state == "Stopped" { closePane(id); shuttingDown.remove(id) }
+        }
+        // Externally started pods (pending "started", no session planned) get
+        // their notification now — with no SSH there is no later confirm, and
+        // the RunningDebouncer already vouched for the transition.
+        for id in notifyGate.releasePending(notIn: opened.union(starting)) {
+            emitStateEvent(id, "started")
         }
     }
 
@@ -302,6 +337,7 @@ final class AppModel: ObservableObject {
     /// pod Running so the SSH terminal mounts; the next poll confirms.
     private func onUpFinished(_ id: String) {
         starting.remove(id)
+        autoConnect.insert(id) // user-initiated start: a session is wanted
         closePane(id)
         if let i = workspaces.firstIndex(where: { $0.id == id }) {
             let w = workspaces[i]
@@ -316,6 +352,7 @@ final class AppModel: ObservableObject {
     func stop(_ id: String) {
         guard validID(id) else { return }
         opened.remove(id)
+        autoConnect.remove(id)
         closePane(id)
         shuttingDown.insert(id)
         let pane = TerminalPaneModel(command: "devpod", args: Devpod.stopArgs(id))
@@ -446,9 +483,11 @@ final class AppModel: ObservableObject {
     func reload(_ id: String) {
         guard validID(id) else { return }
         guard opened.contains(id), let list = panes[id], !list.isEmpty else {
-            // No session (e.g. it already died): fall back to a full reopen.
+            // No session (e.g. it already died): fall back to a full reopen —
+            // an explicit user action, so the session intent is restored.
             closePane(id)
             opened.remove(id)
+            autoConnect.insert(id)
             openSSHIfNeeded(id)
             return
         }
@@ -479,13 +518,18 @@ final class AppModel: ObservableObject {
         activePane[id] = pane.id
     }
 
-    /// Close one terminal tab (never the last — exit the shell to stop the pod).
+    /// Close one terminal tab. Closing the LAST tab disconnects from the pod
+    /// (shows the status card); the pod itself keeps running.
     func closeTerminal(_ id: String, paneID: UUID) {
-        guard let list = panes[id], list.count > 1,
+        guard let list = panes[id],
               let pane = list.first(where: { $0.id == paneID }) else { return }
         pane.onExit = nil
         pane.terminate()
-        removePane(id, paneID: paneID)
+        if list.count > 1 {
+            removePane(id, paneID: paneID)
+        } else {
+            disconnect(id)
+        }
     }
 
     func setActivePane(_ id: String, paneID: UUID) {
@@ -513,18 +557,35 @@ final class AppModel: ObservableObject {
     }
 
     /// An SSH terminal ended (user typed `exit`, or the connection died).
-    /// Extra tabs just close; the LAST terminal keeps the original semantics:
-    /// stop the pod and show the shutdown log.
+    /// Extra tabs just close; the last one DISCONNECTS: the pod is left in
+    /// whatever state it's in and its status card takes the pane's place.
+    /// (It used to stop the pod — but a shell exit isn't a stop request, and
+    /// when the connection died because the pod stopped externally, running
+    /// `devpod stop`/reconnect machinery could wake the pod right back up.)
     private func paneExited(_ id: String, paneID: UUID) {
         guard let list = panes[id], list.contains(where: { $0.id == paneID }) else { return }
         if list.count > 1 {
             removePane(id, paneID: paneID)
         } else {
-            opened.remove(id)
-            closePane(id)
-            select(id)
-            stop(id)
+            disconnect(id)
         }
+    }
+
+    /// Tear down the pod's session and withdraw the auto-connect intent, so
+    /// reconcile won't immediately reopen (or wake) it. The status card with
+    /// Connect/Start takes over.
+    private func disconnect(_ id: String) {
+        opened.remove(id)
+        autoConnect.remove(id)
+        closePane(id)
+    }
+
+    /// Explicit user reconnect (status card's Connect / ⌘⏎ on a running pod):
+    /// restores the standing session intent and opens the terminal.
+    func connect(_ id: String) {
+        guard validID(id), byID[id]?.state == "Running" else { return }
+        autoConnect.insert(id)
+        openSSHIfNeeded(id)
     }
 
     private func removePane(_ id: String, paneID: UUID) {

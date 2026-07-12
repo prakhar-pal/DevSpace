@@ -1,12 +1,15 @@
 import SwiftUI
 import DevSpaceCore
 
-/// Port of src/components/ActionPanel.tsx — shown for a selected, non-running
-/// workspace: metadata + a Start button.
+/// Status card for a selected workspace with no open terminal: metadata plus
+/// the state-appropriate actions — Start when stopped, Connect/Stop when the
+/// pod is running but disconnected (e.g. the user exited its last shell).
 struct ActionPanelView: View {
     let workspace: WorkspaceView
     let displayName: String
     let onStart: (String) -> Void
+    let onConnect: (String) -> Void
+    let onStop: (String) -> Void
 
     var body: some View {
         ScrollView {
@@ -23,7 +26,24 @@ struct ActionPanelView: View {
                 field("Source", workspace.source)
                 field("Last used", Self.formatLastUsed(workspace.lastUsed))
 
-                if workspace.state != "Loading" {
+                if workspace.state == "Running" {
+                    HStack(spacing: 12) {
+                        Button { onConnect(workspace.id) } label: {
+                            Text("Connect")
+                                .font(.system(size: 13, weight: .medium))
+                                .padding(.horizontal, 18).padding(.vertical, 8)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.blue)
+                        Button { onStop(workspace.id) } label: {
+                            Text("Stop")
+                                .font(.system(size: 13, weight: .medium))
+                                .padding(.horizontal, 18).padding(.vertical, 8)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.top, 24)
+                } else if workspace.state != "Loading" {
                     Button { onStart(workspace.id) } label: {
                         Text("Start")
                             .font(.system(size: 13, weight: .medium))

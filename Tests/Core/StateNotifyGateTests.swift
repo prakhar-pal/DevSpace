@@ -76,6 +76,20 @@ final class StateNotifyGateTests: XCTestCase {
         XCTAssertEqual(g.observe([ws("a", "Stopped")]).count, 0) // baseline, no event
     }
 
+    func testReleasePendingFiresStartedForUnconnectedPods() {
+        // Under the no-auto-wake policy the app doesn't SSH into externally
+        // started pods, so their pending "started" can never be SSH-confirmed —
+        // releasePending fires them on the (debounced) observation instead,
+        // while pods the app IS connecting to stay pending for confirmSSH.
+        var g = StateNotifyGate()
+        _ = g.observe([ws("a", "Stopped"), ws("b", "Stopped")])
+        _ = g.observe([ws("a", "Running"), ws("b", "Running")]) // both pending
+        XCTAssertEqual(g.releasePending(notIn: ["b"]), ["a"])
+        XCTAssertFalse(g.confirmSSH("a")) // already released — must not re-fire
+        XCTAssertTrue(g.confirmSSH("b"))  // still pending; ssh confirm fires it
+        XCTAssertEqual(g.releasePending(notIn: []), []) // nothing left
+    }
+
     func testPodFirstSeenMidSessionBaselinesSilently() {
         var g = StateNotifyGate()
         _ = g.observe([ws("a", "Running")])
