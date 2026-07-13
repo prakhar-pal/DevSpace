@@ -68,14 +68,14 @@ struct GuideSheet: View {
                     }
                     section("Start & stop") {
                         row("Start", "Select a stopped workspace and press Start. The live devpod up log streams until it's ready, then the terminal opens.")
-                        row("Stop", "Hover a running workspace and click the ⬛ stop button, or type exit in its terminal.")
+                        row("Stop", "Hover a running workspace and click the ⬛ stop button, or use Stop on its status card. Exiting a shell only disconnects — the workspace keeps running.")
                     }
                     section("The terminal") {
-                        row("Auto-connect", "Running workspaces SSH in automatically and reconnect when the network returns.")
+                        row("Auto-connect", "Workspaces that are running when DevSpace launches (or that you start) SSH in automatically. After you disconnect, the status card's Connect reopens the session — DevSpace never wakes a stopped workspace on its own.")
                         row("Copy / paste", "⌘C copies the selection, ⌘V pastes. URLs are ⌘-clickable.")
                         row("Newline", "⇧Enter inserts a newline without sending.")
                         row("Reload session", "⌘R, or right-click a running workspace → Reload SSH Session.")
-                        row("Multiple terminals", "⌘T (or right-click → New Terminal) opens another shell to the same pod; the tab strip appears once a second terminal is open. Tabs are titled by the shell's current folder. Closing the last one stops the pod; extra tabs just close.")
+                        row("Multiple terminals", "⌘T (or right-click → New Terminal) opens another shell to the same pod; the tab strip appears once a second terminal is open. Tabs are titled by the shell's current folder. Closing the last one disconnects (the status card offers Connect); extra tabs just close.")
                     }
                     section("Organize the sidebar") {
                         row("Reorder", "Right-click → Move Up / Move Down (or ⌘⌥↑ / ⌘⌥↓) — the order is saved.")

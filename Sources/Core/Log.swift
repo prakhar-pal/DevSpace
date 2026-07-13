@@ -3,7 +3,10 @@ import Foundation
 /// Debug-only diagnostics log, mirroring the Rust backend's `notify::log`.
 ///
 /// In Debug builds the app's Info.plist carries `DevSpaceLogPath` pointing at
-/// `<repo>/.tmp/devspace.log`; lines are appended there with a timestamp. In
+/// `~/Library/Logs/DevSpaceDev.log` (symlinked from `<repo>/.tmp/devspace.log`
+/// — the repo lives under the TCC-gated ~/Documents, where an ad-hoc build's
+/// first write can block on a consent prompt); lines are appended with a
+/// timestamp. In
 /// Release builds the key is empty, so every call is a no-op — matching the
 /// existing behavior where release builds write no log.
 public enum Log {

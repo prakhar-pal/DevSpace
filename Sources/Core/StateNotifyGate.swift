@@ -52,6 +52,18 @@ public struct StateNotifyGate {
         return pendingStarted.remove(id) != nil
     }
 
+    /// Fire the pending "started" events for pods the app has chosen NOT to
+    /// connect to (externally started workspaces under the no-auto-wake
+    /// policy) — with no session there will never be an SSH confirm, so the
+    /// (already debounced) poll observation is the only confirmation
+    /// available. Pods in `connected` (open or opening sessions) stay pending
+    /// for ``confirmSSH(_:)``. Returns the pod ids to notify, sorted.
+    public mutating func releasePending(notIn connected: Set<String>) -> [String] {
+        let released = pendingStarted.subtracting(connected)
+        pendingStarted.subtract(released)
+        return released.sorted()
+    }
+
     /// Forget a pod's observed state so its next sighting baselines silently
     /// (a hidden pod resumes polling with a stale cache). Any live SSH confirm
     /// is kept — its session survives hiding.
