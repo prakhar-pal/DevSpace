@@ -1,5 +1,14 @@
 # dev-space
 
+## v0.5.5 - 2026-07-13
+
+### Fixes
+- fix: never wake stopped devpods — sessions only for intended pods (566dd3e)
+
+### Other
+- build: move the debug log out of the TCC-gated Documents folder (15d5675)
+
+
 ## v0.5.4 - 2026-07-10
 
 ### Fixes
