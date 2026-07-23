@@ -76,6 +76,15 @@ public enum SSH {
         return "ssh://\(podID).devpod\(encoded)"
     }
 
+    /// The `scp` destination for copying a local file to `remotePath` on the
+    /// pod, over the same `<id>.devpod` alias `args`/`zedRemoteURL` rely on —
+    /// no new auth. `remotePath` is expected already-resolved (e.g. under
+    /// `/tmp`); this is purely mechanical, mirroring `zedRemoteURL`'s split
+    /// between "build the locator" (here) and "decide the path" (the caller).
+    public static func scpDestination(podID: String, remotePath: String) -> String {
+        "\(podID).devpod:\(remotePath)"
+    }
+
     /// Whether Zed already has a remote session to this pod, judged from a
     /// process table (`ps axww -o command=`). While a Zed window has the
     /// project open it keeps ssh processes whose ControlPath lives under a

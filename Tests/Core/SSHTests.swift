@@ -103,6 +103,29 @@ final class ZedRemoteTests: XCTestCase {
     }
 }
 
+// The `scp` destination the image-paste feature copies a local file to,
+// over the same devpod alias `zedRemoteURL`/`args` rely on.
+final class ScpDestinationTests: XCTestCase {
+    func testBuildsDevpodAliasDestination() {
+        XCTAssertEqual(
+            SSH.scpDestination(podID: "wc-1", remotePath: "/tmp/devspace-paste-ABC.png"),
+            "wc-1.devpod:/tmp/devspace-paste-ABC.png"
+        )
+    }
+
+    func testDistinctPodIDsWithSharedPrefixDontCollide() {
+        // wc-2 and wc-2a must resolve to different destinations, not aliasing.
+        XCTAssertEqual(
+            SSH.scpDestination(podID: "wc-2a", remotePath: "/tmp/x.png"),
+            "wc-2a.devpod:/tmp/x.png"
+        )
+        XCTAssertNotEqual(
+            SSH.scpDestination(podID: "wc-2a", remotePath: "/tmp/x.png"),
+            SSH.scpDestination(podID: "wc-2", remotePath: "/tmp/x.png")
+        )
+    }
+}
+
 final class ActionArgsTests: XCTestCase {
     func testUpArgs() {
         XCTAssertEqual(Devpod.upArgs("wc-1"), ["up", "--ide", "none", "--", "wc-1"])

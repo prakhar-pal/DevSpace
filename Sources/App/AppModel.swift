@@ -477,6 +477,128 @@ final class AppModel: ObservableObject {
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
+    private static let pastedImageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "heic", "bmp", "tiff", "tif",
+    ]
+
+    /// Extracts a pasted image (raw bytes + its file extension), if the
+    /// pasteboard holds one.
+    ///
+    /// Order matters: copying a FILE in Finder (⌘C) puts both its file URL
+    /// AND a synthesized ICON in the `.tiff`/`.png` representations (for
+    /// drag visual feedback) — for a document that's the generic macOS
+    /// document icon at 1024×1024, not the file's actual pixel content.
+    /// Reading `.tiff`/`.png` directly in that case sends the icon instead
+    /// of the real image (observed live: a copied screenshot FILE arrived
+    /// remotely as a 1024×1024 "PNG file" icon). So a backing file URL is
+    /// read from disk first, preserving its real bytes/extension; the
+    /// `.tiff`/`.png` pasteboard data is only used as a fallback for a
+    /// genuine raw-image clipboard entry with no backing file (e.g. a
+    /// screenshot captured straight to the clipboard via ⌘⇧⌃4, or an image
+    /// copied from a browser/viewer).
+    private static func pastedImage() -> (data: Data, ext: String)? {
+        let pb = NSPasteboard.general
+        let fileURLs = ((pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL]) ?? [])
+            .filter(\.isFileURL)
+        if !fileURLs.isEmpty {
+            // A file-backed pasteboard entry that isn't a recognized image
+            // (e.g. copying a text file or folder) has nothing to paste —
+            // falling back to the icon data here would be the same bug.
+            guard let url = fileURLs.first(where: { pastedImageExtensions.contains($0.pathExtension.lowercased()) }),
+                  let data = try? Data(contentsOf: url)
+            else { return nil }
+            return (data, url.pathExtension.lowercased())
+        }
+        if let png = pb.data(forType: .png) { return (png, "png") }
+        guard let tiff = pb.data(forType: .tiff),
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:])
+        else { return nil }
+        return (png, "png")
+    }
+
+    /// libghostty's own Cmd+V paste (`AppTerminalView.paste(_:)`) reads only
+    /// `.string` from the general pasteboard and is a documented no-op when
+    /// that's absent (the exact mechanism this whole feature works around
+    /// for image-only content). Returning `nil` from the key monitor above
+    /// is supposed to suppress that competing Edit-menu-bound action, but
+    /// empirically it doesn't reliably: a copied file's plain-text display
+    /// name has been observed landing in the terminal ALONGSIDE our own
+    /// injected path, from a single ⌘V. Rather than depend on AppKit's
+    /// event-dispatch internals, make that competing read harmless: the
+    /// pasteboard is snapshotted, cleared, then restored exactly as the
+    /// user left it shortly after — long enough for any same-cycle
+    /// competing paste to find nothing, brief enough the user never
+    /// notices their clipboard changed.
+    private static func suppressCompetingPaste() {
+        let pb = NSPasteboard.general
+        guard let items = pb.pasteboardItems, !items.isEmpty else { return }
+        let saved: [[NSPasteboard.PasteboardType: Data]] = items.map { item in
+            Dictionary(uniqueKeysWithValues: item.types.compactMap { t in
+                item.data(forType: t).map { (t, $0) }
+            })
+        }
+        pb.clearContents()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            let restored = saved.map { typesToData -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                for (type, data) in typesToData {
+                    item.setData(data, forType: type)
+                }
+                return item
+            }
+            pb.clearContents()
+            pb.writeObjects(restored)
+        }
+    }
+
+    /// ⌘V with an image on the clipboard: write it to a local temp file
+    /// (its real extension preserved — see ``pastedImage()``), scp it to
+    /// the pod's /tmp, then inject a path reference Claude Code can read
+    /// directly off the container's own disk — no terminal graphics
+    /// protocol involved (see code.claude.com/docs/en/common-workflows,
+    /// "Work with images": "Provide an image path to Claude"). Best-effort:
+    /// scp failure just logs, matching hook injection's convention — no
+    /// user-facing error UI for v1.
+    private func pasteImage(_ image: (data: Data, ext: String), to id: String) {
+        let name = "devspace-paste-\(UUID().uuidString).\(image.ext)"
+        let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        do {
+            try image.data.write(to: localURL)
+        } catch {
+            Log.write("paste-image: failed writing temp file: \(error)")
+            return
+        }
+        let remotePath = "/tmp/\(name)"
+        let dest = SSH.scpDestination(podID: id, remotePath: remotePath)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/scp")
+            proc.arguments = [
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                localURL.path, dest,
+            ]
+            proc.terminationHandler = { [weak self] p in
+                try? FileManager.default.removeItem(at: localURL)
+                guard p.terminationStatus == 0 else {
+                    Log.write("paste-image: scp exit \(p.terminationStatus) for \(dest)")
+                    return
+                }
+                Log.write("paste-image: copied to \(dest)")
+                DispatchQueue.main.async {
+                    self?.activeModel(id)?.injectText("Image pasted: \(remotePath) ")
+                }
+            }
+            do {
+                try proc.run()
+            } catch {
+                try? FileManager.default.removeItem(at: localURL)
+                Log.write("paste-image: scp not runnable (\(error))")
+            }
+        }
+    }
+
     /// Reconnect the active SSH terminal without restarting the pod (or the
     /// other terminals). Replaced in place so the tab keeps its position; the
     /// primary tab keeps the reverse notify tunnel.
@@ -714,6 +836,19 @@ final class AppModel: ObservableObject {
                 newTerminal(id)
             }
             return nil
+        }
+        // Cmd+V: an image-bearing pasteboard is copied to the pod and its
+        // path injected into the input line (no Enter — user adds their own
+        // message). Text-only pastes fall through untouched to libghostty's
+        // own paste, and so does everything else (no terminal open, no
+        // workspace selected) — nothing here is destructive to suppress.
+        if chars == "v" {
+            if let image = Self.pastedImage(), let id = selectedID, phase(of: id) == .terminal {
+                Self.suppressCompetingPaste()
+                pasteImage(image, to: id)
+                return nil
+            }
+            return event
         }
         if let n = Int(chars), (1 ... 9).contains(n) {
             let visible = split.visible
