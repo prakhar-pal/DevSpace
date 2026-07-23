@@ -72,6 +72,17 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
     }
 
     func terminate() { pty.terminate() }
+
+    /// Writes host-generated text straight to the pty, bypassing
+    /// ``PasteNewlineNormalizer`` — that exists only to fix up libghostty's
+    /// bracketed-paste byte stream from a *user* paste; text synthesized
+    /// here (e.g. an image-paste path reference) is a single line with no
+    /// embedded newlines, so there's nothing to normalize and no Enter is
+    /// sent — it just populates the input line, the same as a normal text
+    /// paste does.
+    func injectText(_ text: String) {
+        pty.write(Data(text.utf8))
+    }
 }
 
 /// Normalizes pasted newlines in the host→pty byte stream.

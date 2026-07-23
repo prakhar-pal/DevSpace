@@ -57,6 +57,7 @@ struct GuideSheet: View {
                         row("⌘R", "Reload the selected workspace's SSH session.")
                         row("⌘O", "Open the selected workspace's folder in Zed.")
                         row("⌘T", "Open another terminal tab for the selected workspace.")
+                        row("⌘V", "Paste a screenshot/image directly into the terminal — DevSpace copies it to the pod and inserts its path so Claude Code can read it.")
                         row("⌘⇧[ / ⌘⇧]", "Switch to the previous / next terminal tab.")
                         row("⌘⌥↑ / ⌘⌥↓", "Move the selected workspace up / down in the sidebar.")
                         row("Esc", "Close this guide.")
@@ -72,7 +73,7 @@ struct GuideSheet: View {
                     }
                     section("The terminal") {
                         row("Auto-connect", "Workspaces that are running when DevSpace launches (or that you start) SSH in automatically. After you disconnect, the status card's Connect reopens the session — DevSpace never wakes a stopped workspace on its own.")
-                        row("Copy / paste", "⌘C copies the selection, ⌘V pastes. URLs are ⌘-clickable.")
+                        row("Copy / paste", "⌘C copies the selection, ⌘V pastes text as usual. An image on the clipboard (e.g. a screenshot) is copied to the pod instead, with its path inserted for Claude Code to read. URLs are ⌘-clickable.")
                         row("Newline", "⇧Enter inserts a newline without sending.")
                         row("Reload session", "⌘R, or right-click a running workspace → Reload SSH Session.")
                         row("Multiple terminals", "⌘T (or right-click → New Terminal) opens another shell to the same pod; the tab strip appears once a second terminal is open. Tabs are titled by the shell's current folder. Closing the last one disconnects (the status card offers Connect); extra tabs just close.")

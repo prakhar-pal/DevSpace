@@ -24,6 +24,9 @@ legacy tree lives in git history.
   status card (Connect/Stop) — the workspace keeps running, and DevSpace never
   wakes a stopped workspace on its own.
 - **Open in Zed** (⌘O) — instant `zed ssh://<id>.devpod/<workdir>` remote open.
+- **Paste screenshots directly into the terminal** (⌘V) — copied to the pod
+  automatically over the existing SSH alias, with a path reference inserted
+  for Claude Code to read.
 - **Notifications** — workspace started/stopped events (started fires only
   once the app has actually SSH'd into the workspace), plus Claude Code
   finished/needs-input events posted from inside the pod through a reverse
@@ -39,6 +42,7 @@ legacy tree lives in git history.
 | ⌘T | New terminal tab |
 | ⌘⇧[ / ⌘⇧] | Previous / next terminal tab |
 | ⌘O | Open workspace folder in Zed |
+| ⌘V | Paste image from clipboard (copies to pod, inserts path) |
 | ⌘⌥↑ / ⌘⌥↓ | Move workspace up / down in the sidebar |
 
 The in-app **Guide** (sidebar footer) lists everything.

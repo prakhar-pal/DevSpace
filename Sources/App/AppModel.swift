@@ -477,6 +477,65 @@ final class AppModel: ObservableObject {
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
+    /// Extracts a pasted image as PNG data, if the pasteboard holds one.
+    /// Screenshots/`NSImage` copies are almost always `.tiff`; `.png` is
+    /// checked first when a source happens to provide it directly.
+    private static func pastedImagePNG() -> Data? {
+        let pb = NSPasteboard.general
+        if let png = pb.data(forType: .png) { return png }
+        guard let tiff = pb.data(forType: .tiff),
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:])
+        else { return nil }
+        return png
+    }
+
+    /// ⌘V with an image on the clipboard: write it to a local temp PNG, scp
+    /// it to the pod's /tmp, then inject a path reference Claude Code can
+    /// read directly off the container's own disk — no terminal graphics
+    /// protocol involved (see code.claude.com/docs/en/common-workflows,
+    /// "Work with images": "Provide an image path to Claude"). Best-effort:
+    /// scp failure just logs, matching hook injection's convention — no
+    /// user-facing error UI for v1.
+    private func pasteImage(_ png: Data, to id: String) {
+        let name = "devspace-paste-\(UUID().uuidString).png"
+        let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        do {
+            try png.write(to: localURL)
+        } catch {
+            Log.write("paste-image: failed writing temp file: \(error)")
+            return
+        }
+        let remotePath = "/tmp/\(name)"
+        let dest = SSH.scpDestination(podID: id, remotePath: remotePath)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/scp")
+            proc.arguments = [
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                localURL.path, dest,
+            ]
+            proc.terminationHandler = { [weak self] p in
+                try? FileManager.default.removeItem(at: localURL)
+                guard p.terminationStatus == 0 else {
+                    Log.write("paste-image: scp exit \(p.terminationStatus) for \(dest)")
+                    return
+                }
+                Log.write("paste-image: copied to \(dest)")
+                DispatchQueue.main.async {
+                    self?.activeModel(id)?.injectText("Image pasted: \(remotePath) ")
+                }
+            }
+            do {
+                try proc.run()
+            } catch {
+                try? FileManager.default.removeItem(at: localURL)
+                Log.write("paste-image: scp not runnable (\(error))")
+            }
+        }
+    }
+
     /// Reconnect the active SSH terminal without restarting the pod (or the
     /// other terminals). Replaced in place so the tab keeps its position; the
     /// primary tab keeps the reverse notify tunnel.
@@ -714,6 +773,18 @@ final class AppModel: ObservableObject {
                 newTerminal(id)
             }
             return nil
+        }
+        // Cmd+V: an image-bearing pasteboard is copied to the pod and its
+        // path injected into the input line (no Enter — user adds their own
+        // message). Text-only pastes fall through untouched to libghostty's
+        // own paste, and so does everything else (no terminal open, no
+        // workspace selected) — nothing here is destructive to suppress.
+        if chars == "v" {
+            if let png = Self.pastedImagePNG(), let id = selectedID, phase(of: id) == .terminal {
+                pasteImage(png, to: id)
+                return nil
+            }
+            return event
         }
         if let n = Int(chars), (1 ... 9).contains(n) {
             let visible = split.visible
