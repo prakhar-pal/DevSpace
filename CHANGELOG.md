@@ -1,5 +1,15 @@
 # dev-space
 
+## v0.6.0 - 2026-07-23
+
+### Features
+- feat: paste images into the terminal (⌘V copies to the pod over SSH) (547dea8)
+
+### Fixes
+- fix: prevent libghostty's own paste from also inserting the filename (23605c7)
+- fix: read the real file bytes when an image FILE is pasted, not its icon (38aaa69)
+
+
 ## v0.5.5 - 2026-07-13
 
 ### Fixes
