@@ -517,6 +517,41 @@ final class AppModel: ObservableObject {
         return (png, "png")
     }
 
+    /// libghostty's own Cmd+V paste (`AppTerminalView.paste(_:)`) reads only
+    /// `.string` from the general pasteboard and is a documented no-op when
+    /// that's absent (the exact mechanism this whole feature works around
+    /// for image-only content). Returning `nil` from the key monitor above
+    /// is supposed to suppress that competing Edit-menu-bound action, but
+    /// empirically it doesn't reliably: a copied file's plain-text display
+    /// name has been observed landing in the terminal ALONGSIDE our own
+    /// injected path, from a single ⌘V. Rather than depend on AppKit's
+    /// event-dispatch internals, make that competing read harmless: the
+    /// pasteboard is snapshotted, cleared, then restored exactly as the
+    /// user left it shortly after — long enough for any same-cycle
+    /// competing paste to find nothing, brief enough the user never
+    /// notices their clipboard changed.
+    private static func suppressCompetingPaste() {
+        let pb = NSPasteboard.general
+        guard let items = pb.pasteboardItems, !items.isEmpty else { return }
+        let saved: [[NSPasteboard.PasteboardType: Data]] = items.map { item in
+            Dictionary(uniqueKeysWithValues: item.types.compactMap { t in
+                item.data(forType: t).map { (t, $0) }
+            })
+        }
+        pb.clearContents()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            let restored = saved.map { typesToData -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                for (type, data) in typesToData {
+                    item.setData(data, forType: type)
+                }
+                return item
+            }
+            pb.clearContents()
+            pb.writeObjects(restored)
+        }
+    }
+
     /// ⌘V with an image on the clipboard: write it to a local temp file
     /// (its real extension preserved — see ``pastedImage()``), scp it to
     /// the pod's /tmp, then inject a path reference Claude Code can read
@@ -809,6 +844,7 @@ final class AppModel: ObservableObject {
         // workspace selected) — nothing here is destructive to suppress.
         if chars == "v" {
             if let image = Self.pastedImage(), let id = selectedID, phase(of: id) == .terminal {
+                Self.suppressCompetingPaste()
                 pasteImage(image, to: id)
                 return nil
             }
