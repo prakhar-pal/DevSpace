@@ -477,31 +477,59 @@ final class AppModel: ObservableObject {
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    /// Extracts a pasted image as PNG data, if the pasteboard holds one.
-    /// Screenshots/`NSImage` copies are almost always `.tiff`; `.png` is
-    /// checked first when a source happens to provide it directly.
-    private static func pastedImagePNG() -> Data? {
+    private static let pastedImageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "heic", "bmp", "tiff", "tif",
+    ]
+
+    /// Extracts a pasted image (raw bytes + its file extension), if the
+    /// pasteboard holds one.
+    ///
+    /// Order matters: copying a FILE in Finder (⌘C) puts both its file URL
+    /// AND a synthesized ICON in the `.tiff`/`.png` representations (for
+    /// drag visual feedback) — for a document that's the generic macOS
+    /// document icon at 1024×1024, not the file's actual pixel content.
+    /// Reading `.tiff`/`.png` directly in that case sends the icon instead
+    /// of the real image (observed live: a copied screenshot FILE arrived
+    /// remotely as a 1024×1024 "PNG file" icon). So a backing file URL is
+    /// read from disk first, preserving its real bytes/extension; the
+    /// `.tiff`/`.png` pasteboard data is only used as a fallback for a
+    /// genuine raw-image clipboard entry with no backing file (e.g. a
+    /// screenshot captured straight to the clipboard via ⌘⇧⌃4, or an image
+    /// copied from a browser/viewer).
+    private static func pastedImage() -> (data: Data, ext: String)? {
         let pb = NSPasteboard.general
-        if let png = pb.data(forType: .png) { return png }
+        let fileURLs = ((pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL]) ?? [])
+            .filter(\.isFileURL)
+        if !fileURLs.isEmpty {
+            // A file-backed pasteboard entry that isn't a recognized image
+            // (e.g. copying a text file or folder) has nothing to paste —
+            // falling back to the icon data here would be the same bug.
+            guard let url = fileURLs.first(where: { pastedImageExtensions.contains($0.pathExtension.lowercased()) }),
+                  let data = try? Data(contentsOf: url)
+            else { return nil }
+            return (data, url.pathExtension.lowercased())
+        }
+        if let png = pb.data(forType: .png) { return (png, "png") }
         guard let tiff = pb.data(forType: .tiff),
               let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:])
         else { return nil }
-        return png
+        return (png, "png")
     }
 
-    /// ⌘V with an image on the clipboard: write it to a local temp PNG, scp
-    /// it to the pod's /tmp, then inject a path reference Claude Code can
-    /// read directly off the container's own disk — no terminal graphics
+    /// ⌘V with an image on the clipboard: write it to a local temp file
+    /// (its real extension preserved — see ``pastedImage()``), scp it to
+    /// the pod's /tmp, then inject a path reference Claude Code can read
+    /// directly off the container's own disk — no terminal graphics
     /// protocol involved (see code.claude.com/docs/en/common-workflows,
     /// "Work with images": "Provide an image path to Claude"). Best-effort:
     /// scp failure just logs, matching hook injection's convention — no
     /// user-facing error UI for v1.
-    private func pasteImage(_ png: Data, to id: String) {
-        let name = "devspace-paste-\(UUID().uuidString).png"
+    private func pasteImage(_ image: (data: Data, ext: String), to id: String) {
+        let name = "devspace-paste-\(UUID().uuidString).\(image.ext)"
         let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         do {
-            try png.write(to: localURL)
+            try image.data.write(to: localURL)
         } catch {
             Log.write("paste-image: failed writing temp file: \(error)")
             return
@@ -780,8 +808,8 @@ final class AppModel: ObservableObject {
         // own paste, and so does everything else (no terminal open, no
         // workspace selected) — nothing here is destructive to suppress.
         if chars == "v" {
-            if let png = Self.pastedImagePNG(), let id = selectedID, phase(of: id) == .terminal {
-                pasteImage(png, to: id)
+            if let image = Self.pastedImage(), let id = selectedID, phase(of: id) == .terminal {
+                pasteImage(image, to: id)
                 return nil
             }
             return event
