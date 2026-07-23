@@ -352,6 +352,11 @@ final class AppModel: ObservableObject {
     func stop(_ id: String) {
         guard validID(id) else { return }
         opened.remove(id)
+        // Stopping mid-`devpod up` (its pane's onExit, which would otherwise
+        // clear this, is nil'd by closePane below without running) must not
+        // leave `starting` set forever — phase(of:) checks it before
+        // `.shuttingDown`, so a stuck flag would show "Starting…" permanently.
+        starting.remove(id)
         autoConnect.remove(id)
         closePane(id)
         shuttingDown.insert(id)
