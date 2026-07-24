@@ -48,8 +48,7 @@ legacy tree lives in git history.
 The in-app **Guide** (sidebar footer) lists everything.
 
 ## Deprecated features
-
-The native Swift rewrite does not yet have complete feature parity with the
+The native Swift rewrite intentionally retires these behaviors from the
 previous Tauri version:
 
 - **Automatic SSH reconnection** — if a terminal disconnects because the
