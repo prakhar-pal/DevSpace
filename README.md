@@ -47,6 +47,18 @@ legacy tree lives in git history.
 
 The in-app **Guide** (sidebar footer) lists everything.
 
+## Deprecated features
+
+The native Swift rewrite intentionally retires these behaviors from the
+previous Tauri version:
+
+- **Automatic SSH reconnection** — if a terminal disconnects because the
+  network or remote workspace becomes unavailable, DevSpace leaves the
+  workspace running and shows its status card. Reconnect manually with
+  **Connect**.
+- **Drag-to-reorder** — use **Move Up / Move Down** in the workspace context
+  menu or **⌘⌥↑ / ⌘⌥↓** instead.
+
 ## Requirements
 
 - macOS 14+ (Apple Silicon or Intel)
