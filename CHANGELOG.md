@@ -1,5 +1,15 @@
 # dev-space
 
+## v0.6.1 - 2026-07-25
+
+### Fixes
+- fix: TerminalPane quit libghostty (716d6a0)
+
+### Other
+- chore: update readme (1ccbee6)
+- chore: update readme (d9b9a77)
+
+
 ## v0.6.0 - 2026-07-23
 
 ### Features
