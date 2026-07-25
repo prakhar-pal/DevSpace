@@ -17,6 +17,7 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
     private let pasteNormalizer = PasteNewlineNormalizer()
     private var session: InMemoryTerminalSession!
     private var didStart = false
+    private var startedAtNanoseconds: UInt64?
     private let command: String
     private let args: [String]
 
@@ -54,7 +55,9 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
         pty.onExit = { [weak self] code in
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.session.finish(exitCode: UInt32(bitPattern: code), runtimeMilliseconds: 0)
+                let now = DispatchTime.now().uptimeNanoseconds
+                let runtime = self.startedAtNanoseconds.map { (now - $0) / 1_000_000 } ?? 0
+                self.session.finish(exitCode: UInt32(bitPattern: code), runtimeMilliseconds: runtime)
                 self.onExit?(code)
             }
         }
@@ -66,6 +69,7 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
             pty.resize(cols: viewport.columns, rows: viewport.rows)
         } else {
             didStart = true
+            startedAtNanoseconds = DispatchTime.now().uptimeNanoseconds
             Log.write("pty start \(command) \(args.joined(separator: " ")) \(viewport.columns)x\(viewport.rows)")
             pty.start(path: command, args: args, cols: viewport.columns, rows: viewport.rows)
         }
