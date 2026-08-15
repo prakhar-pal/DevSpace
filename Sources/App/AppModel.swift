@@ -821,7 +821,7 @@ final class AppModel: ObservableObject {
 
         guard renaming == nil, !guideOpen else { return event } // modal owns the keyboard
 
-        if chars == "b" {
+        if Self.isSidebarToggleShortcut(chars) {
             sidebarOpen.toggle()
             return nil
         }
@@ -874,5 +874,9 @@ final class AppModel: ObservableObject {
 
     static func isNextTerminalTabShortcut(_ charactersIgnoringModifiers: String) -> Bool {
         charactersIgnoringModifiers.caseInsensitiveCompare("t") == .orderedSame
+    }
+
+    static func isSidebarToggleShortcut(_ charactersIgnoringModifiers: String) -> Bool {
+        charactersIgnoringModifiers.caseInsensitiveCompare("b") == .orderedSame
     }
 }
