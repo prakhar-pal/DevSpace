@@ -106,4 +106,12 @@ public enum SSH {
         )) ?? ""
         return parseWorkdir(sshConfig: config, podID: podID) ?? "/workspace"
     }
+
+    /// Prefer the active terminal's OSC 7-reported remote directory when it
+    /// is available. Before the shell reaches its first prompt, retain the
+    /// DevPod-configured workspace directory as the Zed launch fallback.
+    public static func zedWorkdir(currentDirectory: String?, fallback: String) -> String {
+        guard let currentDirectory, !currentDirectory.isEmpty else { return fallback }
+        return currentDirectory
+    }
 }

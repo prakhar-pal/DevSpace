@@ -58,7 +58,7 @@ struct GuideSheet: View {
                         row("⌘O", "Open the selected workspace's folder in Zed.")
                         row("⌘T", "Open another terminal tab for the selected workspace.")
                         row("⌘V", "Paste a screenshot/image directly into the terminal — DevSpace copies it to the pod and inserts its path so Claude Code can read it.")
-                        row("⌘⇧[ / ⌘⇧]", "Switch to the previous / next terminal tab.")
+                        row("⌘⇧T", "Switch to the next terminal tab.")
                         row("⌘⌥↑ / ⌘⌥↓", "Move the selected workspace up / down in the sidebar.")
                         row("Esc", "Close this guide.")
                     }

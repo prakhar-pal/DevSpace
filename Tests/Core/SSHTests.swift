@@ -77,6 +77,21 @@ final class ZedRemoteTests: XCTestCase {
         )
     }
 
+    func testZedWorkdirPrefersReportedTerminalDirectory() {
+        XCTAssertEqual(
+            SSH.zedWorkdir(
+                currentDirectory: "/workspaces/webclients/packages/app",
+                fallback: "/workspace"
+            ),
+            "/workspaces/webclients/packages/app"
+        )
+    }
+
+    func testZedWorkdirFallsBackUntilTerminalReportsDirectory() {
+        XCTAssertEqual(SSH.zedWorkdir(currentDirectory: nil, fallback: "/workspace"), "/workspace")
+        XCTAssertEqual(SSH.zedWorkdir(currentDirectory: "", fallback: "/workspace"), "/workspace")
+    }
+
     // Real process-table lines captured while Zed had wc-2 open remotely.
     private let zedMaster = "ssh -N -o ControlPersist=no -o ControlMaster=yes "
         + "-o ControlPath=/var/folders/30/T/zed-ssh-sessionU9kVda/ssh.sock wc-2.devpod"

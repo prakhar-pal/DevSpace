@@ -374,6 +374,7 @@ final class AppModel: ObservableObject {
     func openInZed(_ id: String) {
         guard validID(id) else { return }
         let r = runner
+        let currentDirectory = activeModel(id)?.state.workingDirectory
         DispatchQueue.global(qos: .userInitiated).async {
             // Always hand Zed the pod's URL: the CLI focuses the existing
             // window when the project is already open (verified live — no
@@ -384,7 +385,11 @@ final class AppModel: ObservableObject {
             // re-running the devpod provision flow while a session exists is
             // what duplicates windows.
             let sessionActive = SSH.zedSessionActive(psOutput: Self.processTable(), podID: id)
-            let url = SSH.zedRemoteURL(podID: id, workdir: SSH.workdir(podID: id))
+            let workdir = SSH.zedWorkdir(
+                currentDirectory: currentDirectory,
+                fallback: SSH.workdir(podID: id)
+            )
+            let url = SSH.zedRemoteURL(podID: id, workdir: workdir)
             guard let cli = Self.zedCLI() else {
                 if sessionActive {
                     Log.write("zed: cli not found; session for \(id) already open — activating Zed")
@@ -780,15 +785,11 @@ final class AppModel: ObservableObject {
             return event
         }
 
-        // ⌘⇧[ / ⌘⇧] — previous / next terminal tab (macOS tab convention).
-        // charactersIgnoringModifiers ignores every modifier EXCEPT Shift, so
-        // with ⌘⇧ held it yields "{"/"}"; derive the true unshifted key the
-        // way libghostty does (characters(byApplyingModifiers: [])).
+        // ⌘⇧T — next terminal tab, complementing ⌘T for a new tab.
         if flags == [.command, .shift], renaming == nil, !guideOpen {
-            let unshifted = event.characters(byApplyingModifiers: []) ?? chars
-            if unshifted == "[" || unshifted == "]" {
+            if chars == "t" {
                 if let id = selectedID, phase(of: id) == .terminal {
-                    cycleTab(id, by: unshifted == "]" ? 1 : -1)
+                    cycleTab(id, by: 1)
                 }
                 return nil
             }
