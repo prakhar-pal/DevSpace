@@ -38,5 +38,10 @@ let package = Package(
             dependencies: ["DevSpaceCore"],
             path: "Tests/Core"
         ),
+        .testTarget(
+            name: "DevSpaceAppTests",
+            dependencies: ["DevSpaceApp"],
+            path: "Tests/App"
+        ),
     ]
 )
