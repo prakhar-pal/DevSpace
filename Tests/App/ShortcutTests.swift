@@ -10,4 +10,8 @@ final class ShortcutTests: XCTestCase {
     func testNextTerminalTabShortcutDoesNotMatchOtherKeys() {
         XCTAssertFalse(AppModel.isNextTerminalTabShortcut("["))
     }
+
+    func testSidebarToggleShortcutMatchesUppercaseCharacter() {
+        XCTAssertTrue(AppModel.isSidebarToggleShortcut("B"))
+    }
 }
