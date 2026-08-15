@@ -1,5 +1,16 @@
 # dev-space
 
+## v0.6.2 - 2026-08-15
+
+### Fixes
+- fix: consume Cmd+B before terminal input (94925f3)
+- fix: initialize terminal directory tracking (baaa33a)
+- fix: open Zed at active terminal directory (294c9f6)
+
+### Other
+- docs: add Zed current-directory design (ec7a766)
+
+
 ## v0.6.1 - 2026-07-25
 
 ### Fixes
