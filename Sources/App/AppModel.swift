@@ -120,7 +120,7 @@ final class AppModel: ObservableObject {
     /// open path (it makes ssh round-trips) and best-effort. Each injection is
     /// itself a `devpod ssh` into the workspace, so a success doubles as the
     /// proof-of-connectivity that releases the deferred "started" notification.
-    private func injectHooks(_ id: String) {
+    private func injectHooks(_ id: String, then completion: @escaping () -> Void = {}) {
         let r = runner
         let token = notifyToken
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) { [weak self] in
@@ -143,8 +143,9 @@ final class AppModel: ObservableObject {
             } catch {
                 Log.write("inject: shell integration FAILED pod=\(id): \(error)")
             }
-            if sshOK {
-                DispatchQueue.main.async { self?.sshConfirmed(id) }
+            DispatchQueue.main.async {
+                if sshOK { self?.sshConfirmed(id) }
+                completion()
             }
         }
     }
@@ -631,8 +632,18 @@ final class AppModel: ObservableObject {
         guard validID(id) else { return }
         guard !opened.contains(id), !starting.contains(id), !shuttingDown.contains(id) else { return }
         opened.insert(id)
-        setPanes(id, [makeTerminal(id, tunnel: true)])
-        injectHooks(id)
+        // The OSC 7 shell hook is sourced only by a new shell. Install it
+        // before creating the first terminal so its initial prompt reports
+        // the user's current remote directory.
+        injectHooks(id) { [weak self] in
+            guard let self,
+                  self.opened.contains(id),
+                  self.panes[id] == nil,
+                  !self.starting.contains(id),
+                  !self.shuttingDown.contains(id)
+            else { return }
+            self.setPanes(id, [self.makeTerminal(id, tunnel: true)])
+        }
     }
 
     // MARK: - Terminal tabs
@@ -787,7 +798,7 @@ final class AppModel: ObservableObject {
 
         // ⌘⇧T — next terminal tab, complementing ⌘T for a new tab.
         if flags == [.command, .shift], renaming == nil, !guideOpen {
-            if chars == "t" {
+            if Self.isNextTerminalTabShortcut(chars) {
                 if let id = selectedID, phase(of: id) == .terminal {
                     cycleTab(id, by: 1)
                 }
@@ -859,5 +870,9 @@ final class AppModel: ObservableObject {
             }
         }
         return event
+    }
+
+    static func isNextTerminalTabShortcut(_ charactersIgnoringModifiers: String) -> Bool {
+        charactersIgnoringModifiers.caseInsensitiveCompare("t") == .orderedSame
     }
 }
