@@ -103,6 +103,12 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
 - **Never commit files yourself.** Present the changes and the proposed commit
   message (Conventional Commits) and let the user commit. Do not run
   `git commit`/`git push`.
+- **Always use `gh stack` to create PRs**, including single-PR changes. When PR
+  creation is explicitly authorized, establish local stack tracking with
+  `gh stack init` (or extend it with `gh stack add`), then publish with
+  `gh stack submit`; do not use `gh pr create`. Never use `gh stack link`
+  alone because it creates remote-only metadata that `gh stack submit` cannot
+  use from the local branch.
 - **Never make commits on the `main` branch.** Work on a feature branch.
 - **Use `.tmp/` for temporary files** (the project-root `.tmp`, which is
   `.gitignore`d). Application logs go to `.tmp/devspace.log` (a symlink to
