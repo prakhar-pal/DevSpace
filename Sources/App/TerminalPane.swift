@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import GhosttyTerminal
 import GhosttyTheme
@@ -201,12 +202,16 @@ enum GhosttyConfig {
 
 struct TerminalPaneView: View {
     @ObservedObject var model: TerminalPaneModel
+    let handleKeyEquivalent: (NSEvent) -> Bool
 
     var body: some View {
         // Focus is driven imperatively by MainPane.focusSelectedTerminal() (the
         // library's FocusState-based `.terminalFocused` binding does not
         // propagate here), so no focus modifier is attached.
-        TerminalSurfaceView(context: model.state)
+        DevSpaceTerminalSurfaceView(
+            state: model.state,
+            handleKeyEquivalent: handleKeyEquivalent
+        )
             .background(Color(red: 0.067, green: 0.067, blue: 0.067)) // #111
     }
 }
