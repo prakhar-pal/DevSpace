@@ -110,7 +110,11 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
   `gh stack submit`; do not use `gh pr create`. Never use `gh stack link`
   alone because it creates remote-only metadata that `gh stack submit` cannot
   use from the local branch.
-- **Never make commits on the `main` branch.** Work on a feature branch.
+- **Avoid git worktrees.** Work in the current checkout unless an exceptional,
+  life-or-death isolation need has been explicitly confirmed by the user.
+- **Never make commits on the `main` branch.** When asked to build a feature or
+  fix a bug while on `main`, create a feature branch first. Otherwise, work on
+  the current feature branch.
 - **Use `.tmp/` for temporary files** (the project-root `.tmp`, which is
   `.gitignore`d). Application logs go to `.tmp/devspace.log` (a symlink to
   `~/Library/Logs/DevSpaceDev.log`; debug builds only).
