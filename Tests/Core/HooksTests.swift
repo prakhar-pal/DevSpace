@@ -3,6 +3,15 @@ import XCTest
 
 // Mirrors hooks.rs tests.
 final class HooksTests: XCTestCase {
+    private final class RecordingRunner: CommandRunning, @unchecked Sendable {
+        var calls: [[String]] = []
+
+        func run(_ args: [String]) throws -> String {
+            calls.append(args)
+            return "{}"
+        }
+    }
+
     private func eventArray(_ merged: [String: Any], _ key: String) -> [Any]? {
         (merged["hooks"] as? [String: Any])?[key] as? [Any]
     }
@@ -56,6 +65,30 @@ final class HooksTests: XCTestCase {
         XCTAssertTrue(s.contains("deadbeef"))
         XCTAssertTrue(s.contains("/notify"))
         XCTAssertTrue(s.contains("${1:-Stop}"))
+    }
+
+    func testInjectWithManualHelperWritesSettingsAndHelper() throws {
+        let runner = RecordingRunner()
+
+        try Hooks.inject(runner, podID: "wc-1", token: "tok", installManualHelper: true)
+
+        let write = try XCTUnwrap(runner.calls.last)
+        XCTAssertEqual(Array(write.prefix(2)), ["ssh", "--command"])
+        XCTAssertTrue(write[2].contains("settings.json"))
+        XCTAssertTrue(write[2].contains("~/.devspace-notify"))
+        XCTAssertTrue(write[2].contains("chmod +x ~/.devspace-notify"))
+    }
+
+    func testInjectWithoutManualHelperWritesSettingsOnly() throws {
+        let runner = RecordingRunner()
+
+        try Hooks.inject(runner, podID: "wc-1", token: "tok", installManualHelper: false)
+
+        let write = try XCTUnwrap(runner.calls.last)
+        XCTAssertEqual(Array(write.prefix(2)), ["ssh", "--command"])
+        XCTAssertTrue(write[2].contains("settings.json"))
+        XCTAssertFalse(write[2].contains("~/.devspace-notify"))
+        XCTAssertFalse(write[2].contains("chmod +x"))
     }
 
     func testBakesLiteralPodIdTokenEventNoEnv() {

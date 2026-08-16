@@ -70,9 +70,15 @@ public enum Hooks {
 
     static func base64Encode(_ data: Data) -> String { data.base64EncodedString() }
 
-    /// Read the pod's settings.json, merge the hooks, and write it back (plus the
-    /// helper) via `devpod ssh --command`. Idempotent; best-effort.
-    public static func inject(_ runner: CommandRunning, podID: String, token: String) throws {
+    /// Read the pod's settings.json, merge the hooks, and write it back via
+    /// `devpod ssh --command`. Optionally install the manual helper.
+    /// Idempotent; best-effort.
+    public static func inject(
+        _ runner: CommandRunning,
+        podID: String,
+        token: String,
+        installManualHelper: Bool
+    ) throws {
         try Devpod.validateId(podID)
         let read = try runner.run([
             "ssh", "--command",
@@ -85,12 +91,14 @@ public enum Hooks {
         let merged = mergeSettings(existing, podID: podID, token: token)
         let serialized = try JSONSerialization.data(withJSONObject: merged)
         let settingsB64 = serialized.base64EncodedString()
-        let helperB64 = base64Encode(Data(notifyHelperScript(podID: podID, token: token).utf8))
-        let cmd = "CLAUDE_DIR=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\" "
+        var cmd = "CLAUDE_DIR=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\" "
             + "&& mkdir -p \"$CLAUDE_DIR\" "
-            + "&& echo \(settingsB64) | base64 -d > \"$CLAUDE_DIR/settings.json\" "
-            + "&& echo \(helperB64) | base64 -d > ~/.devspace-notify "
-            + "&& chmod +x ~/.devspace-notify"
+            + "&& echo \(settingsB64) | base64 -d > \"$CLAUDE_DIR/settings.json\""
+        if installManualHelper {
+            let helperB64 = base64Encode(Data(notifyHelperScript(podID: podID, token: token).utf8))
+            cmd += " && echo \(helperB64) | base64 -d > ~/.devspace-notify"
+            cmd += " && chmod +x ~/.devspace-notify"
+        }
         _ = try runner.run(["ssh", "--command", cmd, "--", podID])
     }
 }

@@ -94,9 +94,10 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
   so the ad-hoc dev build never blocks on a consent prompt (debug builds
   only — release builds write no log; controlled by the `DevSpaceLogPath`
   Info.plist key the assembly script sets for Debug).
-- Manual notification trigger inside a pod: open the workspace in DevSpace, then
-  run `~/.devspace-notify` in that terminal (it uses this session's reverse
-  tunnel). `~/.devspace-notify Notification` sends a "needs input" event.
+- Manual notification trigger inside a pod (DevSpaceDev only): open the
+  workspace in DevSpaceDev, then run `~/.devspace-notify` in that terminal (it
+  uses this session's reverse tunnel). `~/.devspace-notify Notification` sends
+  a "needs input" event. Production DevSpace does not install this helper.
 
 ## Agent Rules
 
