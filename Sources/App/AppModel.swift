@@ -772,13 +772,21 @@ final class AppModel: ObservableObject {
     private var keyMonitor: Any?
 
     /// Cmd+1..9 selects the Nth visible workspace; Cmd+B toggles the sidebar.
-    /// A local monitor (capture-phase analog) consumes the event so a focused
-    /// terminal doesn't also receive it; suppressed while a modal is open.
+    /// The local monitor consumes app shortcuts except terminal-focused Cmd+B,
+    /// which is forwarded to DevSpaceTerminalView's key-equivalent boundary;
+    /// all app shortcuts are suppressed while a modal is open.
     func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKey(event) ?? event
         }
+    }
+
+    func handleTerminalKeyEquivalent(_ event: NSEvent) -> Bool {
+        guard renaming == nil, !guideOpen else { return false }
+        guard Self.isSidebarToggleKeyEquivalent(event) else { return false }
+        sidebarOpen.toggle()
+        return true
     }
 
     private func handleKey(_ event: NSEvent) -> NSEvent? {
@@ -821,7 +829,14 @@ final class AppModel: ObservableObject {
 
         guard renaming == nil, !guideOpen else { return event } // modal owns the keyboard
 
-        if Self.isSidebarToggleShortcut(chars) {
+        if Self.isSidebarToggleKeyEquivalent(event) {
+            let window = event.window ?? NSApp.keyWindow
+            if Self.shouldRouteSidebarToggleToTerminal(
+                event,
+                firstResponder: window?.firstResponder
+            ) {
+                return event
+            }
             sidebarOpen.toggle()
             return nil
         }
@@ -878,5 +893,20 @@ final class AppModel: ObservableObject {
 
     static func isSidebarToggleShortcut(_ charactersIgnoringModifiers: String) -> Bool {
         charactersIgnoringModifiers.caseInsensitiveCompare("b") == .orderedSame
+    }
+
+    static func isSidebarToggleKeyEquivalent(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              let chars = event.charactersIgnoringModifiers
+        else { return false }
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        return flags == [.command] && isSidebarToggleShortcut(chars)
+    }
+
+    static func shouldRouteSidebarToggleToTerminal(
+        _ event: NSEvent,
+        firstResponder: NSResponder?
+    ) -> Bool {
+        isSidebarToggleKeyEquivalent(event) && firstResponder is DevSpaceTerminalView
     }
 }

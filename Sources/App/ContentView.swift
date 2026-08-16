@@ -127,7 +127,12 @@ private struct MainPane: View {
             // background shells keep running and keep their scrollback.
             ZStack {
                 ForEach(panes) { pane in
-                    TerminalPaneView(model: pane)
+                    TerminalPaneView(
+                        model: pane,
+                        handleKeyEquivalent: { event in
+                            model.handleTerminalKeyEquivalent(event)
+                        }
+                    )
                         .opacity(pane.id == activeID ? 1 : 0)
                         .allowsHitTesting(pane.id == activeID)
                 }
