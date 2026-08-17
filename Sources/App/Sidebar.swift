@@ -1,6 +1,28 @@
 import DevSpaceCore
 import SwiftUI
 
+enum SidebarSessionActions {
+    static func showsDisconnect(
+        isOpened: Bool,
+        hasPanes: Bool,
+        isTerminalVisible: Bool
+    ) -> Bool {
+        isOpened && hasPanes && isTerminalVisible
+    }
+
+    static func showsTerminalActions(
+        isOpened: Bool,
+        hasPanes: Bool,
+        isTerminalVisible: Bool
+    ) -> Bool {
+        AppModel.canMutateTerminal(
+            isOpened: isOpened,
+            hasPanes: hasPanes,
+            isTerminalVisible: isTerminalVisible
+        )
+    }
+}
+
 /// The workspace sidebar — port of src/components/Sidebar.tsx.
 struct SidebarView: View {
     @ObservedObject var model: AppModel
@@ -163,7 +185,18 @@ private struct WorkspaceRow: View {
 
     @ViewBuilder private var menuItems: some View {
         Button("Set friendly name…") { model.beginRename(workspace.id) }
-        if model.opened.contains(workspace.id) {
+        if SidebarSessionActions.showsDisconnect(
+            isOpened: model.opened.contains(workspace.id),
+            hasPanes: !(model.panes[workspace.id] ?? []).isEmpty,
+            isTerminalVisible: model.isTerminalVisible(workspace.id)
+        ) {
+            Button("Disconnect") { model.disconnect(workspace.id) }
+        }
+        if SidebarSessionActions.showsTerminalActions(
+            isOpened: model.opened.contains(workspace.id),
+            hasPanes: !(model.panes[workspace.id] ?? []).isEmpty,
+            isTerminalVisible: model.isTerminalVisible(workspace.id)
+        ) {
             Button("Reload SSH Session") { model.reload(workspace.id) }
             Button("New Terminal") { model.newTerminal(workspace.id) }
         }

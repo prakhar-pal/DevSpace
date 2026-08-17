@@ -54,8 +54,12 @@ private struct MainPane: View {
             ForEach(Array(model.panes.keys), id: \.self) { pid in
                 if !(model.panes[pid] ?? []).isEmpty {
                     paneContainer(pid: pid)
-                        .opacity(pid == model.selectedID ? 1 : 0)
-                        .allowsHitTesting(pid == model.selectedID)
+                        // The primary terminal must remain mounted while its
+                        // shell integration is injected so it receives a
+                        // viewport and starts SSH, but it is not yet safe to
+                        // show or interact with.
+                        .opacity(pid == model.selectedID && model.isTerminalVisible(pid) ? 1 : 0)
+                        .allowsHitTesting(pid == model.selectedID && model.isTerminalVisible(pid))
                 }
             }
 
@@ -67,6 +71,9 @@ private struct MainPane: View {
         .onChange(of: model.selectedID) { focusSelectedTerminal() }
         .onChange(of: model.panes.mapValues { $0.map(\.id) }) { focusSelectedTerminal() }
         .onChange(of: model.activePane) { focusSelectedTerminal() }
+        .onChange(of: model.selectedID.map { model.isTerminalVisible($0) } ?? false) {
+            focusSelectedTerminal()
+        }
         .onAppear { focusSelectedTerminal() }
     }
 
@@ -79,7 +86,13 @@ private struct MainPane: View {
     /// pane by its `TerminalController` identity, and retry briefly because the
     /// surface NSView may not be in the window yet right after a pane is created.
     private func focusSelectedTerminal(attempt: Int = 0) {
-        guard let sel = model.selectedID, let pane = model.activeModel(sel) else { return }
+        guard let sel = model.selectedID,
+              model.isTerminalVisible(sel),
+              let pane = model.activeModel(sel)
+        else {
+            clearTerminalFocus()
+            return
+        }
         let controller = pane.state.controller
         if let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }),
            let view = Self.terminalView(in: window.contentView, controller: controller)
@@ -94,6 +107,14 @@ private struct MainPane: View {
             guard model.selectedID == sel else { return }
             focusSelectedTerminal(attempt: attempt + 1)
         }
+    }
+
+    /// A hidden prewarmed terminal must not retain the responder from the
+    /// previously selected workspace; otherwise keystrokes would still reach
+    /// that invisible terminal while the connecting card is shown.
+    private func clearTerminalFocus() {
+        let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible })
+        window?.makeFirstResponder(nil)
     }
 
     /// Depth-first search for the `AppTerminalView` bound to `controller`.
@@ -130,7 +151,8 @@ private struct MainPane: View {
                     TerminalPaneView(
                         model: pane,
                         handleKeyEquivalent: { event in
-                            model.handleTerminalKeyEquivalent(event)
+                            guard model.isTerminalVisible(pid) else { return false }
+                            return model.handleTerminalKeyEquivalent(event)
                         }
                     )
                         .opacity(pane.id == activeID ? 1 : 0)
@@ -176,10 +198,13 @@ private struct MainPane: View {
         if let sel = model.selectedID {
             // Any selected pod without panes shows its status card — including
             // a RUNNING pod the user disconnected from (Connect reopens it).
-            if (model.panes[sel] ?? []).isEmpty, let w = model.byID[sel] {
+            if ((model.panes[sel] ?? []).isEmpty || model.isConnecting(sel)),
+               let w = model.byID[sel]
+            {
                 ActionPanelView(
                     workspace: w,
                     displayName: model.name(sel),
+                    isConnecting: model.isConnecting(sel),
                     onStart: { model.start($0) },
                     onConnect: { model.connect($0) },
                     onStop: { model.stop($0) }
