@@ -6,6 +6,16 @@ import DevSpaceCore
 /// workspace session lifecycle (starting / running terminal / shutting down).
 @MainActor
 final class AppModel: ObservableObject {
+    protocol HandoffTimeoutScheduling: AnyObject {
+        func schedule(after delay: TimeInterval, action: @escaping () -> Void)
+    }
+
+    final class MainQueueHandoffTimeoutScheduler: HandoffTimeoutScheduling {
+        func schedule(after delay: TimeInterval, action: @escaping () -> Void) {
+            Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in action() }
+        }
+    }
+
     @Published private(set) var workspaces: [WorkspaceView] = []
     @Published var selectedID: String? { didSet { updateExcluded() } }
     @Published private(set) var badges: Set<String> = []
@@ -36,6 +46,7 @@ final class AppModel: ObservableObject {
     private let excluded = ExcludedIDs()
     private let notifyToken: String
     private let handoffTimeout: TimeInterval
+    private let handoffTimeoutScheduler: HandoffTimeoutScheduling
 #if DEBUG
     private let installManualNotifyHelper = true
 #else
@@ -150,10 +161,12 @@ final class AppModel: ObservableObject {
         interval: TimeInterval = 10,
         initialWorkspaces: [WorkspaceView] = [],
         startsRuntimeServices: Bool = true,
-        handoffTimeout: TimeInterval = 10
+        handoffTimeout: TimeInterval = 10,
+        handoffTimeoutScheduler: HandoffTimeoutScheduling = MainQueueHandoffTimeoutScheduler()
     ) {
         self.runner = runner
         self.handoffTimeout = max(0, handoffTimeout)
+        self.handoffTimeoutScheduler = handoffTimeoutScheduler
         notifyToken = startsRuntimeServices ? (try? Notify.loadOrCreateToken()) ?? "" : ""
         loop = PollLoop(runner: runner, interval: interval, excluded: excluded)
         let l = LayoutStore.load()
@@ -804,7 +817,7 @@ final class AppModel: ObservableObject {
                 }
             },
             scheduleTimeout: { delay in
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, paneID = pane.id] in
+                self.handoffTimeoutScheduler.schedule(after: delay) { [weak self, paneID = pane.id] in
                     self?.resolveShellIntegration(
                         id,
                         event: .timedOut(paneID: paneID),

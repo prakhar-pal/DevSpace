@@ -26,6 +26,16 @@ final class SidebarTests: XCTestCase {
         }
     }
 
+    private final class ManualHandoffTimeoutScheduler: AppModel.HandoffTimeoutScheduling {
+        private(set) var action: (() -> Void)?
+
+        func schedule(after _: TimeInterval, action: @escaping () -> Void) {
+            self.action = action
+        }
+
+        func fire() { action?() }
+    }
+
     func testDisconnectMenuItemRequiresAnOpenPTY() {
         XCTAssertTrue(SidebarSessionActions.showsDisconnect(
             isOpened: true,
@@ -151,6 +161,7 @@ final class SidebarTests: XCTestCase {
     func testTimedOutShellIntegrationRevealsTheMountedTerminal() async {
         let id = "timed-out-integration-pod"
         let runner = BlockingShellIntegrationRunner()
+        let scheduler = ManualHandoffTimeoutScheduler()
         let model = AppModel(
             runner: runner,
             interval: 3_600,
@@ -163,16 +174,24 @@ final class SidebarTests: XCTestCase {
                 error: nil
             )],
             startsRuntimeServices: false,
-            handoffTimeout: 0
+            handoffTimeoutScheduler: scheduler
         )
         defer { runner.releaseShellIntegration.signal() }
 
         model.connect(id)
+        XCTAssertEqual(runner.shellIntegrationStarted.wait(timeout: .now() + 1), .success)
         let mountedPaneID = model.panes[id]!.first!.id
-        for _ in 0 ..< 100 where !model.isTerminalVisible(id) {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        XCTAssertFalse(model.isTerminalVisible(id))
+        scheduler.fire()
 
+        XCTAssertTrue(model.isTerminalVisible(id))
+        XCTAssertEqual(model.panes[id]?.count, 1)
+        XCTAssertEqual(model.panes[id]?.first?.id, mountedPaneID)
+
+        runner.releaseShellIntegration.signal()
+        for _ in 0 ..< 100 {
+            await Task.yield()
+        }
         XCTAssertTrue(model.isTerminalVisible(id))
         XCTAssertEqual(model.panes[id]?.count, 1)
         XCTAssertEqual(model.panes[id]?.first?.id, mountedPaneID)

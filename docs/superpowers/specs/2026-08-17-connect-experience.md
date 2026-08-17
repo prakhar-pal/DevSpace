@@ -58,7 +58,7 @@ and the injection-failure/timeout fallback. Diagnostics will distinguish SSH
 launch, the integration write, remote-shell restart, and the first pane made
 visible.
 
-## Concurrent terminal and shell-integration handoff Implementation Plan
+## Concurrent terminal and shell-integration handoff implementation record
 
 > **For agentic workers:** Execute each task with a fresh red-green test cycle.
 
@@ -86,7 +86,7 @@ SwiftPM/XCTest.
   replacing its SSH process; keep extra-terminal behavior unchanged.
 - Preserve the existing workspace-id timing log format and do not log tokens
   or remote command payloads.
-- Do not commit or push changes.
+- Agents may commit and push only on a non-`main`/non-`master` branch.
 
 ### Task 1: Model the handoff decision
 
@@ -101,7 +101,7 @@ SwiftPM/XCTest.
   `.revealOriginal` and `.restartRemoteShellThenReveal`.
 - Produce `AppModel.terminalHandoffAction(integrationSucceeded:sshProducedOutput:)`.
 
-- [ ] **Step 1: Write failing decision tests**
+- [x] **Step 1: Write failing decision tests**
 
 ```swift
 func testIntegrationCompletingBeforeSSHOutputRevealsOriginalTerminal() {
@@ -135,12 +135,12 @@ func testFailedIntegrationRevealsOriginalTerminal() {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and verify it fails because the action
+- [x] **Step 2: Run the focused test and verify it fails because the action
   type/function is absent**
 
 Run: `swift test --filter ConnectionTimingTests`
 
-- [ ] **Step 3: Add the minimal equatable action and pure decision function**
+- [x] **Step 3: Add the minimal equatable action and pure decision function**
 
 ```swift
 enum TerminalHandoffAction: Equatable {
@@ -158,7 +158,7 @@ static func terminalHandoffAction(
 }
 ```
 
-- [ ] **Step 4: Re-run the focused test and verify all decision cases pass**
+- [x] **Step 4: Re-run the focused test and verify all decision cases pass**
 
 ### Task 2: Start SSH concurrently and resolve the hidden terminal
 
@@ -176,7 +176,7 @@ static func terminalHandoffAction(
 - Add `AppModel.isTerminalVisible(_:)` and pending-state cleanup to the normal
   disconnect, stop, exit, and replacement paths.
 
-- [ ] **Step 1: Write failing state-predicate tests**
+- [x] **Step 1: Write failing state-predicate tests**
 
 ```swift
 func testConnectingIncludesMountedTerminalAwaitingIntegration() {
@@ -193,11 +193,11 @@ func testMountedTerminalIsVisibleAfterIntegrationHandoff() {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and verify the new predicates are absent**
+- [x] **Step 2: Run the focused test and verify the new predicates are absent**
 
 Run: `swift test --filter ConnectionTimingTests`
 
-- [ ] **Step 3: Implement the minimal lifecycle wiring**
+- [x] **Step 3: Implement the minimal lifecycle wiring**
 
 ```swift
 // AppModel state
@@ -235,7 +235,7 @@ sets in `disconnect`, `closePane`,
 the final-pane exit path, stop, and workspace deletion so a stale callback
 cannot reveal or replace a later session.
 
-- [ ] **Step 4: Re-run the focused tests and verify them green**
+- [x] **Step 4: Re-run the focused tests and verify them green**
 
 ### Task 3: Keep the prewarmed terminal hidden until handoff completes
 
@@ -250,7 +250,7 @@ cannot reveal or replace a later session.
 - Consume `AppModel.isTerminalVisible(_:)` and the expanded
   `AppModel.isConnecting(...)` predicate from Task 2.
 
-- [ ] **Step 1: Write a failing ActionPanel state test**
+- [x] **Step 1: Write a failing ActionPanel state test**
 
 ```swift
 func testMountedTerminalAwaitingIntegrationStillShowsConnecting() {
@@ -268,12 +268,12 @@ func testMountedTerminalAwaitingIntegrationStillShowsConnecting() {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and verify it fails until the predicate
+- [x] **Step 2: Run the focused test and verify it fails until the predicate
   wiring is complete**
 
 Run: `swift test --filter ActionPanelTests`
 
-- [ ] **Step 3: Make the SwiftUI handoff invisible to the user**
+- [x] **Step 3: Make the SwiftUI handoff invisible to the user**
 
 Keep pending terminal views mounted so Ghostty receives a viewport and starts
 their PTY, but give a pending workspace zero opacity and no hit testing.
@@ -282,7 +282,7 @@ true even though its pane array is populated. Suppress focus movement and
 terminal keyboard shortcuts until `isTerminalVisible` is true. Once the model
 resolves the handoff, SwiftUI reveals the existing pane normally.
 
-- [ ] **Step 4: Re-run ActionPanel tests and then the full suite**
+- [x] **Step 4: Re-run ActionPanel tests and then the full suite**
 
 Run: `make test`
 
@@ -292,15 +292,15 @@ Run: `make test`
 
 - Modify only if needed after measurement: the same files from Tasks 1–3.
 
-- [ ] **Step 1: Verify formatting and a fresh dev build**
+- [x] **Step 1: Verify formatting and a fresh dev build**
 
 Run: `git diff --check && make build-dev`
 
-- [ ] **Step 2: Launch only the rebuilt dev bundle**
+- [x] **Step 2: Launch only the rebuilt dev bundle**
 
 Run: `open "build/DevSpaceDev.app"`
 
-- [ ] **Step 3: Measure a manual `wc-2` Connect attempt**
+- [x] **Step 3: Measure a manual `wc-2` Connect attempt**
 
 Run after the click: `rg 'connect pod=wc-2 ' .tmp/devspace.log | tail -n 12`
 
