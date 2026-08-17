@@ -22,9 +22,15 @@ diagnostic trigger remains available in DevSpaceDev.
 ## Tests
 
 Add Core coverage using a recording command runner. In both configurations it
-must observe the settings read and merged-settings write. Development must
-also observe a command that writes and chmods `~/.devspace-notify`; production
-must not include either operation.
+must observe exactly one settings read followed by the merged-settings write;
+the production assertion must not be satisfiable by the read command alone.
+Development must also observe a command that writes and chmods
+`~/.devspace-notify`; production must not include either operation.
+
+User-facing manual-test guidance must identify `~/.devspace-notify` as a
+DevSpaceDev-only helper. The in-app Guide must omit that instruction from
+release builds. CI must compile the release executable so the `#if DEBUG`
+production wiring is checked without assembling or launching a release bundle.
 
 ## Constraints
 

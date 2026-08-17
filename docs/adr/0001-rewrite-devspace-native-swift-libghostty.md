@@ -161,7 +161,8 @@ re-ported to Swift**. Rust and the entire `src/` + `src-tauri/` tree are retired
   `~/Library/Application Support/DevSpace/notify-token` (mode 0600).
 - Event→message mapping: `Stop` → "Claude finished", else "Claude needs your
   input"; hook events `Notification`, `Stop`, `PreToolUse:AskUserQuestion`.
-- The `~/.devspace-notify` in-pod helper script and idempotent settings merge.
+- The DevSpaceDev-only `~/.devspace-notify` in-pod helper script and the
+  idempotent settings merge used by both builds.
 - SSH invocation flags (`-tt`, `StrictHostKeyChecking=no`,
   `UserKnownHostsFile=/dev/null`, `SetEnv TERM`, `-R 8765:localhost:17865`,
   target `<id>.devpod`).
@@ -196,8 +197,9 @@ Before committing the full port, build a minimal spike that:
 1. Opens an Xcode SwiftUI app embedding one libghostty surface running
    `ssh <id>.devpod` with the reverse tunnel — confirm crisp Retina rendering,
    resize, ligatures, and focus reporting.
-2. Stands up the Swift `Network.framework` notify listener and fires
-   `~/.devspace-notify` end-to-end to confirm the tunnel + notification path.
+2. Stands up the Swift `Network.framework` notify listener and, from a
+   DevSpaceDev build, fires `~/.devspace-notify` end-to-end to confirm the
+   tunnel + notification path.
 3. Re-ports `hooks` settings-merge with unit tests mirroring the Rust tests
    (preserve unrelated hooks, replace stale DevSpace hooks, handle malformed
    settings).

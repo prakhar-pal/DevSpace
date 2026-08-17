@@ -21,6 +21,17 @@ final class HooksTests: XCTestCase {
         return String(decoding: data, as: UTF8.self)
     }
 
+    private func assertSettingsReadThenWrite(_ runner: RecordingRunner) throws -> [String] {
+        XCTAssertEqual(runner.calls.count, 2)
+        let read = try XCTUnwrap(runner.calls.first)
+        XCTAssertEqual(Array(read.prefix(2)), ["ssh", "--command"])
+        XCTAssertEqual(
+            try XCTUnwrap(read.dropFirst(2).first),
+            "cat \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\" 2>/dev/null || echo '{}'"
+        )
+        return try XCTUnwrap(runner.calls.dropFirst().first)
+    }
+
     func testAddsHooksToEmptySettings() {
         let merged = Hooks.mergeSettings(nil, podID: "wc-1", token: "tok")
         XCTAssertEqual(eventArray(merged, "Notification")?.count, 1)
@@ -72,7 +83,7 @@ final class HooksTests: XCTestCase {
 
         try Hooks.inject(runner, podID: "wc-1", token: "tok", installManualHelper: true)
 
-        let write = try XCTUnwrap(runner.calls.last)
+        let write = try assertSettingsReadThenWrite(runner)
         XCTAssertEqual(Array(write.prefix(2)), ["ssh", "--command"])
         XCTAssertTrue(write[2].contains("settings.json"))
         XCTAssertTrue(write[2].contains("~/.devspace-notify"))
@@ -84,9 +95,9 @@ final class HooksTests: XCTestCase {
 
         try Hooks.inject(runner, podID: "wc-1", token: "tok", installManualHelper: false)
 
-        let write = try XCTUnwrap(runner.calls.last)
+        let write = try assertSettingsReadThenWrite(runner)
         XCTAssertEqual(Array(write.prefix(2)), ["ssh", "--command"])
-        XCTAssertTrue(write[2].contains("settings.json"))
+        XCTAssertTrue(write[2].contains("base64 -d > \"$CLAUDE_DIR/settings.json\""))
         XCTAssertFalse(write[2].contains("~/.devspace-notify"))
         XCTAssertFalse(write[2].contains("chmod +x"))
     }

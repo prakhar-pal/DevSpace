@@ -1,9 +1,10 @@
 import Foundation
 
 // Port of src-tauri/src/hooks.rs — idempotently inject the DevSpace Claude Code
-// notification hooks into a pod's ~/.claude/settings.json (and write the
-// ~/.devspace-notify helper) via `devpod ssh`. Pod id, event label, port, and
-// token are baked into the curl command literally (no in-pod env reliance).
+// notification hooks into a pod's ~/.claude/settings.json via `devpod ssh`.
+// Dev builds may also write the ~/.devspace-notify helper. Pod id, event label,
+// port, and token are baked into the curl command literally (no in-pod env
+// reliance).
 public enum Hooks {
     // (settings key, optional matcher, literal event label sent to the desktop)
     static let hookEvents: [(key: String, matcher: String?, label: String)] = [

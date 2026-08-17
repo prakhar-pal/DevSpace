@@ -65,3 +65,47 @@ Expected: PASS; development retains the helper command and production omits it w
 Run: `make test`
 
 Expected: PASS with no new failures.
+
+### Task 2: Close production validation and guidance gaps
+
+**Files:**
+- Modify: `Tests/Core/HooksTests.swift`
+- Modify: `Sources/App/Modals.swift`
+- Modify: `Sources/Core/Hooks.swift`
+- Modify: `README.md`
+- Modify: `FEATURES.md`
+- Modify: `docs/adr/0001-rewrite-devspace-native-swift-libghostty.md`
+- Modify: `.github/workflows/ci.yml`
+
+**Interfaces:**
+- Consumes: `Hooks.inject(_:podID:token:installManualHelper:)`, the Debug build
+  condition, and existing notification documentation.
+- Produces: a mutation-resistant production hook-write test, build-specific
+  manual-helper guidance, and release compilation in CI.
+
+- [ ] **Step 1: Strengthen the production hook-write test**
+
+Assert that injection makes exactly two runner calls, unwrap the first call
+after the settings read, and assert that its command contains
+`base64 -d > \"$CLAUDE_DIR/settings.json\"`.
+Verify the strengthened test fails when the production branch is temporarily
+mutated to return after the settings read, then restore the implementation.
+
+- [ ] **Step 2: Correct user-facing guidance**
+
+Wrap the in-app Guide's manual-test row in `#if DEBUG`. Qualify the helper as
+DevSpaceDev-only in README, FEATURES, the Core comment, and the notification
+ADR while leaving automatic notification-hook behavior documented for both
+builds.
+
+- [ ] **Step 3: Compile release code in CI**
+
+After the Debug app build, add a CI step named `Build release executable` that
+runs `swift build -c release --product DevSpaceApp`. Do not assemble or launch
+`DevSpace.app`.
+
+- [ ] **Step 4: Verify the changes**
+
+Run `swift test --filter HooksTests`, `make test`, and `git diff --check`.
+Inspect the workflow and all `devspace-notify` references. Do not run
+`make build` without separate user confirmation.

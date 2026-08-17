@@ -87,9 +87,9 @@ see [`CLAUDE.md`](CLAUDE.md).
     suppressed (unsigned app on managed/MDM Macs).
 - **Unread badge** — a blue dot on a workspace marks an unread Claude
   notification; selecting the workspace clears it.
-- **Manual test** — run `~/.devspace-notify` inside a pod's DevSpace terminal to
-  fire a test notification (`~/.devspace-notify Notification` for a
-  "needs input" event).
+- **Manual test (DevSpaceDev only)** — run `~/.devspace-notify` inside a pod's
+  DevSpaceDev terminal to fire a test notification
+  (`~/.devspace-notify Notification` for a "needs input" event).
 - A stable notification token is generated once and persisted (0600) at
   `~/Library/Application Support/DevSpace/notify-token`.
 

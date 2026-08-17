@@ -45,3 +45,6 @@ jobs:
 
       - name: Build dev app
         run: make build-dev
+
+      - name: Build release executable
+        run: swift build -c release --product DevSpaceApp
