@@ -1,12 +1,25 @@
 import SwiftUI
 import DevSpaceCore
 
+enum ActionPanel {
+    enum ConnectionAction: Equatable {
+        case connect
+        case connecting
+    }
+
+    static func connectionAction(workspaceState: String, isConnecting: Bool) -> ConnectionAction? {
+        guard isConnecting || workspaceState == "Running" else { return nil }
+        return isConnecting ? .connecting : .connect
+    }
+}
+
 /// Status card for a selected workspace with no open terminal: metadata plus
 /// the state-appropriate actions — Start when stopped, Connect/Stop when the
 /// pod is running but disconnected (e.g. the user exited its last shell).
 struct ActionPanelView: View {
     let workspace: WorkspaceView
     let displayName: String
+    let isConnecting: Bool
     let onStart: (String) -> Void
     let onConnect: (String) -> Void
     let onStop: (String) -> Void
@@ -26,15 +39,25 @@ struct ActionPanelView: View {
                 field("Source", workspace.source)
                 field("Last used", Self.formatLastUsed(workspace.lastUsed))
 
-                if workspace.state == "Running" {
+                if let connectionAction = ActionPanel.connectionAction(
+                    workspaceState: workspace.state,
+                    isConnecting: isConnecting
+                ) {
                     HStack(spacing: 12) {
                         Button { onConnect(workspace.id) } label: {
-                            Text("Connect")
+                            HStack(spacing: 6) {
+                                if connectionAction == .connecting {
+                                    ProgressView().controlSize(.small)
+                                }
+                                Text(connectionAction == .connecting ? "Connecting…" : "Connect")
                                 .font(.system(size: 13, weight: .medium))
-                                .padding(.horizontal, 18).padding(.vertical, 8)
+                            }
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 8)
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.blue)
+                        .disabled(connectionAction == .connecting)
                         Button { onStop(workspace.id) } label: {
                             Text("Stop")
                                 .font(.system(size: 13, weight: .medium))
@@ -71,6 +94,13 @@ struct ActionPanelView: View {
             .background(badgeColor.opacity(0.15))
             .foregroundStyle(badgeColor)
             .clipShape(Capsule())
+    }
+
+    static func showsConnectionActions(workspaceState: String, isConnecting: Bool) -> Bool {
+        ActionPanel.connectionAction(
+            workspaceState: workspaceState,
+            isConnecting: isConnecting
+        ) != nil
     }
 
     private var badgeColor: Color {

@@ -4,6 +4,25 @@ import GhosttyTerminal
 import GhosttyTheme
 import DevSpaceCore
 
+/// Bridges the PTY read queue to the main-actor terminal model. The first
+/// byte must be visible to connection-handoff logic before UI delivery runs.
+private final class FirstOutputSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    func record() {
+        lock.lock()
+        value = true
+        lock.unlock()
+    }
+
+    var wasRecorded: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 /// A libghostty terminal surface backed by a host-managed ``PTYSession`` running
 /// an arbitrary command (an SSH shell, or a streaming `devpod up`/`devpod stop`
 /// log). Generalizes the Stack 2 terminal spike.
@@ -12,18 +31,27 @@ import DevSpaceCore
 /// lazy PTY start on first layout); PTY output -> surface; PTY exit -> onExit.
 @MainActor
 final class TerminalPaneModel: ObservableObject, Identifiable {
+    static let restartRemoteShellCommand = "\u{3}reset; exec \"${SHELL:-/bin/sh}\" -i\r"
+
     let id = UUID()
     let state: TerminalViewState
     private let pty = PTYSession()
+    private let firstOutputSignal = FirstOutputSignal()
     private let pasteNormalizer = PasteNewlineNormalizer()
     private var session: InMemoryTerminalSession!
     private var didStart = false
+    private var didReportFirstOutput = false
     private var startedAtNanoseconds: UInt64?
     private let command: String
     private let args: [String]
 
     /// Called (on the main actor) when the underlying process exits.
     var onExit: ((Int32) -> Void)?
+    /// Called (on the main actor) immediately before the underlying PTY starts.
+    var onStart: (() -> Void)?
+    /// Called once (on the main actor) before the first PTY bytes are delivered
+    /// to Ghostty.
+    var onFirstOutput: (() -> Void)?
 
     init(command: String, args: [String]) {
         self.command = command
@@ -50,8 +78,16 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
                 DispatchQueue.main.async { self?.handleResize(viewport) }
             }
         )
-        pty.onOutput = { [weak self] data in
-            DispatchQueue.main.async { self?.session.receive(data) }
+        pty.onOutput = { [weak self, firstOutputSignal] data in
+            firstOutputSignal.record()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if !self.didReportFirstOutput {
+                    self.didReportFirstOutput = true
+                    self.onFirstOutput?()
+                }
+                self.session.receive(data)
+            }
         }
         pty.onExit = { [weak self] code in
             DispatchQueue.main.async {
@@ -72,11 +108,22 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
             didStart = true
             startedAtNanoseconds = DispatchTime.now().uptimeNanoseconds
             Log.write("pty start \(command) \(args.joined(separator: " ")) \(viewport.columns)x\(viewport.rows)")
+            onStart?()
             pty.start(path: command, args: args, cols: viewport.columns, rows: viewport.rows)
         }
     }
 
     func terminate() { pty.terminate() }
+
+    /// True as soon as the PTY read queue has observed output, even if its UI
+    /// delivery remains queued behind other main-actor work.
+    var hasReceivedPTYOutput: Bool { firstOutputSignal.wasRecorded }
+
+    /// Restart only the remote interactive shell while keeping this pane's SSH
+    /// process — and therefore its reverse notification tunnel — alive.
+    func restartRemoteShell() {
+        pty.write(Data(Self.restartRemoteShellCommand.utf8))
+    }
 
     /// Writes host-generated text straight to the pty, bypassing
     /// ``PasteNewlineNormalizer`` — that exists only to fix up libghostty's
