@@ -1,16 +1,18 @@
 # dev-space
 
-## v0.7.0 - 2026-08-17
+## v0.6.3 - 2026-08-17
 
 ### Features
 - feat: add adversarial code review skill (c5a8993)
 
 ### Fixes
+- fix(connect): parallelize shell integration handoff (dccc99b)
 - fix: close notify helper release gaps (6e8c38a)
 - fix: limit manual notify helper to dev builds (416e7cc)
 - fix: intercept Cmd+B before libghostty key handling (454f65d)
 
 ### Other
+- test(connect): cover late integration timeout (3d62d5f)
 - test: verify settings preservation during hook injection (96cb542)
 - docs: codify branch and worktree rules (1b1ab2b)
 - docs: require gh-stack for pull requests (685aacb)

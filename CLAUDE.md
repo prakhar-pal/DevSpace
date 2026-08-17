@@ -101,9 +101,9 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
 
 ## Agent Rules
 
-- **Never commit files yourself.** Present the changes and the proposed commit
-  message (Conventional Commits) and let the user commit. Do not run
-  `git commit`/`git push`.
+- **Agents may commit only on a non-`main`/non-`master` branch.** Never run
+  `git commit` or `git push` while checked out on `main` or `master`; create
+  and use a feature branch instead.
 - **Always use `gh stack` to create PRs**, including single-PR changes. When PR
   creation is explicitly authorized, establish local stack tracking with
   `gh stack init` (or extend it with `gh stack add`), then publish with
@@ -112,9 +112,8 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
   use from the local branch.
 - **Avoid git worktrees.** Work in the current checkout unless an exceptional,
   life-or-death isolation need has been explicitly confirmed by the user.
-- **Never make commits on the `main` branch.** When asked to build a feature or
-  fix a bug while on `main`, create a feature branch first. Otherwise, work on
-  the current feature branch.
+- **When asked to build a feature or fix a bug while on `main` or `master`,**
+  create a feature branch first. Otherwise, work on the current feature branch.
 - **Use `.tmp/` for temporary files** (the project-root `.tmp`, which is
   `.gitignore`d). Application logs go to `.tmp/devspace.log` (a symlink to
   `~/Library/Logs/DevSpaceDev.log`; debug builds only).

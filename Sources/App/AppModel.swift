@@ -6,6 +6,16 @@ import DevSpaceCore
 /// workspace session lifecycle (starting / running terminal / shutting down).
 @MainActor
 final class AppModel: ObservableObject {
+    protocol HandoffTimeoutScheduling: AnyObject {
+        func schedule(after delay: TimeInterval, action: @escaping () -> Void)
+    }
+
+    final class MainQueueHandoffTimeoutScheduler: HandoffTimeoutScheduling {
+        func schedule(after delay: TimeInterval, action: @escaping () -> Void) {
+            Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in action() }
+        }
+    }
+
     @Published private(set) var workspaces: [WorkspaceView] = []
     @Published var selectedID: String? { didSet { updateExcluded() } }
     @Published private(set) var badges: Set<String> = []
@@ -23,6 +33,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var opened: Set<String> = []       // pods with an SSH terminal
     @Published private(set) var starting: Set<String> = []     // pods running `devpod up`
     @Published private(set) var shuttingDown: Set<String> = [] // pods running `devpod stop`
+    @Published private var terminalHandoffs: [String: TerminalHandoffState] = [:]
     /// PTY-backed panes per pod (a devpod up/stop log, or one or more SSH
     /// terminals). Terminals are tabs: index 0 is the primary session (it
     /// carries the reverse notify tunnel); further ones are extra shells.
@@ -34,6 +45,8 @@ final class AppModel: ObservableObject {
     private let loop: PollLoop
     private let excluded = ExcludedIDs()
     private let notifyToken: String
+    private let handoffTimeout: TimeInterval
+    private let handoffTimeoutScheduler: HandoffTimeoutScheduling
 #if DEBUG
     private let installManualNotifyHelper = true
 #else
@@ -54,11 +67,107 @@ final class AppModel: ObservableObject {
     /// once — first Running sighting seeds `autoConnect`.
     private var seenDefinitive: Set<String> = []
 
+    enum TerminalHandoffAction: Equatable {
+        case revealOriginal
+        case restartRemoteShellThenReveal
+    }
+
+    enum TerminalHandoffEvent: Equatable {
+        case firstOutput(paneID: UUID)
+        case integrationFinished(paneID: UUID, succeeded: Bool, sshProducedOutputAtIngress: Bool)
+        case timedOut(paneID: UUID)
+    }
+
+    struct TerminalHandoffState: Equatable {
+        let paneID: UUID
+        private var sshProducedOutput = false
+        private var isPending = true
+
+        init(paneID: UUID) {
+            self.paneID = paneID
+        }
+
+        mutating func handle(_ event: TerminalHandoffEvent) -> TerminalHandoffAction? {
+            guard isPending else { return nil }
+            switch event {
+            case .firstOutput(let eventPaneID):
+                guard eventPaneID == paneID else { return nil }
+                sshProducedOutput = true
+                return nil
+            case .integrationFinished(let eventPaneID, let succeeded, let sshProducedOutputAtIngress):
+                guard eventPaneID == paneID else { return nil }
+                isPending = false
+                return AppModel.terminalHandoffAction(
+                    integrationSucceeded: succeeded,
+                    sshProducedOutput: sshProducedOutput || sshProducedOutputAtIngress
+                )
+            case .timedOut(let eventPaneID):
+                guard eventPaneID == paneID else { return nil }
+                isPending = false
+                return .revealOriginal
+            }
+        }
+
+        mutating func cancel() {
+            isPending = false
+        }
+    }
+
+    nonisolated static func terminalHandoffAction(
+        integrationSucceeded: Bool,
+        sshProducedOutput: Bool
+    ) -> TerminalHandoffAction {
+        integrationSucceeded && sshProducedOutput
+            ? .restartRemoteShellThenReveal
+            : .revealOriginal
+    }
+
+    nonisolated static func shouldConfirmSSH(forShellIntegrationSuccess succeeded: Bool) -> Bool {
+        succeeded
+    }
+
+    static func startTerminalHandoff(
+        mountPrimary: () -> Void,
+        beginShellIntegration: () -> Void,
+        scheduleTimeout: (TimeInterval) -> Void,
+        timeout: TimeInterval = 10
+    ) {
+        mountPrimary()
+        beginShellIntegration()
+        scheduleTimeout(timeout)
+    }
+
+    nonisolated static func elapsedMilliseconds(startedAt: UInt64, now: UInt64) -> UInt64 {
+        guard now >= startedAt else { return 0 }
+        return (now - startedAt) / 1_000_000
+    }
+
+    static func isTerminalReady(hooksFinished: Bool, shellIntegrationFinished: Bool) -> Bool {
+        shellIntegrationFinished
+    }
+
+    private nonisolated static func logConnection(_ id: String, phase: String, startedAt: UInt64) {
+        let elapsed = elapsedMilliseconds(
+            startedAt: startedAt,
+            now: DispatchTime.now().uptimeNanoseconds
+        )
+        Log.write("connect pod=\(id) phase=\(phase) elapsed_ms=\(elapsed)")
+    }
+
     // 10s status polling: halves the devpod/kubectl load of 5s while keeping
     // state changes (with the poller's 2-fetch revival debounce) under ~20s.
-    init(runner: CommandRunning = DevpodCLI(), interval: TimeInterval = 10) {
+    init(
+        runner: CommandRunning = DevpodCLI(),
+        interval: TimeInterval = 10,
+        initialWorkspaces: [WorkspaceView] = [],
+        startsRuntimeServices: Bool = true,
+        handoffTimeout: TimeInterval = 10,
+        handoffTimeoutScheduler: HandoffTimeoutScheduling = MainQueueHandoffTimeoutScheduler()
+    ) {
         self.runner = runner
-        notifyToken = (try? Notify.loadOrCreateToken()) ?? ""
+        self.handoffTimeout = max(0, handoffTimeout)
+        self.handoffTimeoutScheduler = handoffTimeoutScheduler
+        notifyToken = startsRuntimeServices ? (try? Notify.loadOrCreateToken()) ?? "" : ""
         loop = PollLoop(runner: runner, interval: interval, excluded: excluded)
         let l = LayoutStore.load()
         order = l.order
@@ -67,7 +176,9 @@ final class AppModel: ObservableObject {
         // Always start with the Hidden section collapsed.
         hiddenCollapsed = true
         layoutLoaded = true
+        workspaces = initialWorkspaces
         updateExcluded() // didSet doesn't fire for init assignments
+        guard startsRuntimeServices else { return }
         loop.start { [weak self] views in
             DispatchQueue.main.async { self?.apply(views) }
         }
@@ -121,16 +232,19 @@ final class AppModel: ObservableObject {
         Notifier.notify(title: name(podID), body: message, podID: podID)
     }
 
-    /// Inject the Claude hooks over the tunnel after an SSH connect — off the
-    /// open path (it makes ssh round-trips) and best-effort. Each injection is
-    /// itself a `devpod ssh` into the workspace, so a success doubles as the
-    /// proof-of-connectivity that releases the deferred "started" notification.
-    private func injectHooks(_ id: String, then completion: @escaping () -> Void = {}) {
+    /// Inject the Claude hooks after a connect. This is best-effort and must
+    /// not delay terminal creation: the user can open a shell while it runs.
+    private func injectClaudeHooks(
+        _ id: String,
+        startedAt: UInt64,
+        then completion: @escaping () -> Void = {}
+    ) {
         let r = runner
         let token = notifyToken
         let installManualHelper = installManualNotifyHelper
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) { [weak self] in
             var sshOK = false
+            Self.logConnection(id, phase: "hook-started", startedAt: startedAt)
             if token.isEmpty {
                 Log.write("inject: no token — skipping hook injection for pod=\(id)")
             } else {
@@ -147,6 +261,25 @@ final class AppModel: ObservableObject {
                     Log.write("inject: FAILED pod=\(id): \(error)")
                 }
             }
+            Self.logConnection(id, phase: "hooks-finished", startedAt: startedAt)
+            DispatchQueue.main.async {
+                if sshOK { self?.sshConfirmed(id) }
+                completion()
+            }
+        }
+    }
+
+    /// Install OSC 7 shell integration concurrently with the initial terminal.
+    /// Completion is best-effort; a separate fail-open deadline ensures this
+    /// background CLI call can never keep a usable terminal hidden.
+    private func injectShellIntegration(
+        _ id: String,
+        startedAt: UInt64,
+        then completion: @escaping (Bool) -> Void = { _ in }
+    ) {
+        let r = runner
+        DispatchQueue.global(qos: .utility).async {
+            var sshOK = false
             do {
                 try ShellIntegration.inject(r, podID: id)
                 sshOK = true
@@ -154,9 +287,9 @@ final class AppModel: ObservableObject {
             } catch {
                 Log.write("inject: shell integration FAILED pod=\(id): \(error)")
             }
+            Self.logConnection(id, phase: "shell-integration-finished", startedAt: startedAt)
             DispatchQueue.main.async {
-                if sshOK { self?.sshConfirmed(id) }
-                completion()
+                completion(sshOK)
             }
         }
     }
@@ -363,6 +496,7 @@ final class AppModel: ObservableObject {
 
     func stop(_ id: String) {
         guard validID(id) else { return }
+        cancelShellIntegrationHandoff(id)
         opened.remove(id)
         autoConnect.remove(id)
         closePane(id)
@@ -373,6 +507,7 @@ final class AppModel: ObservableObject {
 
     func delete(_ id: String) {
         guard validID(id) else { return }
+        cancelShellIntegrationHandoff(id)
         let r = runner
         DispatchQueue.global(qos: .userInitiated).async { try? Devpod.delete(r, id: id) }
     }
@@ -621,6 +756,7 @@ final class AppModel: ObservableObject {
     /// primary tab keeps the reverse notify tunnel.
     func reload(_ id: String) {
         guard validID(id) else { return }
+        guard isTerminalVisible(id) else { return }
         guard opened.contains(id), let list = panes[id], !list.isEmpty else {
             // No session (e.g. it already died): fall back to a full reopen —
             // an explicit user action, so the session intent is restored.
@@ -630,6 +766,7 @@ final class AppModel: ObservableObject {
             openSSHIfNeeded(id)
             return
         }
+        cancelShellIntegrationHandoff(id)
         let idx = list.firstIndex { $0.id == activePane[id] } ?? 0
         let old = list[idx]
         old.onExit = nil // its exit must not run the tab-close/stop-pod path
@@ -639,29 +776,111 @@ final class AppModel: ObservableObject {
         activePane[id] = fresh.id
     }
 
-    private func openSSHIfNeeded(_ id: String) {
+    private func openSSHIfNeeded(_ id: String, startedAt: UInt64? = nil) {
         guard validID(id) else { return }
         guard !opened.contains(id), !starting.contains(id), !shuttingDown.contains(id) else { return }
+        let attemptStartedAt = startedAt ?? DispatchTime.now().uptimeNanoseconds
         opened.insert(id)
-        // The OSC 7 shell hook is sourced only by a new shell. Install it
-        // before creating the first terminal so its initial prompt reports
-        // the user's current remote directory.
-        injectHooks(id) { [weak self] in
-            guard let self,
-                  self.opened.contains(id),
-                  self.panes[id] == nil,
-                  !self.starting.contains(id),
-                  !self.shuttingDown.contains(id)
-            else { return }
-            self.setPanes(id, [self.makeTerminal(id, tunnel: true)])
+        Self.logConnection(id, phase: "requested", startedAt: attemptStartedAt)
+        let pane = makeTerminal(
+            id,
+            tunnel: true,
+            onStart: {
+                Self.logConnection(id, phase: "ssh-pty-started", startedAt: attemptStartedAt)
+            }
+        )
+        pane.onFirstOutput = { [weak self, paneID = pane.id] in
+            self?.primarySSHProducedOutput(id, paneID: paneID)
         }
+        terminalHandoffs[id] = TerminalHandoffState(paneID: pane.id)
+
+        injectClaudeHooks(id, startedAt: attemptStartedAt)
+        Self.startTerminalHandoff(
+            mountPrimary: {
+                self.setPanes(id, [pane])
+                Self.logConnection(id, phase: "ssh-pane-mounted", startedAt: attemptStartedAt)
+            },
+            beginShellIntegration: {
+                self.injectShellIntegration(id, startedAt: attemptStartedAt) { [weak self, paneID = pane.id] success in
+                    if Self.shouldConfirmSSH(forShellIntegrationSuccess: success) {
+                        self?.sshConfirmed(id)
+                    }
+                    self?.resolveShellIntegration(
+                        id,
+                        event: .integrationFinished(
+                            paneID: paneID,
+                            succeeded: success,
+                            sshProducedOutputAtIngress: pane.hasReceivedPTYOutput
+                        ),
+                        startedAt: attemptStartedAt
+                    )
+                }
+            },
+            scheduleTimeout: { delay in
+                self.handoffTimeoutScheduler.schedule(after: delay) { [weak self, paneID = pane.id] in
+                    self?.resolveShellIntegration(
+                        id,
+                        event: .timedOut(paneID: paneID),
+                        startedAt: attemptStartedAt
+                    )
+                }
+            },
+            timeout: handoffTimeout
+        )
+    }
+
+    private func primarySSHProducedOutput(_ id: String, paneID: UUID) {
+        guard opened.contains(id),
+              panes[id]?.first?.id == paneID,
+              var handoff = terminalHandoffs[id]
+        else { return }
+        _ = handoff.handle(.firstOutput(paneID: paneID))
+        terminalHandoffs[id] = handoff
+    }
+
+    private func resolveShellIntegration(
+        _ id: String,
+        event: TerminalHandoffEvent,
+        startedAt: UInt64
+    ) {
+        let paneID: UUID
+        switch event {
+        case .firstOutput(let id), .integrationFinished(let id, _, _), .timedOut(let id):
+            paneID = id
+        }
+        guard opened.contains(id),
+              let pane = panes[id]?.first,
+              pane.id == paneID,
+              var handoff = terminalHandoffs[id],
+              let action = handoff.handle(event)
+        else { return }
+        pane.onFirstOutput = nil
+        terminalHandoffs[id] = nil
+
+        if case .timedOut = event {
+            Self.logConnection(id, phase: "shell-integration-timeout", startedAt: startedAt)
+        }
+        switch action {
+        case .revealOriginal:
+            break
+        case .restartRemoteShellThenReveal:
+            pane.restartRemoteShell()
+            Self.logConnection(id, phase: "remote-shell-restarted", startedAt: startedAt)
+        }
+        Self.logConnection(id, phase: "terminal-revealed", startedAt: startedAt)
+    }
+
+    private func cancelShellIntegrationHandoff(_ id: String) {
+        guard var handoff = terminalHandoffs[id] else { return }
+        handoff.cancel()
+        terminalHandoffs[id] = nil
     }
 
     // MARK: - Terminal tabs
 
     /// Open another shell to the same pod, as a new active tab.
     func newTerminal(_ id: String) {
-        guard validID(id), opened.contains(id), !(panes[id] ?? []).isEmpty else { return }
+        guard validID(id), canMutateTerminal(id) else { return }
         let pane = makeTerminal(id, tunnel: false) // the primary carries the tunnel
         panes[id]?.append(pane)
         activePane[id] = pane.id
@@ -670,8 +889,10 @@ final class AppModel: ObservableObject {
     /// Close one terminal tab. Closing the LAST tab disconnects from the pod
     /// (shows the status card); the pod itself keeps running.
     func closeTerminal(_ id: String, paneID: UUID) {
+        guard canMutateTerminal(id) else { return }
         guard let list = panes[id],
               let pane = list.first(where: { $0.id == paneID }) else { return }
+        if list.first?.id == paneID { cancelShellIntegrationHandoff(id) }
         pane.onExit = nil
         pane.terminate()
         if list.count > 1 {
@@ -682,13 +903,15 @@ final class AppModel: ObservableObject {
     }
 
     func setActivePane(_ id: String, paneID: UUID) {
-        guard panes[id]?.contains(where: { $0.id == paneID }) == true else { return }
+        guard canMutateTerminal(id),
+              panes[id]?.contains(where: { $0.id == paneID }) == true
+        else { return }
         activePane[id] = paneID
     }
 
     /// Switch to the next (+1) or previous (-1) terminal tab, wrapping around.
     func cycleTab(_ id: String, by delta: Int) {
-        guard let list = panes[id], list.count > 1 else { return }
+        guard canMutateTerminal(id), let list = panes[id], list.count > 1 else { return }
         let idx = list.firstIndex { $0.id == activePane[id] } ?? 0
         activePane[id] = list[(idx + delta + list.count) % list.count].id
     }
@@ -699,9 +922,14 @@ final class AppModel: ObservableObject {
         return list.first { $0.id == activePane[id] } ?? list[0]
     }
 
-    private func makeTerminal(_ id: String, tunnel: Bool) -> TerminalPaneModel {
+    private func makeTerminal(
+        _ id: String,
+        tunnel: Bool,
+        onStart: (() -> Void)? = nil
+    ) -> TerminalPaneModel {
         let pane = TerminalPaneModel(command: "ssh", args: SSH.args(podID: id, tunnel: tunnel))
         pane.onExit = { [weak self] _ in self?.paneExited(id, paneID: pane.id) }
+        pane.onStart = onStart
         return pane
     }
 
@@ -713,6 +941,7 @@ final class AppModel: ObservableObject {
     /// `devpod stop`/reconnect machinery could wake the pod right back up.)
     private func paneExited(_ id: String, paneID: UUID) {
         guard let list = panes[id], list.contains(where: { $0.id == paneID }) else { return }
+        if list.first?.id == paneID { cancelShellIntegrationHandoff(id) }
         if list.count > 1 {
             removePane(id, paneID: paneID)
         } else {
@@ -723,7 +952,8 @@ final class AppModel: ObservableObject {
     /// Tear down the pod's session and withdraw the auto-connect intent, so
     /// reconcile won't immediately reopen (or wake) it. The status card with
     /// Connect/Start takes over.
-    private func disconnect(_ id: String) {
+    func disconnect(_ id: String) {
+        cancelShellIntegrationHandoff(id)
         opened.remove(id)
         autoConnect.remove(id)
         closePane(id)
@@ -733,8 +963,9 @@ final class AppModel: ObservableObject {
     /// restores the standing session intent and opens the terminal.
     func connect(_ id: String) {
         guard validID(id), byID[id]?.state == "Running" else { return }
+        let startedAt = DispatchTime.now().uptimeNanoseconds
         autoConnect.insert(id)
-        openSSHIfNeeded(id)
+        openSSHIfNeeded(id, startedAt: startedAt)
     }
 
     private func removePane(_ id: String, paneID: UUID) {
@@ -752,6 +983,7 @@ final class AppModel: ObservableObject {
     }
 
     private func closePane(_ id: String) {
+        cancelShellIntegrationHandoff(id)
         for pane in panes[id] ?? [] {
             pane.onExit = nil
             pane.terminate()
@@ -769,6 +1001,48 @@ final class AppModel: ObservableObject {
         if shuttingDown.contains(id) { return .shuttingDown }
         if opened.contains(id), !(panes[id] ?? []).isEmpty { return .terminal }
         return .none
+    }
+
+    func isConnecting(_ id: String) -> Bool {
+        Self.isConnecting(
+            isOpened: opened.contains(id),
+            hasPanes: !(panes[id] ?? []).isEmpty,
+            isAwaitingShellIntegration: terminalHandoffs[id] != nil
+        )
+    }
+
+    static func isConnecting(
+        isOpened: Bool,
+        hasPanes: Bool,
+        isAwaitingShellIntegration: Bool = false
+    ) -> Bool {
+        isOpened && (!hasPanes || isAwaitingShellIntegration)
+    }
+
+    func isTerminalVisible(_ id: String) -> Bool {
+        Self.isTerminalVisible(
+            isAwaitingShellIntegration: terminalHandoffs[id] != nil
+        )
+    }
+
+    static func isTerminalVisible(isAwaitingShellIntegration: Bool) -> Bool {
+        !isAwaitingShellIntegration
+    }
+
+    nonisolated static func canMutateTerminal(
+        isOpened: Bool,
+        hasPanes: Bool,
+        isTerminalVisible: Bool
+    ) -> Bool {
+        isOpened && hasPanes && isTerminalVisible
+    }
+
+    func canMutateTerminal(_ id: String) -> Bool {
+        Self.canMutateTerminal(
+            isOpened: opened.contains(id),
+            hasPanes: !(panes[id] ?? []).isEmpty,
+            isTerminalVisible: isTerminalVisible(id)
+        )
     }
 
     private func persist() {
@@ -818,7 +1092,10 @@ final class AppModel: ObservableObject {
         // ⌘⇧T — next terminal tab, complementing ⌘T for a new tab.
         if flags == [.command, .shift], renaming == nil, !guideOpen {
             if Self.isNextTerminalTabShortcut(chars) {
-                if let id = selectedID, phase(of: id) == .terminal {
+                if let id = selectedID,
+                   phase(of: id) == .terminal,
+                   isTerminalVisible(id)
+                {
                     cycleTab(id, by: 1)
                 }
                 return nil
@@ -855,7 +1132,10 @@ final class AppModel: ObservableObject {
         // the context menu's "Reload SSH Session") — only meaningful when a
         // session is actually open.
         if chars == "r" {
-            if let id = selectedID, phase(of: id) == .terminal {
+            if let id = selectedID,
+               phase(of: id) == .terminal,
+               isTerminalVisible(id)
+            {
                 reload(id)
             }
             return nil // consume even when a no-op so the terminal never sees ⌘R
@@ -870,7 +1150,10 @@ final class AppModel: ObservableObject {
         }
         // Cmd+T: open another terminal tab for the selected workspace.
         if chars == "t" {
-            if let id = selectedID, phase(of: id) == .terminal {
+            if let id = selectedID,
+               phase(of: id) == .terminal,
+               isTerminalVisible(id)
+            {
                 newTerminal(id)
             }
             return nil
@@ -881,7 +1164,11 @@ final class AppModel: ObservableObject {
         // own paste, and so does everything else (no terminal open, no
         // workspace selected) — nothing here is destructive to suppress.
         if chars == "v" {
-            if let image = Self.pastedImage(), let id = selectedID, phase(of: id) == .terminal {
+            if let image = Self.pastedImage(),
+               let id = selectedID,
+               phase(of: id) == .terminal,
+               isTerminalVisible(id)
+            {
                 Self.suppressCompetingPaste()
                 pasteImage(image, to: id)
                 return nil
