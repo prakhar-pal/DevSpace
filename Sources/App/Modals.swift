@@ -86,7 +86,9 @@ struct GuideSheet: View {
                     }
                     section("Claude Code notifications") {
                         row("Automatic", "Opening a workspace wires up Claude Code hooks over a reverse SSH tunnel; you get a notification (or dock bounce + blue dot) when Claude finishes or needs input.")
+#if DEBUG
                         row("Manual test", "Run ~/.devspace-notify inside a pod's terminal to fire a test notification.")
+#endif
                     }
                 }
                 .padding(22)

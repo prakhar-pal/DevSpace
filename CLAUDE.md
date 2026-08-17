@@ -94,9 +94,10 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
   so the ad-hoc dev build never blocks on a consent prompt (debug builds
   only — release builds write no log; controlled by the `DevSpaceLogPath`
   Info.plist key the assembly script sets for Debug).
-- Manual notification trigger inside a pod: open the workspace in DevSpace, then
-  run `~/.devspace-notify` in that terminal (it uses this session's reverse
-  tunnel). `~/.devspace-notify Notification` sends a "needs input" event.
+- Manual notification trigger inside a pod (DevSpaceDev only): open the
+  workspace in DevSpaceDev, then run `~/.devspace-notify` in that terminal (it
+  uses this session's reverse tunnel). `~/.devspace-notify Notification` sends
+  a "needs input" event. Production DevSpace does not install this helper.
 
 ## Agent Rules
 
@@ -109,7 +110,11 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
   `gh stack submit`; do not use `gh pr create`. Never use `gh stack link`
   alone because it creates remote-only metadata that `gh stack submit` cannot
   use from the local branch.
-- **Never make commits on the `main` branch.** Work on a feature branch.
+- **Avoid git worktrees.** Work in the current checkout unless an exceptional,
+  life-or-death isolation need has been explicitly confirmed by the user.
+- **Never make commits on the `main` branch.** When asked to build a feature or
+  fix a bug while on `main`, create a feature branch first. Otherwise, work on
+  the current feature branch.
 - **Use `.tmp/` for temporary files** (the project-root `.tmp`, which is
   `.gitignore`d). Application logs go to `.tmp/devspace.log` (a symlink to
   `~/Library/Logs/DevSpaceDev.log`; debug builds only).

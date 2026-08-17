@@ -102,10 +102,11 @@ Notes:
 
 The app listens on `127.0.0.1:17865` (token-gated `POST /notify`). Each
 workspace's primary SSH session carries `-R 8765:localhost:17865`, and on
-connect the app injects Claude Code hooks plus a `~/.devspace-notify` helper
-into the pod. Claude Code events inside the pod then post through the tunnel
-and surface as macOS banners (with a dock-bounce + sidebar-badge fallback).
-To test from an open workspace terminal: run `~/.devspace-notify`.
+connect both builds inject Claude Code hooks into the pod. DevSpaceDev also
+installs a `~/.devspace-notify` manual-test helper. Claude Code events inside
+the pod then post through the tunnel and surface as macOS banners (with a
+dock-bounce + sidebar-badge fallback). To test from an open DevSpaceDev
+workspace terminal, run `~/.devspace-notify`.
 
 ## Development
 

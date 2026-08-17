@@ -34,6 +34,11 @@ final class AppModel: ObservableObject {
     private let loop: PollLoop
     private let excluded = ExcludedIDs()
     private let notifyToken: String
+#if DEBUG
+    private let installManualNotifyHelper = true
+#else
+    private let installManualNotifyHelper = false
+#endif
     private var listener: NotifyListener?
     private var layoutLoaded = false
     /// Start/stop notification gate: "stopped" fires on the observed
@@ -123,13 +128,19 @@ final class AppModel: ObservableObject {
     private func injectHooks(_ id: String, then completion: @escaping () -> Void = {}) {
         let r = runner
         let token = notifyToken
+        let installManualHelper = installManualNotifyHelper
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) { [weak self] in
             var sshOK = false
             if token.isEmpty {
                 Log.write("inject: no token — skipping hook injection for pod=\(id)")
             } else {
                 do {
-                    try Hooks.inject(r, podID: id, token: token)
+                    try Hooks.inject(
+                        r,
+                        podID: id,
+                        token: token,
+                        installManualHelper: installManualHelper
+                    )
                     sshOK = true
                     Log.write("inject: hook written to pod=\(id)")
                 } catch {

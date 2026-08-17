@@ -3,6 +3,21 @@ import XCTest
 
 // Mirrors hooks.rs tests.
 final class HooksTests: XCTestCase {
+    private final class RecordingRunner: CommandRunning, @unchecked Sendable {
+        private let responses: [String]
+        var calls: [[String]] = []
+
+        init(responses: [String] = ["{}"]) {
+            self.responses = responses
+        }
+
+        func run(_ args: [String]) throws -> String {
+            calls.append(args)
+            let index = calls.count - 1
+            return responses.indices.contains(index) ? responses[index] : "{}"
+        }
+    }
+
     private func eventArray(_ merged: [String: Any], _ key: String) -> [Any]? {
         (merged["hooks"] as? [String: Any])?[key] as? [Any]
     }
@@ -10,6 +25,28 @@ final class HooksTests: XCTestCase {
     private func canonical(_ obj: [String: Any]) -> String {
         let data = try! JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])
         return String(decoding: data, as: UTF8.self)
+    }
+
+    private func assertSettingsReadThenWrite(_ runner: RecordingRunner) throws -> [String] {
+        XCTAssertEqual(runner.calls.count, 2)
+        let read = try XCTUnwrap(runner.calls.first)
+        XCTAssertEqual(Array(read.prefix(2)), ["ssh", "--command"])
+        XCTAssertEqual(
+            try XCTUnwrap(read.dropFirst(2).first),
+            "cat \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\" 2>/dev/null || echo '{}'"
+        )
+        return try XCTUnwrap(runner.calls.dropFirst().first)
+    }
+
+    private func settingsPayload(from write: [String]) throws -> [String: Any] {
+        let command = try XCTUnwrap(write.dropFirst(2).first)
+        let prefix = "&& echo "
+        let suffix = " | base64 -d > \"$CLAUDE_DIR/settings.json\""
+        let payloadStart = try XCTUnwrap(command.range(of: prefix)?.upperBound)
+        let payloadEnd = try XCTUnwrap(command.range(of: suffix, range: payloadStart..<command.endIndex)?.lowerBound)
+        let encoded = String(command[payloadStart..<payloadEnd])
+        let data = try XCTUnwrap(Data(base64Encoded: encoded))
+        return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
     func testAddsHooksToEmptySettings() {
@@ -56,6 +93,46 @@ final class HooksTests: XCTestCase {
         XCTAssertTrue(s.contains("deadbeef"))
         XCTAssertTrue(s.contains("/notify"))
         XCTAssertTrue(s.contains("${1:-Stop}"))
+    }
+
+    func testInjectWithManualHelperWritesSettingsAndHelper() throws {
+        let runner = RecordingRunner()
+
+        try Hooks.inject(runner, podID: "wc-1", token: "tok", installManualHelper: true)
+
+        let write = try assertSettingsReadThenWrite(runner)
+        XCTAssertEqual(Array(write.prefix(2)), ["ssh", "--command"])
+        XCTAssertTrue(write[2].contains("settings.json"))
+        XCTAssertTrue(write[2].contains("~/.devspace-notify"))
+        XCTAssertTrue(write[2].contains("chmod +x ~/.devspace-notify"))
+    }
+
+    func testInjectWithoutManualHelperWritesSettingsOnly() throws {
+        let runner = RecordingRunner()
+
+        try Hooks.inject(runner, podID: "wc-1", token: "tok", installManualHelper: false)
+
+        let write = try assertSettingsReadThenWrite(runner)
+        XCTAssertEqual(Array(write.prefix(2)), ["ssh", "--command"])
+        XCTAssertTrue(write[2].contains("base64 -d > \"$CLAUDE_DIR/settings.json\""))
+        XCTAssertFalse(write[2].contains("~/.devspace-notify"))
+        XCTAssertFalse(write[2].contains("chmod +x"))
+    }
+
+    func testInjectPreservesExistingSettingsInWrittenPayload() throws {
+        let existing: [String: Any] = [
+            "permissions": ["allow": ["Bash(git:*)"]],
+            "hooks": ["Notification": [["hooks": [["type": "command", "command": "echo other"]]]]],
+        ]
+        let existingData = try JSONSerialization.data(withJSONObject: existing, options: [.sortedKeys])
+        let runner = RecordingRunner(responses: [String(decoding: existingData, as: UTF8.self)])
+
+        try Hooks.inject(runner, podID: "wc-1", token: "tok", installManualHelper: false)
+
+        let written = try settingsPayload(from: try assertSettingsReadThenWrite(runner))
+        let permissions = try XCTUnwrap(written["permissions"] as? [String: Any])
+        XCTAssertEqual(permissions["allow"] as? [String], ["Bash(git:*)"])
+        XCTAssertEqual(eventArray(written, "Notification")?.count, 2)
     }
 
     func testBakesLiteralPodIdTokenEventNoEnv() {
