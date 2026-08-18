@@ -94,6 +94,9 @@ final class AppModel: ObservableObject {
     /// Pods whose definitive (Running/Stopped) state has been seen at least
     /// once — first Running sighting seeds `autoConnect`.
     private var seenDefinitive: Set<String> = []
+    /// The active primary SSH resolution attempt for each pod. A completion
+    /// may mount only if it still owns this generation.
+    private var sshConnectionGenerations: [String: UUID] = [:]
 
     enum TerminalHandoffAction: Equatable {
         case revealOriginal
@@ -397,7 +400,11 @@ final class AppModel: ObservableObject {
         }
         for id in opened {
             let s = states[id]?.state
-            if s == "Stopped" || states[id] == nil { closePane(id); opened.remove(id) }
+            if s == "Stopped" || states[id] == nil {
+                invalidateSSHConnection(id)
+                closePane(id)
+                opened.remove(id)
+            }
         }
         for id in shuttingDown {
             if states[id]?.state == "Stopped" { closePane(id); shuttingDown.remove(id) }
@@ -502,6 +509,7 @@ final class AppModel: ObservableObject {
 
     func start(_ id: String) {
         guard validID(id) else { return }
+        invalidateSSHConnection(id)
         select(id)
         starting.insert(id)
         let pane = TerminalPaneModel(command: "devpod", args: Devpod.upArgs(id))
@@ -527,6 +535,7 @@ final class AppModel: ObservableObject {
 
     func stop(_ id: String) {
         guard validID(id) else { return }
+        invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
         opened.remove(id)
         autoConnect.remove(id)
@@ -538,6 +547,7 @@ final class AppModel: ObservableObject {
 
     func delete(_ id: String) {
         guard validID(id) else { return }
+        invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
         let r = runner
         DispatchQueue.global(qos: .userInitiated).async { try? Devpod.delete(r, id: id) }
@@ -792,6 +802,7 @@ final class AppModel: ObservableObject {
             // an explicit user action, so the session intent is restored.
             closePane(id)
             opened.remove(id)
+            invalidateSSHConnection(id)
             autoConnect.insert(id)
             openSSHIfNeeded(id)
             return
@@ -821,12 +832,15 @@ final class AppModel: ObservableObject {
         guard validID(id) else { return }
         guard !opened.contains(id), !starting.contains(id), !shuttingDown.contains(id) else { return }
         let attemptStartedAt = startedAt ?? DispatchTime.now().uptimeNanoseconds
+        let generation = UUID()
+        sshConnectionGenerations[id] = generation
         opened.insert(id)
         Self.logConnection(id, phase: "requested", startedAt: attemptStartedAt)
         sshProxyResolver(id) { [weak self] proxyCommand in
             guard let self,
                   self.opened.contains(id),
                   !self.shuttingDown.contains(id),
+                  self.sshConnectionGenerations[id] == generation,
                   (self.panes[id] ?? []).isEmpty
             else { return }
             self.openResolvedSSH(
@@ -1025,6 +1039,7 @@ final class AppModel: ObservableObject {
     /// reconcile won't immediately reopen (or wake) it. The status card with
     /// Connect/Start takes over.
     func disconnect(_ id: String) {
+        invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
         opened.remove(id)
         autoConnect.remove(id)
@@ -1047,6 +1062,10 @@ final class AppModel: ObservableObject {
         if activePane[id] == paneID, !list.isEmpty {
             activePane[id] = list[max(0, idx - 1)].id
         }
+    }
+
+    private func invalidateSSHConnection(_ id: String) {
+        sshConnectionGenerations[id] = nil
     }
 
     private func setPanes(_ id: String, _ list: [TerminalPaneModel]) {

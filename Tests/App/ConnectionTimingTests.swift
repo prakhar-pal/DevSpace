@@ -5,15 +5,15 @@ import DevSpaceCore
 @MainActor
 final class ConnectionTimingTests: XCTestCase {
     private final class DeferredSSHProxyResolver {
-        private var completion: ((String?) -> Void)?
+        private var completions: [(String?) -> Void] = []
 
         func resolve(_ podID: String, completion: @escaping (String?) -> Void) {
             XCTAssertEqual(podID, "wc-1")
-            self.completion = completion
+            completions.append(completion)
         }
 
-        func complete(with proxyCommand: String?) {
-            completion?(proxyCommand)
+        func complete(at index: Int, with proxyCommand: String?) {
+            completions[index](proxyCommand)
         }
     }
 
@@ -34,10 +34,36 @@ final class ConnectionTimingTests: XCTestCase {
 
         model.connect("wc-1")
 
-        XCTAssertFalse(model.isTerminalVisible("wc-1"))
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
 
-        resolver.complete(with: "devpod ssh --stdio wc-1")
+        resolver.complete(at: 0, with: "devpod ssh --stdio wc-1")
 
+        XCTAssertEqual(model.panes["wc-1"]?.count, 1)
+    }
+
+    func testStaleProxyResolutionCannotMountAfterDisconnectAndReconnect() {
+        let resolver = DeferredSSHProxyResolver()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            sshProxyResolver: resolver.resolve
+        )
+
+        model.connect("wc-1") // attempt A
+        model.disconnect("wc-1")
+        model.connect("wc-1") // attempt B
+
+        resolver.complete(at: 0, with: "devpod ssh --stdio wc-1")
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
+
+        resolver.complete(at: 1, with: "devpod ssh --stdio wc-1")
         XCTAssertEqual(model.panes["wc-1"]?.count, 1)
     }
 
