@@ -43,10 +43,21 @@ final class SSHTests: XCTestCase {
         )
     }
 
+    func testAcceptsSingleQuotedDevpodExecutable() {
+        let config = "proxycommand '/Users/x/.local/bin/devpod' ssh --stdio wc-1"
+        XCTAssertEqual(
+            SSH.devpodProxyCommand(effectiveConfig: config),
+            "'/Users/x/.local/bin/devpod' ssh --stdio wc-1"
+        )
+    }
+
     func testRejectsNonDevpodAndShellComposedProxyCommands() {
         XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand none"))
         XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand ssh jump.example"))
         XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand devpod ssh --stdio wc-1 ; echo unsafe"))
+        XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand devpod ssh --stdio wc-1 $(echo unsafe)"))
+        XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand devpod ssh --stdio wc-1 `echo unsafe`"))
+        XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand devpod ssh --stdio wc-1 # unsafe"))
     }
 
     func testSecondaryTerminalRetainsProxyOverrideWithoutReverseTunnel() {
