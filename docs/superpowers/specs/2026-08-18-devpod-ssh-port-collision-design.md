@@ -55,8 +55,7 @@ and building the outer SSH arguments with both the override and the existing
 reverse notification tunnel. They will also cover secondary terminals, which
 must omit only the reverse tunnel and retain the service-forwarding override.
 
-Manual acceptance validation will begin with an ordinary DevPod SSH session
-holding the workspace's configured local forward ports. Opening DevSpace for
-the same running workspace must reach an interactive prompt without starting
-or recreating the workspace, and `~/.devspace-notify` must reach DevSpace
-through the primary session's reverse notification tunnel.
+Manual acceptance validation observed that `make build-dev` assembled
+`build/DevSpaceDev.app`. DevSpaceDev connected to `wc-2`, and running
+`~/.devspace-notify Notification` in that DevSpaceDev session produced the
+"Claude needs your input" notification.
