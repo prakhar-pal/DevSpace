@@ -1,5 +1,22 @@
 # dev-space
 
+## v0.6.4 - 2026-08-18
+
+### Fixes
+- fix: harden DevPod SSH helper invocations (4509d51)
+- fix: reject stale SSH proxy resolutions (4d88b84)
+- fix: resolve DevPod proxy before terminal launch (a3dc32c)
+- fix: reject shell expansion in DevPod proxy (42f84c9)
+- fix: disable DevPod services for app SSH (b6f4098)
+
+### Other
+- docs: verify DevPod SSH collision fix (dc8e02c)
+- test: cover proxy parameter expansion rejection (3ad5475)
+- docs: plan DevPod SSH collision fix (0a4bfdf)
+- docs: preserve DevPod SSH alias behavior (f0fc497)
+- docs: design DevPod SSH collision fix (06b33cb)
+
+
 ## v0.6.3 - 2026-08-17
 
 ### Features
