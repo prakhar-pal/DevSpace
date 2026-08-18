@@ -50,6 +50,7 @@ public enum SSH {
               !raw.contains("`"),
               !raw.contains("$("),
               !raw.contains("${"),
+              !raw.contains(where: { "$*?[".contains($0) }),
               !raw.contains("#"),
               let words = shellWords(raw)?.map(normalizeShellWord),
               words.count >= 3,

@@ -61,6 +61,14 @@ final class SSHTests: XCTestCase {
         XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand devpod ssh --stdio wc-1 # unsafe"))
     }
 
+    func testRejectsUnbracedParameterAndPathnameExpansionInProxyCommand() {
+        XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand /tmp/$DEVPOD_DIR/devpod ssh --stdio wc-1"))
+        XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand $HOME/bin/devpod ssh --stdio wc-1"))
+        XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand /tmp/*/devpod ssh --stdio wc-1"))
+        XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand /tmp/?/devpod ssh --stdio wc-1"))
+        XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand /tmp/[a-z]/devpod ssh --stdio wc-1"))
+    }
+
     func testSecondaryTerminalRetainsProxyOverrideWithoutReverseTunnel() {
         let args = SSH.args(podID: "wc-1", tunnel: false, proxyCommand: "devpod ssh --stdio wc-1")
         XCTAssertTrue(args.contains("ProxyCommand=devpod ssh --stdio wc-1 --start-services=false"))

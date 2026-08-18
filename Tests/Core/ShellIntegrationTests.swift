@@ -54,8 +54,9 @@ final class ShellIntegrationTests: XCTestCase {
         let r = Recorder()
         try ShellIntegration.inject(r, podID: "wc-1")
         XCTAssertEqual(r.calls.count, 1)
-        XCTAssertEqual(r.calls[0].first, "ssh")
-        XCTAssertEqual(r.calls[0].last, "wc-1")
-        XCTAssertTrue(r.calls[0].contains("--")) // id can't be parsed as a flag
+        XCTAssertEqual(r.calls[0], [
+            "ssh", "--command", ShellIntegration.injectScript(),
+            "--start-services=false", "--", "wc-1",
+        ])
     }
 }
