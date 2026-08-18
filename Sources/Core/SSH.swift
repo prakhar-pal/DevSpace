@@ -19,7 +19,7 @@ public enum SSH {
     /// second and later terminals of a pod, where the primary session already
     /// holds the remote port (a second bind would fail and print a warning
     /// into the terminal).
-    public static func args(podID: String, tunnel: Bool = true) -> [String] {
+    public static func args(podID: String, tunnel: Bool = true, proxyCommand: String? = nil) -> [String] {
         var args = [
             "-tt",
             "-o", "StrictHostKeyChecking=no",
@@ -32,8 +32,83 @@ public enum SSH {
         if tunnel {
             args += ["-R", "\(podForwardPort):localhost:\(listenerPort)"]
         }
+        if let proxyCommand {
+            args += ["-o", "ProxyCommand=\(proxyCommand) --start-services=false"]
+        }
         args.append("\(podID).devpod")
         return args
+    }
+
+    /// Extract a simple, effective DevPod stdio ProxyCommand from `ssh -G` output.
+    /// Shell-composed commands and non-DevPod commands are rejected before they
+    /// can be passed through to a locally spawned SSH process.
+    public static func devpodProxyCommand(effectiveConfig: String) -> String? {
+        guard let raw = effectiveConfig.split(separator: "\n").first(where: { $0.hasPrefix("proxycommand ") })
+            .map({ String($0.dropFirst("proxycommand ".count)) }),
+              raw != "none",
+              !raw.contains(where: { ";|&<>\n\r".contains($0) }),
+              let words = shellWords(raw)?.map(normalizeShellWord),
+              words.count >= 3,
+              (words[0] as NSString).lastPathComponent == "devpod",
+              words[1] == "ssh",
+              words.contains("--stdio")
+        else { return nil }
+        return raw
+    }
+
+    private static func shellWords(_ input: String) -> [String]? {
+        var words: [String] = []
+        var word = ""
+        var quote: Character?
+        var escaped = false
+        var inWord = false
+
+        for character in input {
+            if escaped {
+                word.append(character)
+                escaped = false
+                inWord = true
+                continue
+            }
+            if character == "\\" {
+                escaped = true
+                inWord = true
+                continue
+            }
+            if let activeQuote = quote {
+                if character == activeQuote {
+                    quote = nil
+                } else {
+                    word.append(character)
+                }
+                inWord = true
+                continue
+            }
+            if character == "'" || character == "\"" {
+                quote = character
+                inWord = true
+            } else if character.isWhitespace {
+                if inWord {
+                    words.append(word)
+                    word = ""
+                    inWord = false
+                }
+            } else {
+                word.append(character)
+                inWord = true
+            }
+        }
+
+        guard !escaped, quote == nil else { return nil }
+        if inWord { words.append(word) }
+        return words
+    }
+
+    private static func normalizeShellWord(_ word: String) -> String {
+        guard word.count >= 2,
+              (word.first == "'" && word.last == "'") || (word.first == "\"" && word.last == "\"")
+        else { return word }
+        return String(word.dropFirst().dropLast())
     }
 
     // MARK: - Remote workspace folder (for `zed ssh://…`)

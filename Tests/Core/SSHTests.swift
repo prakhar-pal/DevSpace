@@ -24,6 +24,36 @@ final class SSHTests: XCTestCase {
         // The default (primary) still carries the tunnel.
         XCTAssertTrue(SSH.args(podID: "wc-1").contains("-R"))
     }
+
+    func testBuildsArgsWithDevpodServiceForwardingDisabled() {
+        let proxy = #"\"/Users/x/.local/bin/devpod\" ssh --stdio --context default --user node wc-1 --workdir \"/workspace\""#
+        let args = SSH.args(podID: "wc-1", proxyCommand: proxy)
+
+        XCTAssertTrue(args.contains("-o"))
+        XCTAssertTrue(args.contains("ProxyCommand=\(proxy) --start-services=false"))
+        XCTAssertTrue(args.contains("-R"))
+        XCTAssertEqual(args.last, "wc-1.devpod")
+    }
+
+    func testParsesOnlySimpleDevpodStdioProxyCommand() {
+        let config = #"proxycommand \"/Users/x/.local/bin/devpod\" ssh --stdio --context default wc-1"#
+        XCTAssertEqual(
+            SSH.devpodProxyCommand(effectiveConfig: config),
+            #"\"/Users/x/.local/bin/devpod\" ssh --stdio --context default wc-1"#
+        )
+    }
+
+    func testRejectsNonDevpodAndShellComposedProxyCommands() {
+        XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand none"))
+        XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand ssh jump.example"))
+        XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand devpod ssh --stdio wc-1 ; echo unsafe"))
+    }
+
+    func testSecondaryTerminalRetainsProxyOverrideWithoutReverseTunnel() {
+        let args = SSH.args(podID: "wc-1", tunnel: false, proxyCommand: "devpod ssh --stdio wc-1")
+        XCTAssertTrue(args.contains("ProxyCommand=devpod ssh --stdio wc-1 --start-services=false"))
+        XCTAssertFalse(args.contains("-R"))
+    }
 }
 
 // The `zed ssh://…` remote-open path: workdir parsing from the devpod-managed
