@@ -57,6 +57,7 @@ final class SSHTests: XCTestCase {
         XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand devpod ssh --stdio wc-1 ; echo unsafe"))
         XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand devpod ssh --stdio wc-1 $(echo unsafe)"))
         XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand devpod ssh --stdio wc-1 `echo unsafe`"))
+        XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand devpod ssh --stdio wc-1 ${UNSAFE}"))
         XCTAssertNil(SSH.devpodProxyCommand(effectiveConfig: "proxycommand devpod ssh --stdio wc-1 # unsafe"))
     }
 
