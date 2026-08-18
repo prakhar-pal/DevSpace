@@ -60,6 +60,57 @@ public enum SSH {
         return raw
     }
 
+    /// Resolve the effective DevPod ProxyCommand for the host alias. This is
+    /// intentionally synchronous: callers run it off the main actor before
+    /// constructing their SSH PTY.
+    public static func resolveDevpodProxyCommand(podID: String) -> String? {
+        do {
+            try Devpod.validateId(podID)
+        } catch {
+            Log.write("ssh-proxy: invalid pod id \(podID)")
+            return nil
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = ["-G", "\(podID).devpod"]
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            Log.write("ssh-proxy: could not launch ssh -G for \(podID): \(error)")
+            return nil
+        }
+
+        let output = String(
+            data: stdout.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+        let errorOutput = String(
+            data: stderr.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+        guard process.terminationStatus == 0 else {
+            let reason = errorOutput
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .split(separator: "\n")
+                .first
+                .map(String.init) ?? "no stderr"
+            Log.write("ssh-proxy: ssh -G failed for \(podID) (exit \(process.terminationStatus)): \(reason)")
+            return nil
+        }
+        guard let proxyCommand = devpodProxyCommand(effectiveConfig: output) else {
+            Log.write("ssh-proxy: no valid DevPod ProxyCommand for \(podID)")
+            return nil
+        }
+        return proxyCommand
+    }
+
     private static func shellWords(_ input: String) -> [String]? {
         var words: [String] = []
         var word = ""

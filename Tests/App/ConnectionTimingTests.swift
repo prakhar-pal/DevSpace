@@ -1,8 +1,46 @@
 import XCTest
 @testable import DevSpaceApp
+import DevSpaceCore
 
 @MainActor
 final class ConnectionTimingTests: XCTestCase {
+    private final class DeferredSSHProxyResolver {
+        private var completion: ((String?) -> Void)?
+
+        func resolve(_ podID: String, completion: @escaping (String?) -> Void) {
+            XCTAssertEqual(podID, "wc-1")
+            self.completion = completion
+        }
+
+        func complete(with proxyCommand: String?) {
+            completion?(proxyCommand)
+        }
+    }
+
+    func testConnectWaitsForProxyResolutionBeforeMountingSSHPane() {
+        let resolver = DeferredSSHProxyResolver()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            sshProxyResolver: resolver.resolve
+        )
+
+        model.connect("wc-1")
+
+        XCTAssertFalse(model.isTerminalVisible("wc-1"))
+
+        resolver.complete(with: "devpod ssh --stdio wc-1")
+
+        XCTAssertEqual(model.panes["wc-1"]?.count, 1)
+    }
+
     func testElapsedMillisecondsUsesMonotonicNanoseconds() {
         XCTAssertEqual(AppModel.elapsedMilliseconds(
             startedAt: 1_000_000_000,
