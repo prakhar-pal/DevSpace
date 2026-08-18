@@ -2,6 +2,33 @@ import SwiftUI
 import AppKit
 import DevSpaceCore
 
+/// Resolves a pod alias' effective DevPod ProxyCommand and completes on the main actor.
+typealias SSHProxyResolving = @MainActor (
+    _ podID: String,
+    _ completion: @escaping @MainActor (String?) -> Void
+) -> Void
+
+@MainActor
+private func resolveSSHProxyCommand(
+    _ podID: String,
+    completion: @escaping @MainActor (String?) -> Void
+) {
+    DispatchQueue.global(qos: .userInitiated).async {
+        let proxyCommand = SSH.resolveDevpodProxyCommand(podID: podID)
+        Task { @MainActor in
+            completion(proxyCommand)
+        }
+    }
+}
+
+@MainActor
+private func resolveNoSSHProxyCommand(
+    _ podID: String,
+    completion: @escaping @MainActor (String?) -> Void
+) {
+    completion(nil)
+}
+
 /// Top-level UI state (the Swift analog of App.tsx): sidebar layout + the
 /// workspace session lifecycle (starting / running terminal / shutting down).
 @MainActor
@@ -47,6 +74,7 @@ final class AppModel: ObservableObject {
     private let notifyToken: String
     private let handoffTimeout: TimeInterval
     private let handoffTimeoutScheduler: HandoffTimeoutScheduling
+    private let sshProxyResolver: SSHProxyResolving
 #if DEBUG
     private let installManualNotifyHelper = true
 #else
@@ -66,6 +94,9 @@ final class AppModel: ObservableObject {
     /// Pods whose definitive (Running/Stopped) state has been seen at least
     /// once — first Running sighting seeds `autoConnect`.
     private var seenDefinitive: Set<String> = []
+    /// The active primary SSH resolution attempt for each pod. A completion
+    /// may mount only if it still owns this generation.
+    private var sshConnectionGenerations: [String: UUID] = [:]
 
     enum TerminalHandoffAction: Equatable {
         case revealOriginal
@@ -162,11 +193,14 @@ final class AppModel: ObservableObject {
         initialWorkspaces: [WorkspaceView] = [],
         startsRuntimeServices: Bool = true,
         handoffTimeout: TimeInterval = 10,
-        handoffTimeoutScheduler: HandoffTimeoutScheduling = MainQueueHandoffTimeoutScheduler()
+        handoffTimeoutScheduler: HandoffTimeoutScheduling = MainQueueHandoffTimeoutScheduler(),
+        sshProxyResolver: SSHProxyResolving? = nil
     ) {
         self.runner = runner
         self.handoffTimeout = max(0, handoffTimeout)
         self.handoffTimeoutScheduler = handoffTimeoutScheduler
+        self.sshProxyResolver = sshProxyResolver
+            ?? (startsRuntimeServices ? resolveSSHProxyCommand : resolveNoSSHProxyCommand)
         notifyToken = startsRuntimeServices ? (try? Notify.loadOrCreateToken()) ?? "" : ""
         loop = PollLoop(runner: runner, interval: interval, excluded: excluded)
         let l = LayoutStore.load()
@@ -366,7 +400,11 @@ final class AppModel: ObservableObject {
         }
         for id in opened {
             let s = states[id]?.state
-            if s == "Stopped" || states[id] == nil { closePane(id); opened.remove(id) }
+            if s == "Stopped" || states[id] == nil {
+                invalidateSSHConnection(id)
+                closePane(id)
+                opened.remove(id)
+            }
         }
         for id in shuttingDown {
             if states[id]?.state == "Stopped" { closePane(id); shuttingDown.remove(id) }
@@ -471,6 +509,7 @@ final class AppModel: ObservableObject {
 
     func start(_ id: String) {
         guard validID(id) else { return }
+        invalidateSSHConnection(id)
         select(id)
         starting.insert(id)
         let pane = TerminalPaneModel(command: "devpod", args: Devpod.upArgs(id))
@@ -496,6 +535,7 @@ final class AppModel: ObservableObject {
 
     func stop(_ id: String) {
         guard validID(id) else { return }
+        invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
         opened.remove(id)
         autoConnect.remove(id)
@@ -507,6 +547,7 @@ final class AppModel: ObservableObject {
 
     func delete(_ id: String) {
         guard validID(id) else { return }
+        invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
         let r = runner
         DispatchQueue.global(qos: .userInitiated).async { try? Devpod.delete(r, id: id) }
@@ -756,35 +797,69 @@ final class AppModel: ObservableObject {
     /// primary tab keeps the reverse notify tunnel.
     func reload(_ id: String) {
         guard validID(id) else { return }
-        guard isTerminalVisible(id) else { return }
         guard opened.contains(id), let list = panes[id], !list.isEmpty else {
             // No session (e.g. it already died): fall back to a full reopen —
             // an explicit user action, so the session intent is restored.
             closePane(id)
             opened.remove(id)
+            invalidateSSHConnection(id)
             autoConnect.insert(id)
             openSSHIfNeeded(id)
             return
         }
-        cancelShellIntegrationHandoff(id)
+        guard isTerminalVisible(id) else { return }
         let idx = list.firstIndex { $0.id == activePane[id] } ?? 0
-        let old = list[idx]
-        old.onExit = nil // its exit must not run the tab-close/stop-pod path
-        old.terminate()
-        let fresh = makeTerminal(id, tunnel: idx == 0)
-        panes[id]?[idx] = fresh
-        activePane[id] = fresh.id
+        let oldPaneID = list[idx].id
+        sshProxyResolver(id) { [weak self] proxyCommand in
+            guard let self,
+                  self.opened.contains(id),
+                  !self.shuttingDown.contains(id),
+                  self.isTerminalVisible(id),
+                  let currentList = self.panes[id],
+                  let currentIndex = currentList.firstIndex(where: { $0.id == oldPaneID })
+            else { return }
+            let old = currentList[currentIndex]
+            self.cancelShellIntegrationHandoff(id)
+            old.onExit = nil // its exit must not run the tab-close/stop-pod path
+            old.terminate()
+            let fresh = self.makeTerminal(id, tunnel: currentIndex == 0, proxyCommand: proxyCommand)
+            self.panes[id]?[currentIndex] = fresh
+            self.activePane[id] = fresh.id
+        }
     }
 
     private func openSSHIfNeeded(_ id: String, startedAt: UInt64? = nil) {
         guard validID(id) else { return }
         guard !opened.contains(id), !starting.contains(id), !shuttingDown.contains(id) else { return }
         let attemptStartedAt = startedAt ?? DispatchTime.now().uptimeNanoseconds
+        let generation = UUID()
+        sshConnectionGenerations[id] = generation
         opened.insert(id)
         Self.logConnection(id, phase: "requested", startedAt: attemptStartedAt)
+        sshProxyResolver(id) { [weak self] proxyCommand in
+            guard let self,
+                  self.opened.contains(id),
+                  !self.shuttingDown.contains(id),
+                  self.sshConnectionGenerations[id] == generation,
+                  (self.panes[id] ?? []).isEmpty
+            else { return }
+            self.openResolvedSSH(
+                id,
+                proxyCommand: proxyCommand,
+                startedAt: attemptStartedAt
+            )
+        }
+    }
+
+    private func openResolvedSSH(
+        _ id: String,
+        proxyCommand: String?,
+        startedAt attemptStartedAt: UInt64
+    ) {
         let pane = makeTerminal(
             id,
             tunnel: true,
+            proxyCommand: proxyCommand,
             onStart: {
                 Self.logConnection(id, phase: "ssh-pty-started", startedAt: attemptStartedAt)
             }
@@ -881,9 +956,16 @@ final class AppModel: ObservableObject {
     /// Open another shell to the same pod, as a new active tab.
     func newTerminal(_ id: String) {
         guard validID(id), canMutateTerminal(id) else { return }
-        let pane = makeTerminal(id, tunnel: false) // the primary carries the tunnel
-        panes[id]?.append(pane)
-        activePane[id] = pane.id
+        guard let primaryPaneID = panes[id]?.first?.id else { return }
+        sshProxyResolver(id) { [weak self] proxyCommand in
+            guard let self,
+                  self.canMutateTerminal(id),
+                  self.panes[id]?.first?.id == primaryPaneID
+            else { return }
+            let pane = self.makeTerminal(id, tunnel: false, proxyCommand: proxyCommand)
+            self.panes[id]?.append(pane)
+            self.activePane[id] = pane.id
+        }
     }
 
     /// Close one terminal tab. Closing the LAST tab disconnects from the pod
@@ -925,9 +1007,13 @@ final class AppModel: ObservableObject {
     private func makeTerminal(
         _ id: String,
         tunnel: Bool,
+        proxyCommand: String? = nil,
         onStart: (() -> Void)? = nil
     ) -> TerminalPaneModel {
-        let pane = TerminalPaneModel(command: "ssh", args: SSH.args(podID: id, tunnel: tunnel))
+        let pane = TerminalPaneModel(
+            command: "ssh",
+            args: SSH.args(podID: id, tunnel: tunnel, proxyCommand: proxyCommand)
+        )
         pane.onExit = { [weak self] _ in self?.paneExited(id, paneID: pane.id) }
         pane.onStart = onStart
         return pane
@@ -953,6 +1039,7 @@ final class AppModel: ObservableObject {
     /// reconcile won't immediately reopen (or wake) it. The status card with
     /// Connect/Start takes over.
     func disconnect(_ id: String) {
+        invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
         opened.remove(id)
         autoConnect.remove(id)
@@ -975,6 +1062,10 @@ final class AppModel: ObservableObject {
         if activePane[id] == paneID, !list.isEmpty {
             activePane[id] = list[max(0, idx - 1)].id
         }
+    }
+
+    private func invalidateSSHConnection(_ id: String) {
+        sshConnectionGenerations[id] = nil
     }
 
     private func setPanes(_ id: String, _ list: [TerminalPaneModel]) {
@@ -1020,9 +1111,9 @@ final class AppModel: ObservableObject {
     }
 
     func isTerminalVisible(_ id: String) -> Bool {
-        Self.isTerminalVisible(
-            isAwaitingShellIntegration: terminalHandoffs[id] != nil
-        )
+        opened.contains(id)
+            && !(panes[id] ?? []).isEmpty
+            && Self.isTerminalVisible(isAwaitingShellIntegration: terminalHandoffs[id] != nil)
     }
 
     static func isTerminalVisible(isAwaitingShellIntegration: Bool) -> Bool {

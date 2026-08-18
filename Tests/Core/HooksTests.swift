@@ -30,12 +30,15 @@ final class HooksTests: XCTestCase {
     private func assertSettingsReadThenWrite(_ runner: RecordingRunner) throws -> [String] {
         XCTAssertEqual(runner.calls.count, 2)
         let read = try XCTUnwrap(runner.calls.first)
-        XCTAssertEqual(Array(read.prefix(2)), ["ssh", "--command"])
-        XCTAssertEqual(
-            try XCTUnwrap(read.dropFirst(2).first),
-            "cat \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\" 2>/dev/null || echo '{}'"
-        )
-        return try XCTUnwrap(runner.calls.dropFirst().first)
+        XCTAssertEqual(read, [
+            "ssh", "--command",
+            "cat \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\" 2>/dev/null || echo '{}'",
+            "--start-services=false", "--", "wc-1",
+        ])
+        let write = try XCTUnwrap(runner.calls.dropFirst().first)
+        XCTAssertEqual(Array(write.prefix(2)), ["ssh", "--command"])
+        XCTAssertEqual(write[3...], ["--start-services=false", "--", "wc-1"])
+        return write
     }
 
     private func settingsPayload(from write: [String]) throws -> [String: Any] {

@@ -84,6 +84,7 @@ public enum Hooks {
         let read = try runner.run([
             "ssh", "--command",
             "cat \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\" 2>/dev/null || echo '{}'",
+            "--start-services=false",
             "--", podID,
         ])
         let existing = try? JSONSerialization.jsonObject(
@@ -100,6 +101,6 @@ public enum Hooks {
             cmd += " && echo \(helperB64) | base64 -d > ~/.devspace-notify"
             cmd += " && chmod +x ~/.devspace-notify"
         }
-        _ = try runner.run(["ssh", "--command", cmd, "--", podID])
+        _ = try runner.run(["ssh", "--command", cmd, "--start-services=false", "--", podID])
     }
 }

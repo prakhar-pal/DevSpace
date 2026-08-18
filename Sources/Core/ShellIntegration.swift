@@ -52,6 +52,6 @@ public enum ShellIntegration {
     /// best-effort (new shells pick it up — existing prompts are unaffected).
     public static func inject(_ runner: CommandRunning, podID: String) throws {
         try Devpod.validateId(podID)
-        _ = try runner.run(["ssh", "--command", injectScript(), "--", podID])
+        _ = try runner.run(["ssh", "--command", injectScript(), "--start-services=false", "--", podID])
     }
 }
