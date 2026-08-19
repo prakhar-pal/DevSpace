@@ -1120,6 +1120,27 @@ final class AppModel: ObservableObject {
         !isAwaitingShellIntegration
     }
 
+    func isPaneDisplayVisible(_ id: String) -> Bool {
+        Self.isPaneDisplayVisible(
+            isSelected: id == selectedID,
+            phase: phase(of: id),
+            isTerminalVisible: isTerminalVisible(id)
+        )
+    }
+
+    static func isPaneDisplayVisible(
+        isSelected: Bool,
+        phase: Phase,
+        isTerminalVisible: Bool
+    ) -> Bool {
+        guard isSelected else { return false }
+        switch phase {
+        case .starting, .shuttingDown: return true
+        case .terminal: return isTerminalVisible
+        case .none: return false
+        }
+    }
+
     nonisolated static func canMutateTerminal(
         isOpened: Bool,
         hasPanes: Bool,

@@ -54,12 +54,12 @@ private struct MainPane: View {
             ForEach(Array(model.panes.keys), id: \.self) { pid in
                 if !(model.panes[pid] ?? []).isEmpty {
                     paneContainer(pid: pid)
-                        // The primary terminal must remain mounted while its
-                        // shell integration is injected so it receives a
-                        // viewport and starts SSH, but it is not yet safe to
-                        // show or interact with.
-                        .opacity(pid == model.selectedID && model.isTerminalVisible(pid) ? 1 : 0)
-                        .allowsHitTesting(pid == model.selectedID && model.isTerminalVisible(pid))
+                        // A pending SSH terminal remains mounted but hidden
+                        // while shell integration is injected. Lifecycle
+                        // panes remain visible so their command output can be
+                        // observed.
+                        .opacity(model.isPaneDisplayVisible(pid) ? 1 : 0)
+                        .allowsHitTesting(model.isPaneDisplayVisible(pid))
                 }
             }
 
