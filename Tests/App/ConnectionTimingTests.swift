@@ -99,6 +99,37 @@ final class ConnectionTimingTests: XCTestCase {
         XCTAssertFalse(AppModel.isTerminalVisible(isAwaitingShellIntegration: true))
     }
 
+    func testSelectedLifecyclePanesAreDisplayVisibleBeforeSSHIsReady() {
+        XCTAssertTrue(AppModel.isPaneDisplayVisible(
+            isSelected: true,
+            phase: .starting,
+            isTerminalVisible: false
+        ))
+        XCTAssertTrue(AppModel.isPaneDisplayVisible(
+            isSelected: true,
+            phase: .shuttingDown,
+            isTerminalVisible: false
+        ))
+    }
+
+    func testPaneDisplayVisibilityPreservesSelectionAndSSHHandoffRules() {
+        XCTAssertFalse(AppModel.isPaneDisplayVisible(
+            isSelected: false,
+            phase: .starting,
+            isTerminalVisible: true
+        ))
+        XCTAssertFalse(AppModel.isPaneDisplayVisible(
+            isSelected: true,
+            phase: .terminal,
+            isTerminalVisible: false
+        ))
+        XCTAssertTrue(AppModel.isPaneDisplayVisible(
+            isSelected: true,
+            phase: .terminal,
+            isTerminalVisible: true
+        ))
+    }
+
     func testIntegrationCompletingBeforeSSHOutputRevealsOriginalTerminal() {
         XCTAssertEqual(
             AppModel.terminalHandoffAction(
