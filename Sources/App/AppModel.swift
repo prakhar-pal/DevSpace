@@ -8,6 +8,41 @@ typealias SSHProxyResolving = @MainActor (
     _ completion: @escaping @MainActor (String?) -> Void
 ) -> Void
 
+struct PastedImage: Equatable {
+    let data: Data
+    let ext: String
+}
+
+struct AppShortcutState {
+    let isModalOpen: Bool
+    let selectedID: String?
+    let selectedTerminalIsVisible: Bool
+    let selectedWorkspaceIsRunning: Bool
+    let visibleWorkspaceIDs: [String]
+    let pastedImage: PastedImage?
+}
+
+enum AppShortcutAction: Equatable {
+    case toggleSidebar
+    case reload(String)
+    case openInZed(String)
+    case newTerminal(String)
+    case imagePaste(PastedImage, to: String)
+    case selectVisibleWorkspace(String)
+    case moveWorkspace(String, by: Int)
+    case nextTerminalTab(String)
+    case quit
+    case minimize
+    case hide
+    case closeWindow
+}
+
+enum AppShortcutRoute: Equatable {
+    case unhandled
+    case handledNoOp
+    case action(AppShortcutAction)
+}
+
 @MainActor
 private func resolveSSHProxyCommand(
     _ podID: String,
@@ -1184,6 +1219,78 @@ final class AppModel: ObservableObject {
         guard Self.isSidebarToggleKeyEquivalent(event) else { return false }
         sidebarOpen.toggle()
         return true
+    }
+
+    static func shortcutRoute(event: NSEvent, state: AppShortcutState) -> AppShortcutRoute {
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        guard let chars = event.charactersIgnoringModifiers else { return .unhandled }
+
+        // Keep these protected app/window commands active even while a native
+        // modal control owns the rest of the keyboard.
+        if flags == [.command] {
+            switch chars {
+            case "q": return .action(.quit)
+            case "m": return .action(.minimize)
+            case "h": return .action(.hide)
+            case "w": return .action(.closeWindow)
+            default: break
+            }
+        }
+
+        guard !state.isModalOpen else { return .unhandled }
+
+        // ⌘⌥↑ / ⌘⌥↓ — move the selected workspace up/down in the sidebar.
+        if flags == [.command, .option] {
+            let up = Character(UnicodeScalar(NSUpArrowFunctionKey)!)
+            let down = Character(UnicodeScalar(NSDownArrowFunctionKey)!)
+            guard let c = chars.first, c == up || c == down else { return .unhandled }
+            guard let id = state.selectedID else { return .handledNoOp }
+            return .action(.moveWorkspace(id, by: c == up ? -1 : 1))
+        }
+
+        // ⌘⇧T — next terminal tab, complementing ⌘T for a new tab.
+        if flags == [.command, .shift] {
+            guard isNextTerminalTabShortcut(chars) else { return .unhandled }
+            guard let id = state.selectedID, state.selectedTerminalIsVisible else {
+                return .handledNoOp
+            }
+            return .action(.nextTerminalTab(id))
+        }
+
+        guard flags == [.command] else { return .unhandled }
+
+        if isSidebarToggleKeyEquivalent(event) {
+            return .action(.toggleSidebar)
+        }
+        if chars == "r" {
+            guard let id = state.selectedID, state.selectedTerminalIsVisible else {
+                return .handledNoOp
+            }
+            return .action(.reload(id))
+        }
+        if chars == "o" {
+            guard let id = state.selectedID, state.selectedWorkspaceIsRunning else {
+                return .handledNoOp
+            }
+            return .action(.openInZed(id))
+        }
+        if chars == "t" {
+            guard let id = state.selectedID, state.selectedTerminalIsVisible else {
+                return .handledNoOp
+            }
+            return .action(.newTerminal(id))
+        }
+        if chars == "v" {
+            guard let image = state.pastedImage,
+                  let id = state.selectedID,
+                  state.selectedTerminalIsVisible
+            else { return .unhandled }
+            return .action(.imagePaste(image, to: id))
+        }
+        if let n = Int(chars), (1 ... 9).contains(n), n - 1 < state.visibleWorkspaceIDs.count {
+            return .action(.selectVisibleWorkspace(state.visibleWorkspaceIDs[n - 1]))
+        }
+        return .unhandled
     }
 
     private func handleKey(_ event: NSEvent) -> NSEvent? {
