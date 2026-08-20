@@ -47,7 +47,69 @@ private final class TerminalWriteBuffer: @unchecked Sendable {
 }
 
 @MainActor
+private final class KeyEquivalentDispatchingWindow: NSWindow {
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, performKeyEquivalent(with: event) {
+            return
+        }
+        super.sendEvent(event)
+    }
+}
+
+@MainActor
 final class TerminalKeyEquivalentTests: XCTestCase {
+    func testRealLocalMonitorDefersOnceBeforeApplicationDispatchesFocusedTerminal() {
+        let writes = TerminalWriteBuffer()
+        let recorder = SurfaceShortcutExecutor()
+        let image = PastedImage(data: Data([0x40, 0x50, 0x60]), ext: "png")
+        var resolverReads = 0
+        var boundaries: [String] = []
+        let model = visibleTerminalModel(
+            executor: recorder,
+            pastedImageResolver: {
+                resolverReads += 1
+                return image
+            },
+            shortcutMonitorObserver: { didDefer in
+                boundaries.append(didDefer ? "monitor-defer" : "monitor-dispatch")
+            }
+        )
+        let terminal = configuredTerminalView(writes: writes)
+        let window = KeyEquivalentDispatchingWindow(
+            contentRect: terminal.view.frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+        window.contentView = terminal.view
+        window.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(window.makeFirstResponder(terminal.view))
+        drainMainRunLoop()
+
+        terminal.view.handleKeyEquivalent = { event in
+            boundaries.append("terminal")
+            return model.handleTerminalKeyEquivalent(event)
+        }
+        model.installKeyMonitor()
+
+        NSApp.sendEvent(keyEvent(
+            window: window,
+            timestamp: 0.5,
+            characters: "v",
+            keyCode: 9
+        ))
+        drainMainRunLoop()
+
+        XCTAssertEqual(boundaries, ["monitor-defer", "terminal"])
+        XCTAssertEqual(resolverReads, 1)
+        XCTAssertEqual(recorder.actions, [.imagePaste(image, to: "wc-1")])
+        XCTAssertEqual(writes.joined(), Data())
+    }
+
     func testOnlyFirstResponderAmongMultipleMountedTerminalsInvokesAppHandler() {
         let backgroundWrites = TerminalWriteBuffer()
         let foregroundWrites = TerminalWriteBuffer()
@@ -290,7 +352,8 @@ final class TerminalKeyEquivalentTests: XCTestCase {
 
     private func visibleTerminalModel(
         executor: AppShortcutActionExecuting,
-        pastedImageResolver: @escaping () -> PastedImage?
+        pastedImageResolver: @escaping () -> PastedImage?,
+        shortcutMonitorObserver: ((Bool) -> Void)? = nil
     ) -> AppModel {
         let model = AppModel(
             runner: SurfaceShortcutRunner(),
@@ -306,7 +369,8 @@ final class TerminalKeyEquivalentTests: XCTestCase {
             startsRuntimeServices: false,
             handoffTimeoutScheduler: SurfaceImmediateHandoffTimeoutScheduler(),
             shortcutActionExecutor: executor,
-            pastedImageResolver: pastedImageResolver
+            pastedImageResolver: pastedImageResolver,
+            shortcutMonitorObserver: shortcutMonitorObserver
         )
         model.select("wc-1")
         model.connect("wc-1")

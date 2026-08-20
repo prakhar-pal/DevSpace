@@ -9,6 +9,7 @@ typealias SSHProxyResolving = @MainActor (
 ) -> Void
 
 typealias PastedImageResolving = @MainActor () -> PastedImage?
+typealias ShortcutMonitorObserving = @MainActor (_ didDefer: Bool) -> Void
 
 struct PastedImage: Equatable {
     let data: Data
@@ -131,6 +132,7 @@ final class AppModel: ObservableObject {
     private let sshProxyResolver: SSHProxyResolving
     private let injectedShortcutActionExecutor: AppShortcutActionExecuting?
     private let pastedImageResolver: PastedImageResolving
+    private let shortcutMonitorObserver: ShortcutMonitorObserving?
     private lazy var shortcutActionExecutor: AppShortcutActionExecuting =
         injectedShortcutActionExecutor ?? DefaultShortcutActionExecutor(model: self)
 #if DEBUG
@@ -254,7 +256,8 @@ final class AppModel: ObservableObject {
         handoffTimeoutScheduler: HandoffTimeoutScheduling = MainQueueHandoffTimeoutScheduler(),
         sshProxyResolver: SSHProxyResolving? = nil,
         shortcutActionExecutor: AppShortcutActionExecuting? = nil,
-        pastedImageResolver: PastedImageResolving? = nil
+        pastedImageResolver: PastedImageResolving? = nil,
+        shortcutMonitorObserver: ShortcutMonitorObserving? = nil
     ) {
         self.runner = runner
         self.handoffTimeout = max(0, handoffTimeout)
@@ -263,6 +266,7 @@ final class AppModel: ObservableObject {
             ?? (startsRuntimeServices ? resolveSSHProxyCommand : resolveNoSSHProxyCommand)
         injectedShortcutActionExecutor = shortcutActionExecutor
         self.pastedImageResolver = pastedImageResolver ?? { AppModel.pastedImage() }
+        self.shortcutMonitorObserver = shortcutMonitorObserver
         notifyToken = startsRuntimeServices ? (try? Notify.loadOrCreateToken()) ?? "" : ""
         loop = PollLoop(runner: runner, interval: interval, excluded: excluded)
         let l = LayoutStore.load()
@@ -1356,9 +1360,13 @@ final class AppModel: ObservableObject {
 
     private func handleKey(_ event: NSEvent) -> NSEvent? {
         let window = event.window ?? NSApp.keyWindow
-        return dispatchAppShortcutFromMonitor(event, firstResponder: window?.firstResponder)
-            ? nil
-            : event
+        let shouldDefer = Self.shouldDeferPotentialAppShortcutToTerminal(
+            event,
+            firstResponder: window?.firstResponder
+        )
+        shortcutMonitorObserver?(shouldDefer)
+        guard !shouldDefer else { return event }
+        return dispatchAppShortcut(event) ? nil : event
     }
 
     private func executeShortcutAction(_ action: AppShortcutAction) {
