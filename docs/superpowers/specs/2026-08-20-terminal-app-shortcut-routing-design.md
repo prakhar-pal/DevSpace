@@ -21,17 +21,24 @@ is focused.
 ## Design
 
 Extract event classification from `AppModel.handleKey(_:)` into a shared,
-pure `AppShortcut` route.  It converts an `NSEvent` plus AppModel state into
-one of: an unowned event, a handled no-op, or one concrete semantic action.
+pure `AppShortcut` route. It converts an `NSEvent` plus an immutable
+`AppShortcutState` snapshot into one of: an unowned event, a handled no-op, or
+one concrete semantic action. The snapshot includes the single resolved
+`PastedImage?` value, and `.imagePaste` carries that value as its payload.
 `AppModel` executes that semantic action exactly once.
 
 For a focused `DevSpaceTerminalView`, the terminal boundary is the sole owner
-of a recognized shortcut.  The local key monitor must return that event
-unchanged so AppKit can deliver it to `performKeyEquivalent(with:)`; the
-terminal boundary dispatches it and returns `true` before libghostty.  For all
-other first responders, the local monitor is the sole owner and returns `nil`
-after dispatch.  This prevents duplicate Cmd+O/Cmd+R actions if AppKit offers
-the same event to both paths.
+of a syntactically possible application shortcut. The local key monitor only
+checks that cheap, pasteboard-free syntax and returns such events unchanged;
+it does not classify or execute them. The terminal boundary resolves one
+snapshot (including `PastedImage?`), dispatches it, and returns `true` only
+when its route is handled. Text Cmd+V and other unowned events consequently
+fall through to libghostty.
+
+For every other first responder, the local monitor resolves one snapshot and
+is the sole classifier/executor, returning `nil` only for a handled route.
+This makes the owner unambiguous even if AppKit offers one event to both
+monitor and key-equivalent processing.
 
 The route includes every command shortcut AppModel currently owns:
 
@@ -41,6 +48,10 @@ The route includes every command shortcut AppModel currently owns:
   from Ghostty: Cmd+Q, Cmd+M, Cmd+H, and Cmd+W.
 
 Unowned terminal/application shortcuts continue to delegate to libghostty.
+`ContentView` must pass every focused terminal event to the model handler; the
+route's own state rules, rather than an SSH-visibility wrapper, decide whether
+it is handled. This preserves Cmd+Q/M/H/W for a focused lifecycle/log terminal
+as well as for an SSH terminal.
 
 ## Modal precedence
 
@@ -61,7 +72,7 @@ an active visible terminal), preventing command bytes from reaching the pod.
 It preserves existing conditional pass-through for text Cmd+V and an out-of-
 range Cmd+number.
 
-Execution uses a narrow, injectable semantic-action executor in tests.  The
+Execution uses a narrow, injectable semantic-action executor in tests. The
 production executor invokes the existing AppModel operations; test executors
 record each requested action without launching Zed, terminating the app, or
 depending on AppKit global state.
@@ -71,13 +82,15 @@ depending on AppKit global state.
 Add real-surface tests in Kitty keyboard mode that establish both sides of the
 boundary:
 
-1. Cmd+O and Cmd+R, delivered to a Kitty-mode terminal surface, dispatch their
-   corresponding semantic actions exactly once and produce no Kitty bytes.
-2. The local-monitor route defers those same terminal-focused events to the
-   terminal boundary, proving there is no double execution.
-3. A non-owned command shortcut and text Cmd+V still reach libghostty.
-4. The pure classifier covers every listed shortcut family, including
+1. A real focused Kitty-mode terminal plus the installed AppModel local monitor
+   receives one dispatched Cmd+O and Cmd+R event; each records exactly one
+   corresponding semantic action and produces no Kitty bytes.
+2. A non-owned command shortcut and text Cmd+V still reach libghostty through
+   that same AppKit delivery path.
+3. The pure classifier covers every listed shortcut family, including
    Cmd+Q/M/H/W, and locks the documented modal and inapplicable-action policy.
+4. Image Cmd+V resolves its pasteboard payload once at its owning boundary and
+   delivers the same payload to its recording executor.
 
 Run focused shortcut and terminal-key-equivalent tests, then `make test`.
 
