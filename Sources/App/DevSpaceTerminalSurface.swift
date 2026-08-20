@@ -7,6 +7,9 @@ final class DevSpaceTerminalView: AppTerminalView {
     var handleKeyEquivalent: (NSEvent) -> Bool = { _ in false }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.firstResponder === self else {
+            return super.performKeyEquivalent(with: event)
+        }
         if handleKeyEquivalent(event) {
             return true
         }

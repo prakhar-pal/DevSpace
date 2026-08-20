@@ -48,7 +48,55 @@ private final class TerminalWriteBuffer: @unchecked Sendable {
 
 @MainActor
 final class TerminalKeyEquivalentTests: XCTestCase {
-    func testInstalledMonitorAndKittySurfaceUseOneOwnerAndPreserveTerminalInput() {
+    func testOnlyFirstResponderAmongMultipleMountedTerminalsInvokesAppHandler() {
+        let backgroundWrites = TerminalWriteBuffer()
+        let foregroundWrites = TerminalWriteBuffer()
+        let background = configuredTerminalView(writes: backgroundWrites)
+        let foreground = configuredTerminalView(writes: foregroundWrites)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+        container.addSubview(background.view)
+        container.addSubview(foreground.view)
+        let window = NSWindow(
+            contentRect: container.frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(window.makeFirstResponder(foreground.view))
+        drainMainRunLoop()
+
+        var backgroundHandlerCalls = 0
+        var foregroundHandlerCalls = 0
+        background.view.handleKeyEquivalent = { _ in
+            backgroundHandlerCalls += 1
+            return true
+        }
+        foreground.view.handleKeyEquivalent = { _ in
+            foregroundHandlerCalls += 1
+            return true
+        }
+        let event = keyEvent(
+            window: window,
+            timestamp: 1,
+            characters: "v",
+            keyCode: 9
+        )
+
+        _ = background.view.performKeyEquivalent(with: event)
+        XCTAssertEqual(backgroundHandlerCalls, 0)
+        XCTAssertEqual(foregroundHandlerCalls, 0)
+        XCTAssertTrue(foreground.view.performKeyEquivalent(with: event))
+        XCTAssertEqual(backgroundHandlerCalls, 0)
+        XCTAssertEqual(foregroundHandlerCalls, 1)
+    }
+
+    func testFocusedKittySurfaceUsesOneOwnerAndPreservesTerminalInput() {
         let writes = TerminalWriteBuffer()
         let recorder = SurfaceShortcutExecutor()
         let image = PastedImage(data: Data([0x10, 0x20, 0x30]), ext: "png")
@@ -67,17 +115,16 @@ final class TerminalKeyEquivalentTests: XCTestCase {
             window.contentView = nil
         }
         view.handleKeyEquivalent = model.handleTerminalKeyEquivalent
-        model.installKeyMonitor()
         session.receive("\u{1b}[>7u")
         drainMainRunLoop()
 
-        dispatchThroughAppKit(keyEvent(
+        dispatchThroughWindowKeyEquivalent(keyEvent(
             window: window,
             timestamp: 10,
             characters: "o",
             keyCode: 31
         ))
-        dispatchThroughAppKit(keyEvent(
+        dispatchThroughWindowKeyEquivalent(keyEvent(
             window: window,
             timestamp: 11,
             characters: "r",
@@ -87,7 +134,7 @@ final class TerminalKeyEquivalentTests: XCTestCase {
         XCTAssertEqual(writes.joined(), Data())
 
         writes.removeAll()
-        dispatchThroughAppKit(keyEvent(
+        dispatchThroughWindowKeyEquivalent(keyEvent(
             window: window,
             timestamp: 12,
             characters: "y",
@@ -98,7 +145,7 @@ final class TerminalKeyEquivalentTests: XCTestCase {
         writes.removeAll()
         resolvedImage = image
         resolverReads = 0
-        dispatchThroughAppKit(keyEvent(
+        dispatchThroughWindowKeyEquivalent(keyEvent(
             window: window,
             timestamp: 13,
             characters: "v",
@@ -112,7 +159,7 @@ final class TerminalKeyEquivalentTests: XCTestCase {
         resolvedImage = nil
         resolverReads = 0
         withGeneralPasteboardString("terminal paste") {
-            dispatchThroughAppKit(keyEvent(
+            dispatchThroughWindowKeyEquivalent(keyEvent(
                 window: window,
                 timestamp: 14,
                 characters: "v",
@@ -121,6 +168,41 @@ final class TerminalKeyEquivalentTests: XCTestCase {
             XCTAssertEqual(writes.joined(), Data("terminal paste".utf8))
         }
         XCTAssertEqual(resolverReads, 1)
+    }
+
+    func testFocusedLifecycleTerminalRoutesSystemCommandsBeforeModalPolicy() {
+        let recorder = SurfaceShortcutExecutor()
+        let model = lifecycleTerminalModel(executor: recorder)
+        model.renaming = "wc-1"
+        let writes = TerminalWriteBuffer()
+        let (view, window, _) = terminalSurface(writes: writes)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+        view.handleKeyEquivalent = model.handleTerminalKeyEquivalent
+
+        for (characters, keyCode) in [("q", 12), ("m", 46), ("h", 4), ("w", 13)] {
+            XCTAssertTrue(view.performKeyEquivalent(with: keyEvent(
+                window: window,
+                timestamp: TimeInterval(keyCode),
+                characters: characters,
+                keyCode: UInt16(keyCode)
+            )))
+        }
+
+        guard case .starting = model.phase(of: "wc-1") else {
+            return XCTFail("Expected a lifecycle log terminal")
+        }
+        XCTAssertFalse(model.isTerminalVisible("wc-1"))
+        XCTAssertEqual(recorder.actions, [.quit, .minimize, .hide, .closeWindow])
+        XCTAssertFalse(model.handleTerminalKeyEquivalent(keyEvent(
+            window: window,
+            timestamp: 20,
+            characters: "o",
+            keyCode: 31
+        )))
+        XCTAssertEqual(recorder.actions, [.quit, .minimize, .hide, .closeWindow])
     }
 
     func testKittyModeWritesCommandBOnlyWhenAppHandlerDeclines() {
@@ -232,20 +314,34 @@ final class TerminalKeyEquivalentTests: XCTestCase {
         return model
     }
 
+    private func lifecycleTerminalModel(
+        executor: AppShortcutActionExecuting
+    ) -> AppModel {
+        let model = AppModel(
+            runner: SurfaceShortcutRunner(),
+            interval: 3_600,
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            shortcutActionExecutor: executor,
+            pastedImageResolver: { nil }
+        )
+        model.start("wc-1")
+        return model
+    }
+
     private func terminalSurface(
         writes: TerminalWriteBuffer
     ) -> (DevSpaceTerminalView, NSWindow, InMemoryTerminalSession) {
-        let session = InMemoryTerminalSession(
-            write: { writes.append($0) },
-            resize: { _ in }
-        )
-        let state = TerminalViewState()
-        let view = DevSpaceTerminalView(
-            frame: NSRect(x: 0, y: 0, width: 800, height: 500)
-        )
-        view.controller = state.controller
-        view.delegate = state
-        view.configuration = TerminalSurfaceOptions(backend: .inMemory(session))
+        let terminal = configuredTerminalView(writes: writes)
+        let view = terminal.view
+        let session = terminal.session
         let window = NSWindow(
             contentRect: view.frame,
             styleMask: [.titled],
@@ -257,6 +353,23 @@ final class TerminalKeyEquivalentTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(view))
         drainMainRunLoop()
         return (view, window, session)
+    }
+
+    private func configuredTerminalView(
+        writes: TerminalWriteBuffer
+    ) -> (view: DevSpaceTerminalView, session: InMemoryTerminalSession) {
+        let session = InMemoryTerminalSession(
+            write: { writes.append($0) },
+            resize: { _ in }
+        )
+        let state = TerminalViewState()
+        let view = DevSpaceTerminalView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 500)
+        )
+        view.controller = state.controller
+        view.delegate = state
+        view.configuration = TerminalSurfaceOptions(backend: .inMemory(session))
+        return (view, session)
     }
 
     private func withGeneralPasteboardString(_ string: String, body: () -> Void) {
@@ -282,21 +395,11 @@ final class TerminalKeyEquivalentTests: XCTestCase {
         body()
     }
 
-    private func dispatchThroughAppKit(_ event: NSEvent) {
-        NSApp.postEvent(event, atStart: true)
-        guard let queuedEvent = NSApp.nextEvent(
-            matching: .keyDown,
-            until: Date(timeIntervalSinceNow: 1),
-            inMode: .default,
-            dequeue: true
-        ) else {
-            XCTFail("Expected AppKit to dequeue the posted key event")
-            return
-        }
-        if queuedEvent.window?.performKeyEquivalent(with: queuedEvent) != true,
-           queuedEvent.window?.performKeyEquivalent(with: queuedEvent) != true
+    private func dispatchThroughWindowKeyEquivalent(_ event: NSEvent) {
+        if event.window?.performKeyEquivalent(with: event) != true,
+           event.window?.performKeyEquivalent(with: event) != true
         {
-            NSApp.sendEvent(queuedEvent)
+            NSApp.sendEvent(event)
         }
         drainMainRunLoop()
     }
