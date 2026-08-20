@@ -1,7 +1,27 @@
 import AppKit
+import DevSpaceCore
 import GhosttyTerminal
 import XCTest
 @testable import DevSpaceApp
+
+@MainActor
+private final class SurfaceShortcutExecutor: AppShortcutActionExecuting {
+    private(set) var actions: [AppShortcutAction] = []
+
+    func execute(_ action: AppShortcutAction) {
+        actions.append(action)
+    }
+}
+
+private final class SurfaceImmediateHandoffTimeoutScheduler: AppModel.HandoffTimeoutScheduling {
+    func schedule(after _: TimeInterval, action: @escaping () -> Void) {
+        action()
+    }
+}
+
+private final class SurfaceShortcutRunner: CommandRunning, @unchecked Sendable {
+    func run(_: [String]) throws -> String { "{}" }
+}
 
 private final class TerminalWriteBuffer: @unchecked Sendable {
     private let lock = NSLock()
@@ -28,6 +48,81 @@ private final class TerminalWriteBuffer: @unchecked Sendable {
 
 @MainActor
 final class TerminalKeyEquivalentTests: XCTestCase {
+    func testInstalledMonitorAndKittySurfaceUseOneOwnerAndPreserveTerminalInput() {
+        let writes = TerminalWriteBuffer()
+        let recorder = SurfaceShortcutExecutor()
+        let image = PastedImage(data: Data([0x10, 0x20, 0x30]), ext: "png")
+        var resolvedImage: PastedImage?
+        var resolverReads = 0
+        let model = visibleTerminalModel(
+            executor: recorder,
+            pastedImageResolver: {
+                resolverReads += 1
+                return resolvedImage
+            }
+        )
+        let (view, window, session) = terminalSurface(writes: writes)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+        view.handleKeyEquivalent = model.handleTerminalKeyEquivalent
+        model.installKeyMonitor()
+        session.receive("\u{1b}[>7u")
+        drainMainRunLoop()
+
+        dispatchThroughAppKit(keyEvent(
+            window: window,
+            timestamp: 10,
+            characters: "o",
+            keyCode: 31
+        ))
+        dispatchThroughAppKit(keyEvent(
+            window: window,
+            timestamp: 11,
+            characters: "r",
+            keyCode: 15
+        ))
+        XCTAssertEqual(recorder.actions, [.openInZed("wc-1"), .reload("wc-1")])
+        XCTAssertEqual(writes.joined(), Data())
+
+        writes.removeAll()
+        dispatchThroughAppKit(keyEvent(
+            window: window,
+            timestamp: 12,
+            characters: "y",
+            keyCode: 16
+        ))
+        XCTAssertFalse(writes.joined().isEmpty)
+
+        writes.removeAll()
+        resolvedImage = image
+        resolverReads = 0
+        dispatchThroughAppKit(keyEvent(
+            window: window,
+            timestamp: 13,
+            characters: "v",
+            keyCode: 9
+        ))
+        XCTAssertEqual(resolverReads, 1)
+        XCTAssertEqual(recorder.actions.last, .imagePaste(image, to: "wc-1"))
+        XCTAssertEqual(writes.joined(), Data())
+
+        writes.removeAll()
+        resolvedImage = nil
+        resolverReads = 0
+        withGeneralPasteboardString("terminal paste") {
+            dispatchThroughAppKit(keyEvent(
+                window: window,
+                timestamp: 14,
+                characters: "v",
+                keyCode: 9
+            ))
+            XCTAssertEqual(writes.joined(), Data("terminal paste".utf8))
+        }
+        XCTAssertEqual(resolverReads, 1)
+    }
+
     func testKittyModeWritesCommandBOnlyWhenAppHandlerDeclines() {
         let writes = TerminalWriteBuffer()
         let session = InMemoryTerminalSession(
@@ -91,7 +186,12 @@ final class TerminalKeyEquivalentTests: XCTestCase {
         XCTAssertEqual(writes.joined(), Data())
     }
 
-    private func keyEvent(window: NSWindow, timestamp: TimeInterval) -> NSEvent {
+    private func keyEvent(
+        window: NSWindow,
+        timestamp: TimeInterval,
+        characters: String = "b",
+        keyCode: UInt16 = 11
+    ) -> NSEvent {
         NSEvent.keyEvent(
             with: .keyDown,
             location: .zero,
@@ -99,11 +199,106 @@ final class TerminalKeyEquivalentTests: XCTestCase {
             timestamp: timestamp,
             windowNumber: window.windowNumber,
             context: nil,
-            characters: "b",
-            charactersIgnoringModifiers: "b",
+            characters: characters,
+            charactersIgnoringModifiers: characters,
             isARepeat: false,
-            keyCode: 11
+            keyCode: keyCode
         )!
+    }
+
+    private func visibleTerminalModel(
+        executor: AppShortcutActionExecuting,
+        pastedImageResolver: @escaping () -> PastedImage?
+    ) -> AppModel {
+        let model = AppModel(
+            runner: SurfaceShortcutRunner(),
+            interval: 3_600,
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            handoffTimeoutScheduler: SurfaceImmediateHandoffTimeoutScheduler(),
+            shortcutActionExecutor: executor,
+            pastedImageResolver: pastedImageResolver
+        )
+        model.select("wc-1")
+        model.connect("wc-1")
+        XCTAssertTrue(model.isTerminalVisible("wc-1"))
+        return model
+    }
+
+    private func terminalSurface(
+        writes: TerminalWriteBuffer
+    ) -> (DevSpaceTerminalView, NSWindow, InMemoryTerminalSession) {
+        let session = InMemoryTerminalSession(
+            write: { writes.append($0) },
+            resize: { _ in }
+        )
+        let state = TerminalViewState()
+        let view = DevSpaceTerminalView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 500)
+        )
+        view.controller = state.controller
+        view.delegate = state
+        view.configuration = TerminalSurfaceOptions(backend: .inMemory(session))
+        let window = NSWindow(
+            contentRect: view.frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(window.makeFirstResponder(view))
+        drainMainRunLoop()
+        return (view, window, session)
+    }
+
+    private func withGeneralPasteboardString(_ string: String, body: () -> Void) {
+        let pasteboard = NSPasteboard.general
+        let savedItems = pasteboard.pasteboardItems?.map { item in
+            Dictionary(uniqueKeysWithValues: item.types.compactMap { type in
+                item.data(forType: type).map { (type, $0) }
+            })
+        } ?? []
+        defer {
+            pasteboard.clearContents()
+            let restoredItems = savedItems.map { values -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                for (type, data) in values {
+                    item.setData(data, forType: type)
+                }
+                return item
+            }
+            pasteboard.writeObjects(restoredItems)
+        }
+        pasteboard.clearContents()
+        pasteboard.setString(string, forType: .string)
+        body()
+    }
+
+    private func dispatchThroughAppKit(_ event: NSEvent) {
+        NSApp.postEvent(event, atStart: true)
+        guard let queuedEvent = NSApp.nextEvent(
+            matching: .keyDown,
+            until: Date(timeIntervalSinceNow: 1),
+            inMode: .default,
+            dequeue: true
+        ) else {
+            XCTFail("Expected AppKit to dequeue the posted key event")
+            return
+        }
+        if queuedEvent.window?.performKeyEquivalent(with: queuedEvent) != true,
+           queuedEvent.window?.performKeyEquivalent(with: queuedEvent) != true
+        {
+            NSApp.sendEvent(queuedEvent)
+        }
+        drainMainRunLoop()
     }
 
     private func drainMainRunLoop() {
