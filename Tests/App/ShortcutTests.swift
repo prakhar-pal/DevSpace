@@ -90,6 +90,24 @@ final class ShortcutTests: XCTestCase {
         XCTAssertEqual(recorder.actions, [.reload("wc-1")])
     }
 
+    func testModalCommandVPassthroughDoesNotResolveImagePayload() {
+        let recorder = RecordingShortcutExecutor()
+        var resolverReads = 0
+        let model = fixtureModel(
+            executor: recorder,
+            selectedVisibleTerminal: "wc-1",
+            pastedImageResolver: {
+                resolverReads += 1
+                return PastedImage(data: Data([0x01]), ext: "png")
+            }
+        )
+        model.renaming = "wc-1"
+
+        XCTAssertFalse(model.dispatchAppShortcut(keyEvent(characters: "v")))
+        XCTAssertEqual(resolverReads, 0)
+        XCTAssertEqual(recorder.actions, [])
+    }
+
     func testCommandORoutesToOpenInZedForARunningSelectedWorkspace() {
         XCTAssertEqual(AppModel.shortcutRoute(
             event: keyEvent(characters: "o"),

@@ -1321,12 +1321,13 @@ final class AppModel: ObservableObject {
 
     func dispatchAppShortcut(_ event: NSEvent) -> Bool {
         let id = selectedID
+        let isModalOpen = renaming != nil || guideOpen
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        let pastedImage = flags == [.command] && event.charactersIgnoringModifiers == "v"
+        let pastedImage = !isModalOpen && flags == [.command] && event.charactersIgnoringModifiers == "v"
             ? pastedImageResolver()
             : nil
         let state = AppShortcutState(
-            isModalOpen: renaming != nil || guideOpen,
+            isModalOpen: isModalOpen,
             selectedID: id,
             selectedTerminalIsVisible: id.map {
                 phase(of: $0) == .terminal && isTerminalVisible($0)
