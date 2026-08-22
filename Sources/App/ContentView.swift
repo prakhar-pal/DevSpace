@@ -151,7 +151,6 @@ private struct MainPane: View {
                     TerminalPaneView(
                         model: pane,
                         handleKeyEquivalent: { event in
-                            guard model.isTerminalVisible(pid) else { return false }
                             return model.handleTerminalKeyEquivalent(event)
                         }
                     )

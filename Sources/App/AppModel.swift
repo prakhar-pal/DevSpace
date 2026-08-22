@@ -8,6 +8,49 @@ typealias SSHProxyResolving = @MainActor (
     _ completion: @escaping @MainActor (String?) -> Void
 ) -> Void
 
+typealias PastedImageResolving = @MainActor () -> PastedImage?
+typealias ShortcutMonitorObserving = @MainActor (_ didDefer: Bool) -> Void
+
+struct PastedImage: Equatable {
+    let data: Data
+    let ext: String
+}
+
+struct AppShortcutState {
+    let isModalOpen: Bool
+    let selectedID: String?
+    let selectedTerminalIsVisible: Bool
+    let selectedWorkspaceIsRunning: Bool
+    let visibleWorkspaceIDs: [String]
+    let pastedImage: PastedImage?
+}
+
+enum AppShortcutAction: Equatable {
+    case toggleSidebar
+    case reload(String)
+    case openInZed(String)
+    case newTerminal(String)
+    case imagePaste(PastedImage, to: String)
+    case selectVisibleWorkspace(String)
+    case moveWorkspace(String, by: Int)
+    case nextTerminalTab(String)
+    case quit
+    case minimize
+    case hide
+    case closeWindow
+}
+
+enum AppShortcutRoute: Equatable {
+    case unhandled
+    case handledNoOp
+    case action(AppShortcutAction)
+}
+
+@MainActor
+protocol AppShortcutActionExecuting: AnyObject {
+    func execute(_ action: AppShortcutAction)
+}
+
 @MainActor
 private func resolveSSHProxyCommand(
     _ podID: String,
@@ -33,6 +76,18 @@ private func resolveNoSSHProxyCommand(
 /// workspace session lifecycle (starting / running terminal / shutting down).
 @MainActor
 final class AppModel: ObservableObject {
+    private final class DefaultShortcutActionExecutor: AppShortcutActionExecuting {
+        weak var model: AppModel?
+
+        init(model: AppModel) {
+            self.model = model
+        }
+
+        func execute(_ action: AppShortcutAction) {
+            model?.executeShortcutAction(action)
+        }
+    }
+
     protocol HandoffTimeoutScheduling: AnyObject {
         func schedule(after delay: TimeInterval, action: @escaping () -> Void)
     }
@@ -75,6 +130,11 @@ final class AppModel: ObservableObject {
     private let handoffTimeout: TimeInterval
     private let handoffTimeoutScheduler: HandoffTimeoutScheduling
     private let sshProxyResolver: SSHProxyResolving
+    private let injectedShortcutActionExecutor: AppShortcutActionExecuting?
+    private let pastedImageResolver: PastedImageResolving
+    private let shortcutMonitorObserver: ShortcutMonitorObserving?
+    private lazy var shortcutActionExecutor: AppShortcutActionExecuting =
+        injectedShortcutActionExecutor ?? DefaultShortcutActionExecutor(model: self)
 #if DEBUG
     private let installManualNotifyHelper = true
 #else
@@ -194,13 +254,19 @@ final class AppModel: ObservableObject {
         startsRuntimeServices: Bool = true,
         handoffTimeout: TimeInterval = 10,
         handoffTimeoutScheduler: HandoffTimeoutScheduling = MainQueueHandoffTimeoutScheduler(),
-        sshProxyResolver: SSHProxyResolving? = nil
+        sshProxyResolver: SSHProxyResolving? = nil,
+        shortcutActionExecutor: AppShortcutActionExecuting? = nil,
+        pastedImageResolver: PastedImageResolving? = nil,
+        shortcutMonitorObserver: ShortcutMonitorObserving? = nil
     ) {
         self.runner = runner
         self.handoffTimeout = max(0, handoffTimeout)
         self.handoffTimeoutScheduler = handoffTimeoutScheduler
         self.sshProxyResolver = sshProxyResolver
             ?? (startsRuntimeServices ? resolveSSHProxyCommand : resolveNoSSHProxyCommand)
+        injectedShortcutActionExecutor = shortcutActionExecutor
+        self.pastedImageResolver = pastedImageResolver ?? { AppModel.pastedImage() }
+        self.shortcutMonitorObserver = shortcutMonitorObserver
         notifyToken = startsRuntimeServices ? (try? Notify.loadOrCreateToken()) ?? "" : ""
         loop = PollLoop(runner: runner, interval: interval, excluded: excluded)
         let l = LayoutStore.load()
@@ -689,7 +755,7 @@ final class AppModel: ObservableObject {
     /// genuine raw-image clipboard entry with no backing file (e.g. a
     /// screenshot captured straight to the clipboard via ⌘⇧⌃4, or an image
     /// copied from a browser/viewer).
-    private static func pastedImage() -> (data: Data, ext: String)? {
+    private static func pastedImage() -> PastedImage? {
         let pb = NSPasteboard.general
         let fileURLs = ((pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL]) ?? [])
             .filter(\.isFileURL)
@@ -700,14 +766,14 @@ final class AppModel: ObservableObject {
             guard let url = fileURLs.first(where: { pastedImageExtensions.contains($0.pathExtension.lowercased()) }),
                   let data = try? Data(contentsOf: url)
             else { return nil }
-            return (data, url.pathExtension.lowercased())
+            return PastedImage(data: data, ext: url.pathExtension.lowercased())
         }
-        if let png = pb.data(forType: .png) { return (png, "png") }
+        if let png = pb.data(forType: .png) { return PastedImage(data: png, ext: "png") }
         guard let tiff = pb.data(forType: .tiff),
               let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:])
         else { return nil }
-        return (png, "png")
+        return PastedImage(data: png, ext: "png")
     }
 
     /// libghostty's own Cmd+V paste (`AppTerminalView.paste(_:)`) reads only
@@ -753,7 +819,7 @@ final class AppModel: ObservableObject {
     /// "Work with images": "Provide an image path to Claude"). Best-effort:
     /// scp failure just logs, matching hook injection's convention — no
     /// user-facing error UI for v1.
-    private func pasteImage(_ image: (data: Data, ext: String), to id: String) {
+    private func pasteImage(_ image: PastedImage, to id: String) {
         let name = "devspace-paste-\(UUID().uuidString).\(image.ext)"
         let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         do {
@@ -1168,10 +1234,8 @@ final class AppModel: ObservableObject {
 
     private var keyMonitor: Any?
 
-    /// Cmd+1..9 selects the Nth visible workspace; Cmd+B toggles the sidebar.
-    /// The local monitor consumes app shortcuts except terminal-focused Cmd+B,
-    /// which is forwarded to DevSpaceTerminalView's key-equivalent boundary;
-    /// all app shortcuts are suppressed while a modal is open.
+    /// Routes app shortcuts at the monitor unless a terminal key-equivalent
+    /// boundary owns the syntactically possible shortcut.
     func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -1180,121 +1244,160 @@ final class AppModel: ObservableObject {
     }
 
     func handleTerminalKeyEquivalent(_ event: NSEvent) -> Bool {
-        guard renaming == nil, !guideOpen else { return false }
-        guard Self.isSidebarToggleKeyEquivalent(event) else { return false }
-        sidebarOpen.toggle()
-        return true
+        dispatchAppShortcut(event)
     }
 
-    private func handleKey(_ event: NSEvent) -> NSEvent? {
+    static func shortcutRoute(event: NSEvent, state: AppShortcutState) -> AppShortcutRoute {
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        guard let chars = event.charactersIgnoringModifiers else { return event }
+        guard let chars = event.charactersIgnoringModifiers else { return .unhandled }
+
+        // Keep these protected app/window commands active even while a native
+        // modal control owns the rest of the keyboard.
+        if flags == [.command] {
+            switch chars {
+            case "q": return .action(.quit)
+            case "m": return .action(.minimize)
+            case "h": return .action(.hide)
+            case "w": return .action(.closeWindow)
+            default: break
+            }
+        }
+
+        guard !state.isModalOpen else { return .unhandled }
 
         // ⌘⌥↑ / ⌘⌥↓ — move the selected workspace up/down in the sidebar.
-        if flags == [.command, .option], renaming == nil, !guideOpen {
+        if flags == [.command, .option] {
             let up = Character(UnicodeScalar(NSUpArrowFunctionKey)!)
             let down = Character(UnicodeScalar(NSDownArrowFunctionKey)!)
-            if let c = chars.first, c == up || c == down {
-                if let id = selectedID { move(id, by: c == up ? -1 : 1) }
-                return nil
-            }
-            return event
+            guard let c = chars.first, c == up || c == down else { return .unhandled }
+            guard let id = state.selectedID else { return .handledNoOp }
+            return .action(.moveWorkspace(id, by: c == up ? -1 : 1))
         }
 
         // ⌘⇧T — next terminal tab, complementing ⌘T for a new tab.
-        if flags == [.command, .shift], renaming == nil, !guideOpen {
-            if Self.isNextTerminalTabShortcut(chars) {
-                if let id = selectedID,
-                   phase(of: id) == .terminal,
-                   isTerminalVisible(id)
-                {
-                    cycleTab(id, by: 1)
-                }
-                return nil
+        if flags == [.command, .shift] {
+            guard isNextTerminalTabShortcut(chars) else { return .unhandled }
+            guard let id = state.selectedID, state.selectedTerminalIsVisible else {
+                return .handledNoOp
             }
-            return event
+            return .action(.nextTerminalTab(id))
         }
 
-        guard flags == [.command] else { return event }
+        guard flags == [.command] else { return .unhandled }
 
-        // Standard window/app shortcuts the libghostty surface otherwise swallows
-        // (Ghostty binds these to its own actions, which are no-ops when embedded).
-        switch chars {
-        case "q": NSApp.terminate(nil); return nil
-        case "m": NSApp.keyWindow?.performMiniaturize(nil); return nil
-        case "h": NSApp.hide(nil); return nil
-        case "w": NSApp.keyWindow?.performClose(nil); return nil
-        default: break
+        if isSidebarToggleKeyEquivalent(event) {
+            return .action(.toggleSidebar)
         }
-
-        guard renaming == nil, !guideOpen else { return event } // modal owns the keyboard
-
-        if Self.isSidebarToggleKeyEquivalent(event) {
-            let window = event.window ?? NSApp.keyWindow
-            if Self.shouldRouteSidebarToggleToTerminal(
-                event,
-                firstResponder: window?.firstResponder
-            ) {
-                return event
-            }
-            sidebarOpen.toggle()
-            return nil
-        }
-        // Cmd+R: reconnect the selected workspace's SSH shell (same action as
-        // the context menu's "Reload SSH Session") — only meaningful when a
-        // session is actually open.
         if chars == "r" {
-            if let id = selectedID,
-               phase(of: id) == .terminal,
-               isTerminalVisible(id)
-            {
-                reload(id)
+            guard let id = state.selectedID, state.selectedTerminalIsVisible else {
+                return .handledNoOp
             }
-            return nil // consume even when a no-op so the terminal never sees ⌘R
+            return .action(.reload(id))
         }
-        // Cmd+O: open the selected workspace's folder in Zed (same action as
-        // the context menu's "Open in Zed"; Running pods only, like the menu).
         if chars == "o" {
-            if let id = selectedID, byID[id]?.state == "Running" {
-                openInZed(id)
+            guard let id = state.selectedID, state.selectedWorkspaceIsRunning else {
+                return .handledNoOp
             }
-            return nil
+            return .action(.openInZed(id))
         }
-        // Cmd+T: open another terminal tab for the selected workspace.
         if chars == "t" {
-            if let id = selectedID,
-               phase(of: id) == .terminal,
-               isTerminalVisible(id)
-            {
-                newTerminal(id)
+            guard let id = state.selectedID, state.selectedTerminalIsVisible else {
+                return .handledNoOp
             }
-            return nil
+            return .action(.newTerminal(id))
         }
-        // Cmd+V: an image-bearing pasteboard is copied to the pod and its
-        // path injected into the input line (no Enter — user adds their own
-        // message). Text-only pastes fall through untouched to libghostty's
-        // own paste, and so does everything else (no terminal open, no
-        // workspace selected) — nothing here is destructive to suppress.
         if chars == "v" {
-            if let image = Self.pastedImage(),
-               let id = selectedID,
-               phase(of: id) == .terminal,
-               isTerminalVisible(id)
-            {
-                Self.suppressCompetingPaste()
-                pasteImage(image, to: id)
-                return nil
-            }
-            return event
+            guard let image = state.pastedImage,
+                  let id = state.selectedID,
+                  state.selectedTerminalIsVisible
+            else { return .unhandled }
+            return .action(.imagePaste(image, to: id))
         }
-        if let n = Int(chars), (1 ... 9).contains(n) {
-            let visible = split.visible
-            if n - 1 < visible.count {
-                select(visible[n - 1].id)
-                return nil
-            }
+        if let n = Int(chars), (1 ... 9).contains(n), n - 1 < state.visibleWorkspaceIDs.count {
+            return .action(.selectVisibleWorkspace(state.visibleWorkspaceIDs[n - 1]))
         }
-        return event
+        return .unhandled
+    }
+
+    func dispatchAppShortcut(_ event: NSEvent) -> Bool {
+        let id = selectedID
+        let isModalOpen = renaming != nil || guideOpen
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        let pastedImage = !isModalOpen && flags == [.command] && event.charactersIgnoringModifiers == "v"
+            ? pastedImageResolver()
+            : nil
+        let state = AppShortcutState(
+            isModalOpen: isModalOpen,
+            selectedID: id,
+            selectedTerminalIsVisible: id.map {
+                phase(of: $0) == .terminal && isTerminalVisible($0)
+            } ?? false,
+            selectedWorkspaceIsRunning: id.flatMap { byID[$0] }?.state == "Running",
+            visibleWorkspaceIDs: split.visible.map(\.id),
+            pastedImage: pastedImage
+        )
+
+        switch Self.shortcutRoute(event: event, state: state) {
+        case .unhandled:
+            return false
+        case .handledNoOp:
+            return true
+        case .action(let action):
+            shortcutActionExecutor.execute(action)
+            return true
+        }
+    }
+
+    func dispatchAppShortcutFromMonitor(
+        _ event: NSEvent,
+        firstResponder: NSResponder?
+    ) -> Bool {
+        guard !Self.shouldDeferPotentialAppShortcutToTerminal(
+            event,
+            firstResponder: firstResponder
+        ) else { return false }
+        return dispatchAppShortcut(event)
+    }
+
+    private func handleKey(_ event: NSEvent) -> NSEvent? {
+        let window = event.window ?? NSApp.keyWindow
+        let shouldDefer = Self.shouldDeferPotentialAppShortcutToTerminal(
+            event,
+            firstResponder: window?.firstResponder
+        )
+        shortcutMonitorObserver?(shouldDefer)
+        guard !shouldDefer else { return event }
+        return dispatchAppShortcut(event) ? nil : event
+    }
+
+    private func executeShortcutAction(_ action: AppShortcutAction) {
+        switch action {
+        case .toggleSidebar:
+            sidebarOpen.toggle()
+        case .reload(let id):
+            reload(id)
+        case .openInZed(let id):
+            openInZed(id)
+        case .newTerminal(let id):
+            newTerminal(id)
+        case .imagePaste(let image, let id):
+            Self.suppressCompetingPaste()
+            pasteImage(image, to: id)
+        case .selectVisibleWorkspace(let id):
+            select(id)
+        case .moveWorkspace(let id, let delta):
+            move(id, by: delta)
+        case .nextTerminalTab(let id):
+            cycleTab(id, by: 1)
+        case .quit:
+            NSApp.terminate(nil)
+        case .minimize:
+            NSApp.keyWindow?.performMiniaturize(nil)
+        case .hide:
+            NSApp.hide(nil)
+        case .closeWindow:
+            NSApp.keyWindow?.performClose(nil)
+        }
     }
 
     static func isNextTerminalTabShortcut(_ charactersIgnoringModifiers: String) -> Bool {
@@ -1313,10 +1416,28 @@ final class AppModel: ObservableObject {
         return flags == [.command] && isSidebarToggleShortcut(chars)
     }
 
-    static func shouldRouteSidebarToggleToTerminal(
+    static func shouldDeferPotentialAppShortcutToTerminal(
         _ event: NSEvent,
         firstResponder: NSResponder?
     ) -> Bool {
-        isSidebarToggleKeyEquivalent(event) && firstResponder is DevSpaceTerminalView
+        guard firstResponder is DevSpaceTerminalView,
+              event.type == .keyDown,
+              let chars = event.charactersIgnoringModifiers
+        else { return false }
+
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if flags == [.command] {
+            return isSidebarToggleShortcut(chars)
+                || ["q", "m", "h", "w", "o", "r", "t", "v"].contains(chars)
+                || (Int(chars).map { (1 ... 9).contains($0) } ?? false)
+        }
+        if flags == [.command, .shift] {
+            return isNextTerminalTabShortcut(chars)
+        }
+        if flags == [.command, .option], let first = chars.first {
+            return first == Character(UnicodeScalar(NSUpArrowFunctionKey)!)
+                || first == Character(UnicodeScalar(NSDownArrowFunctionKey)!)
+        }
+        return false
     }
 }
