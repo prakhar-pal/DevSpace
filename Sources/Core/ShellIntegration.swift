@@ -34,11 +34,63 @@ public enum ShellIntegration {
     /// pinned to whatever version was injected first. The snippet travels
     /// base64-encoded so no quoting survives two shells' parsing.
     static func injectScript() -> String {
+        injectScript(snippet: snippet)
+    }
+
+    static func injectScript(podID: String, token: String) -> String {
+        injectScript(snippet: managedSnippet(podID: podID, token: token))
+    }
+
+    private static func injectScript(snippet: String) -> String {
         let b64 = Data(("\n" + snippet + "\n").utf8).base64EncodedString()
         return "for rc in \"$HOME/.bashrc\" \"$HOME/.zshrc\"; do "
             + "[ -f \"$rc\" ] && sed -i '/\(sedPattern(beginMarker))/,/\(sedPattern(endMarker))/d' \"$rc\"; "
             + "echo \(b64) | base64 -d >> \"$rc\"; "
             + "done"
+    }
+
+    private static func managedSnippet(podID: String, token: String) -> String {
+        guard !token.isEmpty else { return snippet }
+
+        let suffix = "\n\(endMarker)"
+        guard snippet.hasSuffix(suffix) else { return snippet }
+
+        return String(snippet.dropLast(suffix.count))
+            + "\n"
+            + dideFunction(podID: podID, token: token)
+            + suffix
+    }
+
+    private static func dideFunction(podID: String, token: String) -> String {
+        let port = SSH.podForwardPort
+        let shellPodID = shellDoubleQuoted(podID)
+        let shellToken = shellDoubleQuoted(token)
+        return """
+        # Open a pod folder in Zed through the authenticated /dide listener.
+        dide() {
+          if [ "$#" -gt 1 ]; then
+            printf 'usage: dide [path]\\n' >&2
+            return 64
+          fi
+          local target="${1:-.}"
+          local resolved
+          resolved="$(cd -- "$target" 2>/dev/null && pwd -P)" || {
+            printf 'dide: could not resolve path: %s\\n' "$target" >&2
+            return 1
+          }
+          local path_b64
+          path_b64="$(printf '%s' "$resolved" | base64 | tr -d '\\n')" || {
+            printf 'dide: could not encode path\\n' >&2
+            return 1
+          }
+          local payload
+          payload="{\\"pod_id\\":\\"\(shellPodID)\\",\\"path_b64\\":\\"$path_b64\\",\\"token\\":\\"\(shellToken)\\"}"
+          curl -fsS -X POST -H 'Content-Type: application/json' -d "$payload" "http://localhost:\(port)/dide" >/dev/null || {
+            printf 'dide: request failed\\n' >&2
+            return 1
+          }
+        }
+        """
     }
 
     /// Escape a marker line for use inside a sed /…/ address.
@@ -48,10 +100,21 @@ public enum ShellIntegration {
             .replacingOccurrences(of: "/", with: "\\/")
     }
 
+    private static func shellDoubleQuoted(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "$", with: "\\$")
+            .replacingOccurrences(of: "`", with: "\\`")
+    }
+
     /// Append the OSC 7 prompt hook to the pod's shell rc files. Idempotent;
     /// best-effort (new shells pick it up — existing prompts are unaffected).
-    public static func inject(_ runner: CommandRunning, podID: String) throws {
+    public static func inject(_ runner: CommandRunning, podID: String, token: String = "") throws {
         try Devpod.validateId(podID)
-        _ = try runner.run(["ssh", "--command", injectScript(), "--start-services=false", "--", podID])
+        _ = try runner.run([
+            "ssh", "--command", injectScript(podID: podID, token: token),
+            "--start-services=false", "--", podID,
+        ])
     }
 }

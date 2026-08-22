@@ -378,12 +378,13 @@ final class AppModel: ObservableObject {
         then completion: @escaping (Bool) -> Void = { _ in }
     ) {
         let r = runner
+        let token = notifyToken
         DispatchQueue.global(qos: .utility).async {
             var sshOK = false
             do {
-                try ShellIntegration.inject(r, podID: id)
+                try ShellIntegration.inject(r, podID: id, token: token)
                 sshOK = true
-                Log.write("inject: shell integration (OSC 7) written to pod=\(id)")
+                Log.write("inject: shell integration written to pod=\(id)")
             } catch {
                 Log.write("inject: shell integration FAILED pod=\(id): \(error)")
             }
