@@ -55,6 +55,16 @@ final class NotifyTests: XCTestCase {
         )
     }
 
+    func testRejectsDidePayloadWithNonUTF8DecodedPath() {
+        let nonUTF8Path = Data([0xFF, 0xFE, 0xFD]).base64EncodedString()
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                DidePayload.self,
+                from: Data(#"{"pod_id":"wc-1","path_b64":"\#(nonUTF8Path)","token":"abc"}"#.utf8)
+            )
+        )
+    }
+
     func testRandomTokenIs32HexChars() throws {
         let t = try Notify.randomToken()
         XCTAssertEqual(t.count, 32)

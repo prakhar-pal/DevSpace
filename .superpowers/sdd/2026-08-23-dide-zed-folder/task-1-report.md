@@ -43,3 +43,9 @@ Result:
 
 - Focused verification required an unsandboxed `swift test` run because the sandboxed SwiftPM manifest/toolchain setup could not complete in this environment.
 - The test run still emits an unrelated pre-existing Swift 6 sendability warning in `Tests/Core/ShellIntegrationTests.swift`.
+
+### Review Follow-up
+
+- Updated the `NotifyListener` public doc comment to describe authenticated `POST /notify` and `POST /dide` handling and the `onDide` callback.
+- Added `testRejectsDidePayloadWithNonUTF8DecodedPath`, which confirms `path_b64` values that decode to invalid UTF-8 are rejected.
+- Focused verification after the review fix: `NotifyTests` executed 14 tests with 0 failures.

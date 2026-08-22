@@ -120,9 +120,11 @@ public enum Notify {
     }
 }
 
-/// Loopback HTTP listener on `SSH.listenerPort`. For each `POST /notify` whose
-/// token matches, invokes `onNotify(podID, message)`. Minimal HTTP/1.1 parsing
-/// over Network.framework (the in-pod `curl` is the only client).
+/// Loopback HTTP listener on `SSH.listenerPort` for authenticated `POST /notify`
+/// and `POST /dide` requests. Matching `/notify` payloads invoke
+/// `onNotify(podID, message)`; matching `/dide` payloads invoke `onDide` with
+/// the decoded `DidePayload`. Minimal HTTP/1.1 parsing over
+/// Network.framework (the in-pod `curl` is the only client).
 public final class NotifyListener: @unchecked Sendable {
     private struct HTTPRequest {
         let method: String
