@@ -72,14 +72,28 @@ public enum ShellIntegration {
             printf 'usage: dide [path]\\n' >&2
             return 64
           fi
-          local target="${1:-.}"
+          local target
+          if [ "$#" -eq 0 ]; then
+            target="."
+          else
+            target="$1"
+          fi
+          if [ -z "$target" ]; then
+            printf 'dide: path must not be empty\\n' >&2
+            return 1
+          fi
           local resolved
           resolved="$(cd -- "$target" 2>/dev/null && pwd -P)" || {
             printf 'dide: could not resolve path: %s\\n' "$target" >&2
             return 1
           }
+          local encoded_path
+          encoded_path="$(printf '%s' "$resolved" | base64)" || {
+            printf 'dide: could not encode path\\n' >&2
+            return 1
+          }
           local path_b64
-          path_b64="$(printf '%s' "$resolved" | base64 | tr -d '\\n')" || {
+          path_b64="$(printf '%s' "$encoded_path" | tr -d '\\n')" || {
             printf 'dide: could not encode path\\n' >&2
             return 1
           }
@@ -89,6 +103,7 @@ public enum ShellIntegration {
             printf 'dide: request failed\\n' >&2
             return 1
           }
+          printf 'dide: opening %s\\n' "$resolved"
         }
         """
     }
