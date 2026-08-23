@@ -62,7 +62,7 @@ public enum ShellIntegration {
     }
 
     private static func dideFunction(podID: String, token: String) -> String {
-        let port = SSH.podForwardPort
+        let port = SSH.sharedPodForwardFallback
         let shellPodID = shellDoubleQuoted(podID)
         let shellToken = shellDoubleQuoted(token)
         return """
@@ -99,7 +99,8 @@ public enum ShellIntegration {
           }
           local payload
           payload="{\\"pod_id\\":\\"\(shellPodID)\\",\\"path_b64\\":\\"$path_b64\\",\\"token\\":\\"\(shellToken)\\"}"
-          curl -fsS --max-time 2 -X POST -H 'Content-Type: application/json' -d "$payload" "http://localhost:\(port)/dide" >/dev/null || {
+          local port="${DEVSPACE_POD_FORWARD_PORT:-\(port)}"
+          curl -fsS --max-time 2 -X POST -H 'Content-Type: application/json' -d "$payload" "http://localhost:$port/dide" >/dev/null || {
             printf 'dide: request failed\\n' >&2
             return 1
           }

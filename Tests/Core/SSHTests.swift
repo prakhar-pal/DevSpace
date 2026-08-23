@@ -9,12 +9,28 @@ final class SSHTests: XCTestCase {
         XCTAssertTrue(args.contains { $0.hasPrefix("SetEnv=TERM=") })
         XCTAssertTrue(args.contains("-R"))
         XCTAssertTrue(args.contains("\(SSH.podForwardPort):localhost:\(SSH.listenerPort)"))
+        XCTAssertTrue(args.contains("SetEnv=DEVSPACE_POD_FORWARD_PORT=\(SSH.podForwardPort)"))
         XCTAssertEqual(args.last, "wc-1.devpod")
     }
 
     func testPorts() {
         XCTAssertEqual(SSH.listenerPort, 17865)
         XCTAssertEqual(SSH.podForwardPort, 8765)
+    }
+
+    func testDevBundleUsesSeparateReverseTunnelPorts() {
+        XCTAssertEqual(
+            SSH.ports(bundleIdentifier: "com.prakharp.devspace.dev"),
+            SSH.Ports(listenerPort: 17866, podForwardPort: 8766)
+        )
+        XCTAssertEqual(
+            SSH.ports(bundleIdentifier: "com.prakharp.devspace"),
+            SSH.Ports(listenerPort: 17865, podForwardPort: 8765)
+        )
+    }
+
+    func testSharedPodFallbackPreservesProductionPort() {
+        XCTAssertEqual(SSH.sharedPodForwardFallback, 8765)
     }
 
     func testSecondaryTerminalSkipsReverseTunnel() {

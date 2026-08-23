@@ -41,7 +41,8 @@ final class ShellIntegrationTests: XCTestCase {
         XCTAssertTrue(decoded.contains("wc-1"))
         XCTAssertTrue(decoded.contains("token"))
         XCTAssertTrue(decoded.contains("sekret-token"))
-        XCTAssertTrue(decoded.contains("http://localhost:\(SSH.podForwardPort)/dide"))
+        XCTAssertTrue(decoded.contains("DEVSPACE_POD_FORWARD_PORT:-\(SSH.sharedPodForwardFallback)"))
+        XCTAssertTrue(decoded.contains("http://localhost:$port/dide"))
     }
 
     func testDideHelperPostsCanonicalJSONForDefaultAbsoluteAndRelativeTargetsInBashAndZsh() throws {
@@ -157,6 +158,29 @@ final class ShellIntegrationTests: XCTestCase {
             XCTAssertNotEqual(result.status, 0, "\(shell.name) base64 failure unexpectedly succeeded")
             XCTAssertTrue(result.stderr.contains("dide: could not encode path"), "\(shell.name) stderr: \(result.stderr)")
             XCTAssertNil(result.payload, "\(shell.name) should not emit JSON when base64 fails")
+        }
+    }
+
+    func testDideHelperUsesTheOwningSessionForwardPort() throws {
+        let harness = try DideHarness(
+            snippet: injectedPayload(
+                from: ShellIntegration.injectScript(podID: "wc-1", token: "sekret-token")
+            )
+        )
+        defer { harness.cleanup() }
+
+        for shell in try shellSpecs() {
+            let result = try harness.run(
+                shell: shell,
+                arguments: [],
+                currentDirectory: harness.cwdReal,
+                sessionPodForwardPort: 9876
+            )
+            XCTAssertEqual(result.status, 0, "\(shell.name) stderr: \(result.stderr)")
+            XCTAssertTrue(
+                result.curlArguments.contains("http://localhost:9876/dide"),
+                "\(shell.name) curl args: \(result.curlArguments)"
+            )
         }
     }
 
@@ -337,7 +361,8 @@ private final class DideHarness {
         shell: ShellSpec,
         arguments: [String],
         currentDirectory: URL,
-        failBase64: Bool = false
+        failBase64: Bool = false,
+        sessionPodForwardPort: UInt16? = nil
     ) throws -> DideRunResult {
         let payloadFile = root.appendingPathComponent("payload-\(UUID().uuidString).json")
         let argsFile = root.appendingPathComponent("curl-args-\(UUID().uuidString).txt")
@@ -352,6 +377,7 @@ private final class DideHarness {
             "DIDE_TEST_PAYLOAD_FILE": payloadFile.path,
             "DIDE_TEST_CURL_ARGS_FILE": argsFile.path,
             "DIDE_TEST_BASE64_FAIL": failBase64 ? "1" : "0",
+            "DEVSPACE_POD_FORWARD_PORT": sessionPodForwardPort.map(String.init) ?? "",
         ]
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()

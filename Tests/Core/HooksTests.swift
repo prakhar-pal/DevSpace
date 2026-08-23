@@ -153,6 +153,11 @@ final class HooksTests: XCTestCase {
         XCTAssertFalse(cmd.contains("$DEVSPACE_NOTIFY_TOKEN"))
     }
 
+    func testHookCommandPrefersTheOwningSessionForwardPort() {
+        let command = Hooks.hookCommand("Stop", podID: "wc-1", token: "tok")
+        XCTAssertTrue(command.contains("${DEVSPACE_POD_FORWARD_PORT:-\(SSH.sharedPodForwardFallback)}"))
+    }
+
     func testToleratesMalformedSettings() {
         let m1 = Hooks.mergeSettings(["hooks": "garbage"], podID: "wc-1", token: "tok")
         XCTAssertNotNil(m1["hooks"] as? [String: Any])

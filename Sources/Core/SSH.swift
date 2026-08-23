@@ -4,10 +4,34 @@ import Foundation
 // notify port constants. We connect through the `<id>.devpod` host alias DevPod
 // writes into ~/.ssh/config and carry the reverse notification tunnel via -R.
 public enum SSH {
-    /// Desktop-side notify HTTP listener port (Stack 7).
-    public static let listenerPort: UInt16 = 17865
+    public struct Ports: Equatable {
+        public let listenerPort: UInt16
+        public let podForwardPort: UInt16
+
+        public init(listenerPort: UInt16, podForwardPort: UInt16) {
+            self.listenerPort = listenerPort
+            self.podForwardPort = podForwardPort
+        }
+    }
+
+    /// Resolve the listener/reverse-tunnel pair for an assembled app bundle.
+    /// DevSpaceDev must not bind the daily-driver app's listener: otherwise
+    /// reverse-tunnel traffic reaches whichever bundle won port 17865.
+    public static func ports(bundleIdentifier: String?) -> Ports {
+        bundleIdentifier == "com.prakharp.devspace.dev"
+            ? Ports(listenerPort: 17866, podForwardPort: 8766)
+            : Ports(listenerPort: 17865, podForwardPort: 8765)
+    }
+
+    private static let activePorts = ports(bundleIdentifier: Bundle.main.bundleIdentifier)
+    /// Desktop-side notify HTTP listener port.
+    public static let listenerPort = activePorts.listenerPort
     /// Pod-side reverse-tunnel port the in-pod hook POSTs to.
-    public static let podForwardPort: UInt16 = 8765
+    public static let podForwardPort = activePorts.podForwardPort
+    /// Fallback for pod-wide scripts written into shared home directories.
+    /// Existing production terminals may predate the session-scoped port
+    /// variable, so their safe fallback must remain the production tunnel.
+    public static let sharedPodForwardFallback: UInt16 = 8765
 
     /// TERM advertised to the remote container. Fixed to xterm-256color — a
     /// widely available terminfo so prompts/editors render correctly inside the
@@ -28,6 +52,9 @@ public enum SSH {
             "-o", "ServerAliveInterval=5",
             "-o", "ServerAliveCountMax=3",
             "-o", "SetEnv=TERM=\(remoteTerm)",
+            // The shared pod rc/hook files read this to route events through
+            // the tunnel owned by this particular app session.
+            "-o", "SetEnv=DEVSPACE_POD_FORWARD_PORT=\(podForwardPort)",
         ]
         if tunnel {
             args += ["-R", "\(podForwardPort):localhost:\(listenerPort)"]
