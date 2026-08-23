@@ -68,6 +68,11 @@ final class ShellIntegrationTests: XCTestCase {
             XCTAssertEqual(try defaultResult.payloadValue("token"), "sekret-token")
             XCTAssertTrue(defaultResult.curlArguments.contains("-d"), "\(shell.name) curl args: \(defaultResult.curlArguments)")
             XCTAssertTrue(
+                defaultResult.curlArguments.contains("--max-time"),
+                "\(shell.name) curl args: \(defaultResult.curlArguments)"
+            )
+            XCTAssertTrue(defaultResult.curlArguments.contains("2"), "\(shell.name) curl args: \(defaultResult.curlArguments)")
+            XCTAssertTrue(
                 defaultResult.curlArguments.contains("http://localhost:\(SSH.podForwardPort)/dide"),
                 "\(shell.name) curl args: \(defaultResult.curlArguments)"
             )
