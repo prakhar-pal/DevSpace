@@ -116,4 +116,19 @@ final class DevpodLifecycleTests: XCTestCase {
         XCTAssertFalse(model.recreateFailures.contains("wc-1"))
         XCTAssertEqual(model.byID["wc-1"]?.state, "Running")
     }
+
+    func testCreationFormEnablesSubmitOnlyForRepositoryAndIdleModel() {
+        XCTAssertTrue(NewWorkspaceSheet.canSubmit(
+            repositoryURL: " https://github.com/acme/app.git ",
+            isCreating: false
+        ))
+        XCTAssertFalse(NewWorkspaceSheet.canSubmit(
+            repositoryURL: "   ",
+            isCreating: false
+        ))
+        XCTAssertFalse(NewWorkspaceSheet.canSubmit(
+            repositoryURL: "https://github.com/acme/app.git",
+            isCreating: true
+        ))
+    }
 }

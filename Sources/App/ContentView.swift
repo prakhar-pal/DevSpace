@@ -38,6 +38,31 @@ struct ContentView: View {
         .sheet(isPresented: $model.guideOpen) {
             GuideSheet { model.guideOpen = false }
         }
+        .sheet(isPresented: Binding(
+            get: { model.creationSheetOpen },
+            set: { if !$0 { model.cancelCreation() } }
+        )) {
+            NewWorkspaceSheet(
+                error: model.creationError,
+                isCreating: model.creationPhase == .running,
+                onSubmit: { repositoryURL, devpodID in
+                    model.submitCreation(repositoryURL: repositoryURL, devpodID: devpodID)
+                },
+                onCancel: model.cancelCreation
+            )
+        }
+        .sheet(isPresented: Binding(
+            get: { model.recreateConfirmationID != nil },
+            set: { if !$0 { model.cancelRecreate() } }
+        )) {
+            if let id = model.recreateConfirmationID {
+                RecreateWorkspaceSheet(
+                    workspaceID: model.name(id),
+                    onConfirm: model.confirmRecreate,
+                    onCancel: model.cancelRecreate
+                )
+            }
+        }
     }
 }
 
@@ -61,6 +86,24 @@ private struct MainPane: View {
                         .opacity(model.isPaneDisplayVisible(pid) ? 1 : 0)
                         .allowsHitTesting(model.isPaneDisplayVisible(pid))
                 }
+            }
+
+            if let creationPane = model.creationPane {
+                VStack(spacing: 0) {
+                    if model.creationPhase == .failed {
+                        logHeader("Creation failed", onClose: model.dismissCreationFailure)
+                    } else {
+                        logHeader("Creating workspace…")
+                    }
+                    TerminalPaneView(
+                        model: creationPane,
+                        handleKeyEquivalent: { event in
+                            model.handleTerminalKeyEquivalent(event)
+                        }
+                    )
+                }
+                .background(Color(red: 0.067, green: 0.067, blue: 0.067))
+                .zIndex(2)
             }
 
             overlay
@@ -136,7 +179,11 @@ private struct MainPane: View {
             switch model.phase(of: pid) {
             case .starting: logHeader("Starting \(model.name(pid))…")
             case .recreating: logHeader("Recreating \(model.name(pid))…")
-            case .recreateFailed: logHeader("Recreate failed — \(model.name(pid))")
+            case .recreateFailed:
+                logHeader(
+                    "Recreate failed — \(model.name(pid))",
+                    onClose: { model.dismissRecreateFailure(pid) }
+                )
             case .shuttingDown: logHeader("\(model.name(pid)) — shutting down…")
             // The tab strip only appears once a second terminal exists — a
             // single tab needs no chrome (⌘T / right-click → New Terminal
@@ -216,10 +263,16 @@ private struct MainPane: View {
         }
     }
 
-    private func logHeader(_ text: String) -> some View {
+    private func logHeader(_ text: String, onClose: (() -> Void)? = nil) -> some View {
         HStack {
             Text(text).font(.system(size: 12))
             Spacer()
+            if let onClose {
+                Button("Close", action: onClose)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
