@@ -109,6 +109,33 @@ public struct DevpodCLI: CommandRunning {
 }
 
 public enum Devpod {
+    public struct CreateRequest: Equatable, Sendable {
+        public let repositoryURL: String
+        public let id: String?
+
+        public init(repositoryURL: String, id: String?) throws {
+            let repositoryURL = repositoryURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !repositoryURL.isEmpty else {
+                throw DevpodError("repository URL is required")
+            }
+            let normalizedID = id?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let normalizedID, !normalizedID.isEmpty {
+                try Devpod.validateId(normalizedID)
+                self.id = normalizedID
+            } else {
+                self.id = nil
+            }
+            self.repositoryURL = repositoryURL
+        }
+
+        public var args: [String] {
+            var result = ["up", "--ide", "none"]
+            if let id { result += ["--id", id] }
+            result += ["--", repositoryURL]
+            return result
+        }
+    }
+
     public static func parseList(_ json: String) throws -> [Workspace] {
         do {
             return try JSONDecoder().decode([Workspace].self, from: Data(json.utf8))
@@ -159,6 +186,13 @@ public enum Devpod {
     /// `devpod up --ide none -- <id>` — start a workspace, streaming its log.
     public static func upArgs(_ id: String) -> [String] {
         ["up", "--ide", "none", "--", id]
+    }
+
+    /// `devpod up --recreate --ide none -- <id>` — replace a workspace's
+    /// container and stream the provisioning log without opening another IDE.
+    public static func recreateArgs(_ id: String) throws -> [String] {
+        try validateId(id)
+        return ["up", "--recreate", "--ide", "none", "--", id]
     }
 
     /// `devpod stop -- <id>` — stop a workspace, streaming its shutdown log.
