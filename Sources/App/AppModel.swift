@@ -76,6 +76,11 @@ private func resolveNoSSHProxyCommand(
 /// workspace session lifecycle (starting / running terminal / shutting down).
 @MainActor
 final class AppModel: ObservableObject {
+    enum CreationPhase: Equatable {
+        case running
+        case failed
+    }
+
     private final class DefaultShortcutActionExecutor: AppShortcutActionExecuting {
         weak var model: AppModel?
 
@@ -104,6 +109,11 @@ final class AppModel: ObservableObject {
     @Published var sidebarOpen = true
     @Published var renaming: String?
     @Published var guideOpen = false
+    @Published var creationSheetOpen = false
+    @Published private(set) var creationError: String?
+    @Published private(set) var creationPane: TerminalPaneModel?
+    @Published private(set) var creationPhase: CreationPhase?
+    @Published var recreateConfirmationID: String?
 
     // Persisted sidebar layout.
     @Published private(set) var order: [String] = []
@@ -115,6 +125,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var opened: Set<String> = []       // pods with an SSH terminal
     @Published private(set) var starting: Set<String> = []     // pods running `devpod up`
     @Published private(set) var shuttingDown: Set<String> = [] // pods running `devpod stop`
+    @Published private(set) var recreating: Set<String> = []
+    @Published private(set) var recreateFailures: Set<String> = []
     @Published private var terminalHandoffs: [String: TerminalHandoffState] = [:]
     /// PTY-backed panes per pod (a devpod up/stop log, or one or more SSH
     /// terminals). Terminals are tabs: index 0 is the primary session (it
@@ -158,6 +170,9 @@ final class AppModel: ObservableObject {
     /// The active primary SSH resolution attempt for each pod. A completion
     /// may mount only if it still owns this generation.
     private var sshConnectionGenerations: [String: UUID] = [:]
+    private var creationBeforeIDs: Set<String> = []
+    private var creationExplicitID: String?
+    private var creationPreviousSelection: String?
 
     enum TerminalHandoffAction: Equatable {
         case revealOriginal
@@ -617,6 +632,154 @@ final class AppModel: ObservableObject {
 
     // MARK: - Session lifecycle actions
 
+    func beginCreation() {
+        guard creationPhase == nil else { return }
+        creationError = nil
+        creationSheetOpen = true
+    }
+
+    func cancelCreation() {
+        creationError = nil
+        creationSheetOpen = false
+    }
+
+    func submitCreation(repositoryURL: String, devpodID: String) {
+        guard creationPhase == nil else { return }
+        do {
+            let request = try Devpod.CreateRequest(repositoryURL: repositoryURL, id: devpodID)
+            if let id = request.id, byID[id] != nil {
+                creationError = "A workspace named \(id) already exists."
+                return
+            }
+            creationBeforeIDs = Set(workspaces.map(\.id))
+            creationExplicitID = request.id
+            creationPreviousSelection = selectedID
+            creationError = nil
+            creationPhase = .running
+            let pane = TerminalPaneModel(command: "devpod", args: request.args)
+            pane.onExit = { [weak self] code in self?.creationProcessExited(code) }
+            creationPane = pane
+            creationSheetOpen = false
+        } catch let error as DevpodError {
+            creationError = error.message
+        } catch {
+            creationError = error.localizedDescription
+        }
+    }
+
+    nonisolated static func createdWorkspaceID(
+        explicitID: String?,
+        before: Set<String>,
+        after: Set<String>
+    ) -> String? {
+        if let explicitID {
+            return after.contains(explicitID) ? explicitID : nil
+        }
+        let created = after.subtracting(before)
+        return created.count == 1 ? created.first : nil
+    }
+
+    private func creationProcessExited(_ exitCode: Int32) {
+        guard exitCode == 0 else {
+            completeCreation(exitCode: exitCode, refreshedViews: nil)
+            return
+        }
+        let runner = runner
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let views = try? Poller.pollOnce(runner)
+            DispatchQueue.main.async {
+                self?.completeCreation(exitCode: exitCode, refreshedViews: views)
+            }
+        }
+    }
+
+    func completeCreation(exitCode: Int32, refreshedViews: [WorkspaceView]?) {
+        guard creationPhase != nil else { return }
+        guard exitCode == 0 else {
+            creationPhase = .failed
+            return
+        }
+
+        let targetID = refreshedViews.flatMap { views in
+            Self.createdWorkspaceID(
+                explicitID: creationExplicitID,
+                before: creationBeforeIDs,
+                after: Set(views.map(\.id))
+            )
+        }
+        if let refreshedViews { apply(refreshedViews) }
+        if let targetID {
+            select(targetID)
+        } else {
+            selectedID = creationPreviousSelection
+        }
+        clearCreationSession()
+    }
+
+    func dismissCreationFailure() {
+        guard creationPhase == .failed else { return }
+        clearCreationSession()
+    }
+
+    private func clearCreationSession() {
+        creationPane?.onExit = nil
+        creationPane?.terminate()
+        creationPane = nil
+        creationPhase = nil
+        creationBeforeIDs = []
+        creationExplicitID = nil
+        creationPreviousSelection = nil
+    }
+
+    func beginRecreate(_ id: String) {
+        guard validID(id), byID[id] != nil,
+              !starting.contains(id), !shuttingDown.contains(id), !recreating.contains(id)
+        else { return }
+        recreateConfirmationID = id
+    }
+
+    func cancelRecreate() {
+        recreateConfirmationID = nil
+    }
+
+    func confirmRecreate() {
+        guard let id = recreateConfirmationID else { return }
+        recreateConfirmationID = nil
+        guard validID(id), byID[id] != nil,
+              !starting.contains(id), !shuttingDown.contains(id), !recreating.contains(id),
+              let args = try? Devpod.recreateArgs(id)
+        else { return }
+
+        invalidateSSHConnection(id)
+        cancelShellIntegrationHandoff(id)
+        opened.remove(id)
+        autoConnect.remove(id)
+        closePane(id)
+        recreateFailures.remove(id)
+        recreating.insert(id)
+        select(id)
+
+        let pane = TerminalPaneModel(command: "devpod", args: args)
+        pane.onExit = { [weak self] code in self?.completeRecreate(id, exitCode: code) }
+        setPanes(id, [pane])
+    }
+
+    func completeRecreate(_ id: String, exitCode: Int32) {
+        guard recreating.remove(id) != nil else { return }
+        if exitCode == 0 {
+            recreateFailures.remove(id)
+            completeSuccessfulUp(id)
+        } else {
+            autoConnect.remove(id)
+            recreateFailures.insert(id)
+        }
+    }
+
+    func dismissRecreateFailure(_ id: String) {
+        guard recreateFailures.remove(id) != nil else { return }
+        closePane(id)
+    }
+
     /// Defense-in-depth: reject ids that could smuggle CLI flags into an exec
     /// before they reach argv (ids originate from `devpod list`). Mirrors the
     /// validate_id guard the Rust command handlers apply.
@@ -640,6 +803,10 @@ final class AppModel: ObservableObject {
     /// pod Running so the SSH terminal mounts; the next poll confirms.
     private func onUpFinished(_ id: String) {
         starting.remove(id)
+        completeSuccessfulUp(id)
+    }
+
+    private func completeSuccessfulUp(_ id: String) {
         autoConnect.insert(id) // user-initiated start: a session is wanted
         closePane(id)
         if let i = workspaces.firstIndex(where: { $0.id == id }) {
@@ -985,7 +1152,9 @@ final class AppModel: ObservableObject {
 
     private func openSSHIfNeeded(_ id: String, startedAt: UInt64? = nil) {
         guard validID(id) else { return }
-        guard !opened.contains(id), !starting.contains(id), !shuttingDown.contains(id) else { return }
+        guard !opened.contains(id), !starting.contains(id), !shuttingDown.contains(id),
+              !recreating.contains(id)
+        else { return }
         let attemptStartedAt = startedAt ?? DispatchTime.now().uptimeNanoseconds
         let generation = UUID()
         sshConnectionGenerations[id] = generation
@@ -1240,10 +1409,12 @@ final class AppModel: ObservableObject {
 
     // MARK: - Phase (drives the main pane)
 
-    enum Phase { case starting, shuttingDown, terminal, none }
+    enum Phase { case starting, recreating, recreateFailed, shuttingDown, terminal, none }
 
     func phase(of id: String) -> Phase {
         if starting.contains(id) { return .starting }
+        if recreating.contains(id) { return .recreating }
+        if recreateFailures.contains(id) { return .recreateFailed }
         if shuttingDown.contains(id) { return .shuttingDown }
         if opened.contains(id), !(panes[id] ?? []).isEmpty { return .terminal }
         return .none
@@ -1290,7 +1461,7 @@ final class AppModel: ObservableObject {
     ) -> Bool {
         guard isSelected else { return false }
         switch phase {
-        case .starting, .shuttingDown: return true
+        case .starting, .recreating, .recreateFailed, .shuttingDown: return true
         case .terminal: return isTerminalVisible
         case .none: return false
         }

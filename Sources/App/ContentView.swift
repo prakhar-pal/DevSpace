@@ -135,6 +135,8 @@ private struct MainPane: View {
         VStack(spacing: 0) {
             switch model.phase(of: pid) {
             case .starting: logHeader("Starting \(model.name(pid))…")
+            case .recreating: logHeader("Recreating \(model.name(pid))…")
+            case .recreateFailed: logHeader("Recreate failed — \(model.name(pid))")
             case .shuttingDown: logHeader("\(model.name(pid)) — shutting down…")
             // The tab strip only appears once a second terminal exists — a
             // single tab needs no chrome (⌘T / right-click → New Terminal
