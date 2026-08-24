@@ -21,6 +21,14 @@ enum SidebarSessionActions {
             isTerminalVisible: isTerminalVisible
         )
     }
+
+    static func canRecreate(
+        isStarting: Bool,
+        isStopping: Bool,
+        isRecreating: Bool
+    ) -> Bool {
+        !isStarting && !isStopping && !isRecreating
+    }
 }
 
 /// The workspace sidebar — port of src/components/Sidebar.tsx.
@@ -86,18 +94,34 @@ struct SidebarView: View {
             }
 
             Divider()
-            Button {
-                model.guideOpen = true
-            } label: {
-                Label("Guide", systemImage: "questionmark.circle")
-                    .font(.system(size: 12))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
+            HStack(spacing: 4) {
+                Button {
+                    model.beginCreation()
+                } label: {
+                    Label("New", systemImage: "plus.circle")
+                        .font(.system(size: 12))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .hoverTintFill(idle: .secondary, hover: .primary, fill: .white.opacity(0.08))
+                .disabled(model.creationPhase != nil)
+
+                Button {
+                    model.guideOpen = true
+                } label: {
+                    Label("Guide", systemImage: "questionmark.circle")
+                        .font(.system(size: 12))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .hoverTintFill(idle: .secondary, hover: .primary, fill: .white.opacity(0.08))
             }
-            .buttonStyle(.plain)
-            .hoverTintFill(idle: .secondary, hover: .primary, fill: .white.opacity(0.08))
             .padding(.horizontal, 6)
             .padding(.vertical, 6)
         }
@@ -217,6 +241,13 @@ private struct WorkspaceRow: View {
             Divider()
             Button("Open in Zed") { model.openInZed(workspace.id) }
         }
+        Divider()
+        Button("Recreate…") { model.beginRecreate(workspace.id) }
+            .disabled(!SidebarSessionActions.canRecreate(
+                isStarting: model.starting.contains(workspace.id),
+                isStopping: model.shuttingDown.contains(workspace.id),
+                isRecreating: model.recreating.contains(workspace.id)
+            ))
         Divider()
         if isHidden {
             Button("Show") { model.unhide(workspace.id) }

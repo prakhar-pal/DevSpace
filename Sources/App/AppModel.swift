@@ -1581,7 +1581,10 @@ final class AppModel: ObservableObject {
 
     func dispatchAppShortcut(_ event: NSEvent) -> Bool {
         let id = selectedID
-        let isModalOpen = renaming != nil || guideOpen
+        let isModalOpen = renaming != nil
+            || guideOpen
+            || creationSheetOpen
+            || recreateConfirmationID != nil
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
         let pastedImage = !isModalOpen && flags == [.command] && event.charactersIgnoringModifiers == "v"
             ? pastedImageResolver()

@@ -150,8 +150,10 @@ struct GuideSheet: View {
                         row("Blue dot", "Claude Code in that pod posted a notification. Selecting the workspace clears it.")
                     }
                     section("Start & stop") {
+                        row("New workspace", "Click New, enter a repository URL, and optionally choose a DevPod ID. The provisioning log streams in the main pane.")
                         row("Start", "Select a stopped workspace and press Start. The live devpod up log streams until it's ready, then the terminal opens.")
                         row("Stop", "Hover a running workspace and click the ⬛ stop button, or use Stop on its status card. Exiting a shell only disconnects — the workspace keeps running.")
+                        row("Recreate", "Open a workspace's … menu → Recreate…, confirm, and watch DevPod replace the container before reconnecting.")
                     }
                     section("The terminal") {
                         row("Auto-connect", "Workspaces that are running when DevSpace launches (or that you start) SSH in automatically. After you disconnect, the status card's Connect reopens the session — DevSpace never wakes a stopped workspace on its own.")

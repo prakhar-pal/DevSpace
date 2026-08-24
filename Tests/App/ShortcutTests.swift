@@ -108,6 +108,20 @@ final class ShortcutTests: XCTestCase {
         XCTAssertEqual(recorder.actions, [])
     }
 
+    func testA065SheetsOwnAppShortcuts() {
+        let recorder = RecordingShortcutExecutor()
+        let model = fixtureModel(executor: recorder, selectedVisibleTerminal: "wc-1")
+        let event = keyEvent(characters: "r")
+
+        model.beginCreation()
+        XCTAssertFalse(model.dispatchAppShortcut(event))
+        model.cancelCreation()
+
+        model.beginRecreate("wc-1")
+        XCTAssertFalse(model.dispatchAppShortcut(event))
+        XCTAssertEqual(recorder.actions, [])
+    }
+
     func testCommandORoutesToOpenInZedForARunningSelectedWorkspace() {
         XCTAssertEqual(AppModel.shortcutRoute(
             event: keyEvent(characters: "o"),

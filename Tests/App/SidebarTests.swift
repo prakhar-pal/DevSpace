@@ -85,6 +85,29 @@ final class SidebarTests: XCTestCase {
         ))
     }
 
+    func testRecreateMenuAvailabilityTracksWorkspaceLifecycle() {
+        XCTAssertTrue(SidebarSessionActions.canRecreate(
+            isStarting: false,
+            isStopping: false,
+            isRecreating: false
+        ))
+        XCTAssertFalse(SidebarSessionActions.canRecreate(
+            isStarting: true,
+            isStopping: false,
+            isRecreating: false
+        ))
+        XCTAssertFalse(SidebarSessionActions.canRecreate(
+            isStarting: false,
+            isStopping: true,
+            isRecreating: false
+        ))
+        XCTAssertFalse(SidebarSessionActions.canRecreate(
+            isStarting: false,
+            isStopping: false,
+            isRecreating: true
+        ))
+    }
+
     func testPendingHandoffBlocksReloadAndNewTerminalUntilVisible() async {
         let id = "pending-pod"
         let runner = BlockingShellIntegrationRunner()
