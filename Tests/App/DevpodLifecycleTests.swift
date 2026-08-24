@@ -91,6 +91,148 @@ final class DevpodLifecycleTests: XCTestCase {
         XCTAssertNil(model.creationPhase)
     }
 
+    func testSuccessfulCreationSelectsExplicitWorkspaceID() {
+        let model = makeModel(ids: ["wc-1"])
+        model.selectedID = "wc-1"
+        model.beginCreation()
+        model.submitCreation(
+            repositoryURL: "https://github.com/acme/new.git",
+            devpodID: "chosen"
+        )
+
+        model.completeCreation(exitCode: 0, refreshedViews: [
+            workspace("wc-1"),
+            workspace("chosen", state: "Running"),
+            workspace("unrelated"),
+        ])
+
+        XCTAssertEqual(model.selectedID, "chosen")
+        XCTAssertNil(model.creationPhase)
+    }
+
+    func testSuccessfulCreationPreservesSelectionWhenDiscoveryIsAmbiguous() {
+        let model = makeModel(ids: ["wc-1"])
+        model.selectedID = "wc-1"
+        model.beginCreation()
+        model.submitCreation(
+            repositoryURL: "https://github.com/acme/new.git",
+            devpodID: ""
+        )
+
+        model.completeCreation(exitCode: 0, refreshedViews: [
+            workspace("wc-1"),
+            workspace("new-a"),
+            workspace("new-b"),
+        ])
+
+        XCTAssertEqual(model.selectedID, "wc-1")
+        XCTAssertNil(model.creationPhase)
+    }
+
+    func testSuccessfulCreationWaitsForLaterPollWhenImmediateRefreshFails() {
+        let revisions = PollRevisionSource()
+        let model = AppModel(
+            interval: 3_600,
+            initialWorkspaces: [workspace("wc-1")],
+            startsRuntimeServices: false,
+            pollRevisionSource: revisions
+        )
+        model.selectedID = "wc-1"
+        model.beginCreation()
+        model.submitCreation(
+            repositoryURL: "https://github.com/acme/new.git",
+            devpodID: ""
+        )
+        let paneID = model.creationPane?.id
+
+        model.completeCreation(
+            exitCode: 0,
+            refreshedViews: nil,
+            refreshRevision: revisions.next()
+        )
+
+        XCTAssertEqual(model.creationPhase, .running)
+        XCTAssertEqual(model.creationPane?.id, paneID)
+
+        model.receivePollUpdate(PollUpdate(
+            revision: revisions.next(),
+            views: [workspace("wc-1"), workspace("new", state: "Running")]
+        ))
+
+        XCTAssertEqual(model.selectedID, "new")
+        XCTAssertNil(model.creationPhase)
+        XCTAssertNil(model.creationPane)
+    }
+
+    func testCreationDiscoveryWaitsThroughAStalePollWithNoNewWorkspace() {
+        let revisions = PollRevisionSource()
+        let model = AppModel(
+            interval: 3_600,
+            initialWorkspaces: [workspace("wc-1")],
+            startsRuntimeServices: false,
+            pollRevisionSource: revisions
+        )
+        model.selectedID = "wc-1"
+        model.beginCreation()
+        model.submitCreation(
+            repositoryURL: "https://github.com/acme/new.git",
+            devpodID: ""
+        )
+
+        model.completeCreation(
+            exitCode: 0,
+            refreshedViews: nil,
+            refreshRevision: revisions.next()
+        )
+        model.receivePollUpdate(PollUpdate(
+            revision: revisions.next(),
+            views: [workspace("wc-1")]
+        ))
+
+        XCTAssertEqual(model.creationPhase, .running)
+        XCTAssertNotNil(model.creationPane)
+
+        model.receivePollUpdate(PollUpdate(
+            revision: revisions.next(),
+            views: [workspace("wc-1"), workspace("new", state: "Running")]
+        ))
+
+        XCTAssertEqual(model.selectedID, "new")
+        XCTAssertNil(model.creationPhase)
+    }
+
+    func testCreationDiscoveryEventuallyPreservesSelectionWhenNoWorkspaceAppears() {
+        let revisions = PollRevisionSource()
+        let model = AppModel(
+            interval: 3_600,
+            initialWorkspaces: [workspace("wc-1")],
+            startsRuntimeServices: false,
+            pollRevisionSource: revisions
+        )
+        model.selectedID = "wc-1"
+        model.beginCreation()
+        model.submitCreation(
+            repositoryURL: "https://github.com/acme/new.git",
+            devpodID: "expected"
+        )
+        model.completeCreation(
+            exitCode: 0,
+            refreshedViews: nil,
+            refreshRevision: revisions.next()
+        )
+
+        for _ in 0..<3 {
+            model.receivePollUpdate(PollUpdate(
+                revision: revisions.next(),
+                views: [workspace("wc-1")]
+            ))
+        }
+
+        XCTAssertEqual(model.selectedID, "wc-1")
+        XCTAssertNil(model.creationPhase)
+        XCTAssertNil(model.creationPane)
+    }
+
     func testFailedRecreateKeepsWorkspaceLogAndNeverMarksRunning() {
         let model = makeModel(ids: ["wc-1"])
         model.beginRecreate("wc-1")
@@ -106,15 +248,59 @@ final class DevpodLifecycleTests: XCTestCase {
     }
 
     func testSuccessfulRecreateMarksRunningAndClearsLifecycleLog() {
-        let model = makeModel(ids: ["wc-1"])
+        let revisions = PollRevisionSource()
+        let model = AppModel(
+            interval: 3_600,
+            initialWorkspaces: [workspace("wc-1")],
+            startsRuntimeServices: false,
+            pollRevisionSource: revisions
+        )
         model.beginRecreate("wc-1")
         model.confirmRecreate()
 
+        let staleRevision = revisions.next()
+
         model.completeRecreate("wc-1", exitCode: 0)
+
+        model.receivePollUpdate(PollUpdate(
+            revision: staleRevision,
+            views: [workspace("wc-1", state: "Stopped")]
+        ))
 
         XCTAssertFalse(model.recreating.contains("wc-1"))
         XCTAssertFalse(model.recreateFailures.contains("wc-1"))
         XCTAssertEqual(model.byID["wc-1"]?.state, "Running")
+    }
+
+    func testCachedStoppedEmissionCannotUndoSuccessfulRecreate() {
+        let revisions = PollRevisionSource()
+        let model = AppModel(
+            interval: 3_600,
+            initialWorkspaces: [workspace("wc-1")],
+            startsRuntimeServices: false,
+            pollRevisionSource: revisions
+        )
+        model.beginRecreate("wc-1")
+        model.confirmRecreate()
+        model.completeRecreate("wc-1", exitCode: 0)
+
+        model.receivePollUpdate(PollUpdate(
+            revision: revisions.next(),
+            views: [workspace("wc-1", state: "Stopped")],
+            hasFreshStatuses: false
+        ))
+
+        XCTAssertEqual(model.byID["wc-1"]?.state, "Stopped")
+        XCTAssertEqual(model.phase(of: "wc-1"), .terminal)
+
+        model.receivePollUpdate(PollUpdate(
+            revision: revisions.next(),
+            views: [workspace("wc-1", state: "Running")],
+            hasFreshStatuses: true
+        ))
+
+        XCTAssertEqual(model.byID["wc-1"]?.state, "Running")
+        XCTAssertEqual(model.phase(of: "wc-1"), .terminal)
     }
 
     func testStopCannotReplaceAnActiveRecreatePane() {

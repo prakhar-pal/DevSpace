@@ -137,6 +137,7 @@ final class AppModel: ObservableObject {
 
     private let runner: CommandRunning
     private let loop: PollLoop
+    private let pollRevisionSource: PollRevisionSource
     private let excluded = ExcludedIDs()
     private let notifyToken: String
     private let handoffTimeout: TimeInterval
@@ -173,6 +174,11 @@ final class AppModel: ObservableObject {
     private var creationBeforeIDs: Set<String> = []
     private var creationExplicitID: String?
     private var creationPreviousSelection: String?
+    private var creationAwaitingRefresh = false
+    private var creationDiscoveryMissCount = 0
+    private var creationLastMissRevision: UInt64?
+    private var lastAppliedPollRevision: UInt64 = 0
+    private static let maxCreationDiscoveryMisses = 3
 
     enum TerminalHandoffAction: Equatable {
         case revealOriginal
@@ -274,9 +280,12 @@ final class AppModel: ObservableObject {
         shortcutActionExecutor: AppShortcutActionExecuting? = nil,
         pastedImageResolver: PastedImageResolving? = nil,
         shortcutMonitorObserver: ShortcutMonitorObserving? = nil,
-        zedLaunchURL: ((String) -> Void)? = nil
+        zedLaunchURL: ((String) -> Void)? = nil,
+        pollRevisionSource: PollRevisionSource? = nil
     ) {
+        let revisions = pollRevisionSource ?? PollRevisionSource()
         self.runner = runner
+        self.pollRevisionSource = revisions
         self.handoffTimeout = max(0, handoffTimeout)
         self.handoffTimeoutScheduler = handoffTimeoutScheduler
         self.sshProxyResolver = sshProxyResolver
@@ -286,7 +295,12 @@ final class AppModel: ObservableObject {
         self.shortcutMonitorObserver = shortcutMonitorObserver
         injectedZedURLLauncher = zedLaunchURL
         notifyToken = startsRuntimeServices ? (try? Notify.loadOrCreateToken()) ?? "" : ""
-        loop = PollLoop(runner: runner, interval: interval, excluded: excluded)
+        loop = PollLoop(
+            runner: runner,
+            interval: interval,
+            excluded: excluded,
+            revisions: revisions
+        )
         let l = LayoutStore.load()
         order = l.order
         hidden = l.hidden
@@ -297,8 +311,8 @@ final class AppModel: ObservableObject {
         workspaces = initialWorkspaces
         updateExcluded() // didSet doesn't fire for init assignments
         guard startsRuntimeServices else { return }
-        loop.start { [weak self] views in
-            DispatchQueue.main.async { self?.apply(views) }
+        loop.start { [weak self] update in
+            DispatchQueue.main.async { self?.receivePollUpdate(update) }
         }
         startNotifyListener()
         Notifier.requestPermission()
@@ -470,8 +484,17 @@ final class AppModel: ObservableObject {
 
     // MARK: - Poll updates
 
-    private func apply(_ views: [WorkspaceView]) {
-        notifyStateTransitions(views)
+    func receivePollUpdate(_ update: PollUpdate) {
+        guard update.revision >= lastAppliedPollRevision else { return }
+        lastAppliedPollRevision = update.revision
+        apply(update.views, reconcilesLifecycle: update.hasFreshStatuses)
+        if creationAwaitingRefresh {
+            resolveCreation(after: update.views, revision: update.revision)
+        }
+    }
+
+    private func apply(_ views: [WorkspaceView], reconcilesLifecycle: Bool = true) {
+        if reconcilesLifecycle { notifyStateTransitions(views) }
         workspaces = views
         let ids = views.map(\.id)
         let newOrder = SidebarLayout.normalizeOrder(order, ids: ids)
@@ -480,7 +503,7 @@ final class AppModel: ObservableObject {
         if newOrder != order { order = newOrder; changed = true }
         if newHidden != hidden { hidden = newHidden; changed = true }
         if changed { persist() }
-        reconcileLifecycle()
+        if reconcilesLifecycle { reconcileLifecycle() }
     }
 
     /// Notify on definitive devpod state transitions (Stopped→Running and
@@ -684,35 +707,80 @@ final class AppModel: ObservableObject {
             completeCreation(exitCode: exitCode, refreshedViews: nil)
             return
         }
+        let revision = pollRevisionSource.next()
+        creationAwaitingRefresh = true
+        lastAppliedPollRevision = max(lastAppliedPollRevision, revision)
         let runner = runner
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let views = try? Poller.pollOnce(runner)
             DispatchQueue.main.async {
-                self?.completeCreation(exitCode: exitCode, refreshedViews: views)
+                self?.completeCreation(
+                    exitCode: exitCode,
+                    refreshedViews: views,
+                    refreshRevision: revision
+                )
             }
         }
     }
 
-    func completeCreation(exitCode: Int32, refreshedViews: [WorkspaceView]?) {
+    func completeCreation(
+        exitCode: Int32,
+        refreshedViews: [WorkspaceView]?,
+        refreshRevision: UInt64? = nil
+    ) {
         guard creationPhase != nil else { return }
         guard exitCode == 0 else {
             creationPhase = .failed
             return
         }
 
-        let targetID = refreshedViews.flatMap { views in
-            Self.createdWorkspaceID(
-                explicitID: creationExplicitID,
-                before: creationBeforeIDs,
-                after: Set(views.map(\.id))
-            )
+        creationAwaitingRefresh = true
+        if let refreshRevision {
+            lastAppliedPollRevision = max(lastAppliedPollRevision, refreshRevision)
         }
-        if let refreshedViews { apply(refreshedViews) }
-        if let targetID {
-            select(targetID)
+        if let refreshedViews {
+            if let refreshRevision {
+                receivePollUpdate(PollUpdate(revision: refreshRevision, views: refreshedViews))
+            } else {
+                apply(refreshedViews)
+                resolveCreation(after: refreshedViews, revision: nil)
+            }
+        }
+    }
+
+    private func resolveCreation(after refreshedViews: [WorkspaceView], revision: UInt64?) {
+        guard creationAwaitingRefresh else { return }
+        let afterIDs = Set(refreshedViews.map(\.id))
+        if let explicitID = creationExplicitID {
+            // A successful list can still lag behind the completed `up`.
+            guard afterIDs.contains(explicitID) else {
+                finishCreationIfDiscoveryExhausted(revision: revision)
+                return
+            }
+            select(explicitID)
         } else {
-            selectedID = creationPreviousSelection
+            let createdIDs = afterIDs.subtracting(creationBeforeIDs)
+            guard !createdIDs.isEmpty else {
+                finishCreationIfDiscoveryExhausted(revision: revision)
+                return
+            }
+            if createdIDs.count == 1, let createdID = createdIDs.first {
+                select(createdID)
+            } else {
+                selectedID = creationPreviousSelection
+            }
         }
+        clearCreationSession()
+    }
+
+    private func finishCreationIfDiscoveryExhausted(revision: UInt64?) {
+        if let revision {
+            guard creationLastMissRevision != revision else { return }
+            creationLastMissRevision = revision
+        }
+        creationDiscoveryMissCount += 1
+        guard creationDiscoveryMissCount >= Self.maxCreationDiscoveryMisses else { return }
+        selectedID = creationPreviousSelection
         clearCreationSession()
     }
 
@@ -729,6 +797,9 @@ final class AppModel: ObservableObject {
         creationBeforeIDs = []
         creationExplicitID = nil
         creationPreviousSelection = nil
+        creationAwaitingRefresh = false
+        creationDiscoveryMissCount = 0
+        creationLastMissRevision = nil
     }
 
     func beginRecreate(_ id: String) {
@@ -766,6 +837,8 @@ final class AppModel: ObservableObject {
 
     func completeRecreate(_ id: String, exitCode: Int32) {
         guard recreating.remove(id) != nil else { return }
+        // Reject any poll that began before this lifecycle command completed.
+        lastAppliedPollRevision = max(lastAppliedPollRevision, pollRevisionSource.next())
         if exitCode == 0 {
             recreateFailures.remove(id)
             completeSuccessfulUp(id)
