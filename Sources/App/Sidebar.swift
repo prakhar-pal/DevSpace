@@ -153,7 +153,10 @@ private struct WorkspaceRow: View {
             }
             // Stop (running only) + the ⋯ menu. Kept in the layout and faded so
             // the row width is stable and the menu doesn't close on hover loss.
-            if !isHidden, workspace.state != "Stopped" {
+            if !isHidden,
+               workspace.state != "Stopped",
+               !model.recreating.contains(workspace.id)
+            {
                 Button {
                     model.stop(workspace.id)
                 } label: {

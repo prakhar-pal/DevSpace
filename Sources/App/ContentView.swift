@@ -113,6 +113,7 @@ private struct MainPane: View {
         // whenever the selection, tab set, or active tab changes.
         .onChange(of: model.selectedID) { focusSelectedTerminal() }
         .onChange(of: model.panes.mapValues { $0.map(\.id) }) { focusSelectedTerminal() }
+        .onChange(of: model.creationPane?.id) { focusSelectedTerminal() }
         .onChange(of: model.activePane) { focusSelectedTerminal() }
         .onChange(of: model.selectedID.map { model.isTerminalVisible($0) } ?? false) {
             focusSelectedTerminal()
@@ -129,13 +130,11 @@ private struct MainPane: View {
     /// pane by its `TerminalController` identity, and retry briefly because the
     /// surface NSView may not be in the window yet right after a pane is created.
     private func focusSelectedTerminal(attempt: Int = 0) {
-        guard let sel = model.selectedID,
-              model.isTerminalVisible(sel),
-              let pane = model.activeModel(sel)
-        else {
+        guard let pane = model.focusTargetModel() else {
             clearTerminalFocus()
             return
         }
+        let paneID = pane.id
         let controller = pane.state.controller
         if let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }),
            let view = Self.terminalView(in: window.contentView, controller: controller)
@@ -146,8 +145,8 @@ private struct MainPane: View {
         // View not mounted yet — retry for up to ~1s.
         guard attempt < 20 else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            // Bail if the selection moved on while we were waiting.
-            guard model.selectedID == sel else { return }
+            // Bail if another pane became the focus target while waiting.
+            guard model.focusTargetModel()?.id == paneID else { return }
             focusSelectedTerminal(attempt: attempt + 1)
         }
     }

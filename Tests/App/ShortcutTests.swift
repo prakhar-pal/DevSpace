@@ -119,6 +119,14 @@ final class ShortcutTests: XCTestCase {
 
         model.beginRecreate("wc-1")
         XCTAssertFalse(model.dispatchAppShortcut(event))
+
+        model.cancelRecreate()
+        model.beginCreation()
+        model.submitCreation(
+            repositoryURL: "https://github.com/acme/new.git",
+            devpodID: ""
+        )
+        XCTAssertFalse(model.dispatchAppShortcut(event))
         XCTAssertEqual(recorder.actions, [])
     }
 

@@ -117,6 +117,43 @@ final class DevpodLifecycleTests: XCTestCase {
         XCTAssertEqual(model.byID["wc-1"]?.state, "Running")
     }
 
+    func testStopCannotReplaceAnActiveRecreatePane() {
+        let model = makeModel(ids: ["wc-1"], state: "Running")
+        model.beginRecreate("wc-1")
+        model.confirmRecreate()
+        let recreatePaneID = model.panes["wc-1"]?.first?.id
+
+        model.stop("wc-1")
+
+        XCTAssertTrue(model.recreating.contains("wc-1"))
+        XCTAssertFalse(model.shuttingDown.contains("wc-1"))
+        XCTAssertEqual(model.panes["wc-1"]?.first?.id, recreatePaneID)
+    }
+
+    func testStopClearsACompletedRecreateFailureBeforeShutdown() {
+        let model = makeModel(ids: ["wc-1"], state: "Running")
+        model.beginRecreate("wc-1")
+        model.confirmRecreate()
+        model.completeRecreate("wc-1", exitCode: 1)
+
+        model.stop("wc-1")
+
+        XCTAssertFalse(model.recreateFailures.contains("wc-1"))
+        XCTAssertTrue(model.shuttingDown.contains("wc-1"))
+        XCTAssertEqual(model.phase(of: "wc-1"), .shuttingDown)
+    }
+
+    func testCreationPaneBecomesTheKeyboardFocusTarget() {
+        let model = makeModel(ids: ["wc-1"], state: "Running")
+        model.beginCreation()
+        model.submitCreation(
+            repositoryURL: "https://github.com/acme/new.git",
+            devpodID: ""
+        )
+
+        XCTAssertEqual(model.focusTargetModel()?.id, model.creationPane?.id)
+    }
+
     func testCreationFormEnablesSubmitOnlyForRepositoryAndIdleModel() {
         XCTAssertTrue(NewWorkspaceSheet.canSubmit(
             repositoryURL: " https://github.com/acme/app.git ",

@@ -820,11 +820,12 @@ final class AppModel: ObservableObject {
     }
 
     func stop(_ id: String) {
-        guard validID(id) else { return }
+        guard validID(id), !recreating.contains(id) else { return }
         invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
         opened.remove(id)
         autoConnect.remove(id)
+        recreateFailures.remove(id)
         closePane(id)
         shuttingDown.insert(id)
         let pane = TerminalPaneModel(command: "devpod", args: Devpod.stopArgs(id))
@@ -1328,6 +1329,15 @@ final class AppModel: ObservableObject {
         return list.first { $0.id == activePane[id] } ?? list[0]
     }
 
+    /// The terminal surface that should own keyboard focus. An app-wide
+    /// creation log visually covers the selected workspace, so its PTY must
+    /// take precedence over the otherwise-active workspace terminal.
+    func focusTargetModel() -> TerminalPaneModel? {
+        if let creationPane { return creationPane }
+        guard let selectedID, isTerminalVisible(selectedID) else { return nil }
+        return activeModel(selectedID)
+    }
+
     private func makeTerminal(
         _ id: String,
         tunnel: Bool,
@@ -1585,6 +1595,7 @@ final class AppModel: ObservableObject {
             || guideOpen
             || creationSheetOpen
             || recreateConfirmationID != nil
+            || creationPhase != nil
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
         let pastedImage = !isModalOpen && flags == [.command] && event.charactersIgnoringModifiers == "v"
             ? pastedImageResolver()
