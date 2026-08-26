@@ -43,3 +43,12 @@ Result:
 ### Concerns
 
 - Focused verification required an unsandboxed `swift test` run because SwiftPM manifest evaluation cannot complete under the managed sandbox in this environment.
+
+### Review correction
+
+Independent review found that an explicit empty target defaulted to `.`, a failing
+`base64` stage could be masked by `tr`, the helper printed no success message,
+and coverage did not execute the generated helper. Commit `5881ac7` distinguishes
+zero arguments from an empty argument, checks base64 before newline normalization,
+prints a concise success message, and adds Bash/Zsh harness tests. The focused
+`ShellIntegrationTests` suite passes 9 tests with 0 failures.
