@@ -38,4 +38,27 @@ final class PTYTests: XCTestCase {
         pty.start(path: "/bin/echo", args: ["again"], cols: 80, rows: 24) // ignored
         wait(for: [exited], timeout: 5)
     }
+
+    func testTerminateReapsChildAndReportsExitOnce() {
+        let pty = PTYSession()
+        let exited = expectation(description: "terminated child is reaped")
+        exited.assertForOverFulfill = true
+        var exitCodes: [Int32] = []
+        let lock = NSLock()
+        pty.onExit = { code in
+            lock.lock()
+            exitCodes.append(code)
+            lock.unlock()
+            exited.fulfill()
+        }
+
+        pty.start(path: "/bin/sleep", args: ["30"], cols: 80, rows: 24)
+        pty.terminate()
+
+        wait(for: [exited], timeout: 5)
+        lock.lock()
+        let codes = exitCodes
+        lock.unlock()
+        XCTAssertEqual(codes, [143])
+    }
 }
