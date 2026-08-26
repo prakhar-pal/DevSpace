@@ -2,6 +2,34 @@ import XCTest
 @testable import DevSpaceApp
 import DevSpaceCore
 
+private final class BlockingCreationRefreshRunner: CommandRunning, @unchecked Sendable {
+    private let started = DispatchSemaphore(value: 0)
+    private let release = DispatchSemaphore(value: 0)
+    private let returned = DispatchSemaphore(value: 0)
+
+    func run(_ args: [String]) throws -> String {
+        guard args.first == "list" else {
+            throw DevpodError("unexpected args: \(args)")
+        }
+        started.signal()
+        release.wait()
+        returned.signal()
+        return "[]"
+    }
+
+    func waitUntilStarted() -> Bool {
+        started.wait(timeout: .now() + 2) == .success
+    }
+
+    func finish() {
+        release.signal()
+    }
+
+    func waitUntilReturned() -> Bool {
+        returned.wait(timeout: .now() + 2) == .success
+    }
+}
+
 @MainActor
 final class DevpodLifecycleTests: XCTestCase {
     private func workspace(_ id: String, state: String = "Stopped") -> WorkspaceView {
@@ -98,6 +126,42 @@ final class DevpodLifecycleTests: XCTestCase {
         lateExit?(1)
 
         XCTAssertEqual(model.creationPane?.id, nextPaneID)
+        XCTAssertEqual(model.creationPhase, .running)
+    }
+
+    func testCancelledDiscoveryRefreshCannotMutateNextCreation() {
+        let runner = BlockingCreationRefreshRunner()
+        let model = AppModel(
+            runner: runner,
+            interval: 3_600,
+            initialWorkspaces: [workspace("wc-1"), workspace("wc-2")],
+            startsRuntimeServices: false
+        )
+        model.selectedID = "wc-1"
+        model.beginCreation()
+        model.submitCreation(
+            repositoryURL: "https://github.com/acme/first.git",
+            devpodID: ""
+        )
+        let firstExit = model.creationPane?.onExit
+
+        firstExit?(0)
+        XCTAssertTrue(runner.waitUntilStarted())
+        model.cancelActiveCreation()
+        model.beginCreation()
+        model.submitCreation(
+            repositoryURL: "https://github.com/acme/second.git",
+            devpodID: ""
+        )
+        let secondPaneID = model.creationPane?.id
+
+        runner.finish()
+        XCTAssertTrue(runner.waitUntilReturned())
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+
+        XCTAssertEqual(model.workspaces.map(\.id), ["wc-1", "wc-2"])
+        XCTAssertEqual(model.selectedID, "wc-1")
+        XCTAssertEqual(model.creationPane?.id, secondPaneID)
         XCTAssertEqual(model.creationPhase, .running)
     }
 
