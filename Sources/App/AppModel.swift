@@ -174,6 +174,7 @@ final class AppModel: ObservableObject {
     private var creationBeforeIDs: Set<String> = []
     private var creationExplicitID: String?
     private var creationPreviousSelection: String?
+    private var creationGeneration: UUID?
     private var creationAwaitingRefresh = false
     private var creationDiscoveryMissCount = 0
     private var creationLastMissRevision: UInt64?
@@ -679,8 +680,12 @@ final class AppModel: ObservableObject {
             creationPreviousSelection = selectedID
             creationError = nil
             creationPhase = .running
+            let generation = UUID()
+            creationGeneration = generation
             let pane = TerminalPaneModel(command: "devpod", args: request.args)
-            pane.onExit = { [weak self] code in self?.creationProcessExited(code) }
+            pane.onExit = { [weak self] code in
+                self?.creationProcessExited(code, generation: generation)
+            }
             creationPane = pane
             creationSheetOpen = false
         } catch let error as DevpodError {
@@ -702,9 +707,14 @@ final class AppModel: ObservableObject {
         return created.count == 1 ? created.first : nil
     }
 
-    private func creationProcessExited(_ exitCode: Int32) {
+    private func creationProcessExited(_ exitCode: Int32, generation: UUID) {
+        guard creationGeneration == generation else { return }
         guard exitCode == 0 else {
-            completeCreation(exitCode: exitCode, refreshedViews: nil)
+            completeCreation(
+                exitCode: exitCode,
+                refreshedViews: nil,
+                generation: generation
+            )
             return
         }
         let revision = pollRevisionSource.next()
@@ -717,7 +727,8 @@ final class AppModel: ObservableObject {
                 self?.completeCreation(
                     exitCode: exitCode,
                     refreshedViews: views,
-                    refreshRevision: revision
+                    refreshRevision: revision,
+                    generation: generation
                 )
             }
         }
@@ -726,8 +737,10 @@ final class AppModel: ObservableObject {
     func completeCreation(
         exitCode: Int32,
         refreshedViews: [WorkspaceView]?,
-        refreshRevision: UInt64? = nil
+        refreshRevision: UInt64? = nil,
+        generation: UUID? = nil
     ) {
+        if let generation, creationGeneration != generation { return }
         guard creationPhase != nil else { return }
         guard exitCode == 0 else {
             creationPhase = .failed
@@ -803,6 +816,7 @@ final class AppModel: ObservableObject {
         creationBeforeIDs = []
         creationExplicitID = nil
         creationPreviousSelection = nil
+        creationGeneration = nil
         creationAwaitingRefresh = false
         creationDiscoveryMissCount = 0
         creationLastMissRevision = nil

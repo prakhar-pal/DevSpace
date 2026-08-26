@@ -89,9 +89,16 @@ final class DevpodLifecycleTests: XCTestCase {
         XCTAssertNil(model.creationPane)
         XCTAssertNil(model.creationPhase)
 
+        model.beginCreation()
+        model.submitCreation(
+            repositoryURL: "https://github.com/acme/next.git",
+            devpodID: ""
+        )
+        let nextPaneID = model.creationPane?.id
         lateExit?(1)
-        XCTAssertNil(model.creationPane)
-        XCTAssertNil(model.creationPhase)
+
+        XCTAssertEqual(model.creationPane?.id, nextPaneID)
+        XCTAssertEqual(model.creationPhase, .running)
     }
 
     func testSuccessfulCreationAppliesRefreshAndSelectsSingleNewWorkspace() {
