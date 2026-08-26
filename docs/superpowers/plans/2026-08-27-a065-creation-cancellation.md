@@ -199,6 +199,18 @@ git commit -m "fix: expose creation cancellation"
 
 ### Task 3: Verification and Stack Update
 
+Before final verification, independent review adds two required regressions:
+
+- Tag each creation PTY exit and asynchronous discovery refresh with a UUID
+  generation. Cancellation clears that generation; callbacks from an older
+  generation return before mutating poll revisions or creation state.
+- Make `PTYSession.terminate()` initiate the existing `waitpid` path. Guard
+  reaping under the PTY lock so EOF and explicit termination report exactly one
+  exit and never leave the terminated child as a zombie.
+
+These corrections are covered by a canceled-A/active-B late-exit lifecycle test
+and a real `/bin/sleep` PTY termination test.
+
 **Files:**
 - Verify only; no planned production edits.
 
