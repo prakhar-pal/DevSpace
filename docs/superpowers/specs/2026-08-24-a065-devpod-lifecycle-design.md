@@ -95,6 +95,20 @@ A non-zero create exit keeps its terminal output visible with a **Creation
 failed** header and a Close action. It does not change the workspace list or
 selection automatically.
 
+The creation overlay must also remain dismissible before the process reports a
+non-zero exit. While creation or post-create discovery is still active, its
+header shows **Cancel**. Cancel terminates the local DevPod PTY, detaches its
+exit callback before termination, clears the transient creation session, and
+restores the previous workspace selection. A late process-exit callback must
+not recreate failure state. The Escape key invokes Cancel while active and
+Close after failure, matching the visible header action.
+
+This explicit lifecycle action is preferred over a timeout, because a valid
+creation may provision for an arbitrary duration, and over parsing terminal
+output, because DevPod's human-readable error text is not a stable API. The
+process exit status still determines whether the retained log is labelled as a
+failure; cancellation is always controlled by the user.
+
 A non-zero recreate exit keeps that workspace's terminal output visible with a
 **Recreate failed** header and a Close action. It does not mark the workspace
 Running or attempt SSH. Closing the failed pane returns to the workspace's
@@ -126,6 +140,9 @@ include:
 - Creation sheet state and recreate confirmation state.
 - Recreate disabled-state rules during other lifecycle operations.
 - Successful and failed create/recreate completion behavior.
+- Cancelling an active or discovery-stalled creation clears its pane and ignores
+  later completion callbacks.
+- Escape follows the creation header's Cancel/Close behavior.
 - Explicit-ID selection and derived-ID discovery after immediate refresh.
 - Ambiguous discovery preserving the existing selection.
 - Sidebar footer and workspace-menu action availability through extracted pure
