@@ -72,6 +72,28 @@ final class DevpodLifecycleTests: XCTestCase {
         XCTAssertNil(model.creationPhase)
     }
 
+    func testCancellingActiveCreationRestoresSelectionAndIgnoresLateExit() {
+        let model = makeModel(ids: ["wc-1", "wc-2"])
+        model.selectedID = "wc-1"
+        model.beginCreation()
+        model.submitCreation(
+            repositoryURL: "https://github.com/acme/new.git",
+            devpodID: ""
+        )
+        let lateExit = model.creationPane?.onExit
+        model.selectedID = "wc-2"
+
+        model.cancelActiveCreation()
+
+        XCTAssertEqual(model.selectedID, "wc-1")
+        XCTAssertNil(model.creationPane)
+        XCTAssertNil(model.creationPhase)
+
+        lateExit?(1)
+        XCTAssertNil(model.creationPane)
+        XCTAssertNil(model.creationPhase)
+    }
+
     func testSuccessfulCreationAppliesRefreshAndSelectsSingleNewWorkspace() {
         let model = makeModel(ids: ["wc-1"])
         model.selectedID = "wc-1"

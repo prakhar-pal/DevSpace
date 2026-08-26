@@ -789,6 +789,12 @@ final class AppModel: ObservableObject {
         clearCreationSession()
     }
 
+    func cancelActiveCreation() {
+        guard creationPhase == .running else { return }
+        selectedID = creationPreviousSelection
+        clearCreationSession()
+    }
+
     private func clearCreationSession() {
         creationPane?.onExit = nil
         creationPane?.terminate()
