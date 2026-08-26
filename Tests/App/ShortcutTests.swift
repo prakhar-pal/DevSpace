@@ -126,6 +126,10 @@ final class ShortcutTests: XCTestCase {
             repositoryURL: "https://github.com/acme/new.git",
             devpodID: ""
         )
+        let escape = keyEvent(characters: "\u{1b}", modifiers: [])
+        XCTAssertFalse(model.handleTerminalKeyEquivalent(escape))
+        XCTAssertEqual(model.creationPhase, .running)
+        XCTAssertNotNil(model.creationPane)
         XCTAssertFalse(model.dispatchAppShortcut(event))
         XCTAssertEqual(recorder.actions, [])
     }

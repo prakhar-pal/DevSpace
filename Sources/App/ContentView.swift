@@ -93,7 +93,11 @@ private struct MainPane: View {
                     if model.creationPhase == .failed {
                         logHeader("Creation failed", onClose: model.dismissCreationFailure)
                     } else {
-                        logHeader("Creating workspace…")
+                        logHeader(
+                            "Creating workspace…",
+                            actionTitle: "Cancel",
+                            onClose: model.cancelActiveCreation
+                        )
                     }
                     TerminalPaneView(
                         model: creationPane,
@@ -262,12 +266,16 @@ private struct MainPane: View {
         }
     }
 
-    private func logHeader(_ text: String, onClose: (() -> Void)? = nil) -> some View {
+    private func logHeader(
+        _ text: String,
+        actionTitle: String = "Close",
+        onClose: (() -> Void)? = nil
+    ) -> some View {
         HStack {
             Text(text).font(.system(size: 12))
             Spacer()
             if let onClose {
-                Button("Close", action: onClose)
+                Button(actionTitle, action: onClose)
                     .buttonStyle(.plain)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
