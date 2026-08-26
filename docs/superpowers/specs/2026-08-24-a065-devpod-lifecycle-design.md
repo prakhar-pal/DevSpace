@@ -100,8 +100,8 @@ non-zero exit. While creation or post-create discovery is still active, its
 header shows **Cancel**. Cancel terminates the local DevPod PTY, detaches its
 exit callback before termination, clears the transient creation session, and
 restores the previous workspace selection. A late process-exit callback must
-not recreate failure state. The Escape key invokes Cancel while active and
-Close after failure, matching the visible header action.
+not recreate failure state. Keyboard input, including Escape, remains owned by
+the embedded terminal and never dismisses or cancels the operation.
 
 This explicit lifecycle action is preferred over a timeout, because a valid
 creation may provision for an arbitrary duration, and over parsing terminal
@@ -142,7 +142,7 @@ include:
 - Successful and failed create/recreate completion behavior.
 - Cancelling an active or discovery-stalled creation clears its pane and ignores
   later completion callbacks.
-- Escape follows the creation header's Cancel/Close behavior.
+- Escape and other terminal input do not invoke the header's Cancel/Close action.
 - Explicit-ID selection and derived-ID discovery after immediate refresh.
 - Ambiguous discovery preserving the existing selection.
 - Sidebar footer and workspace-menu action availability through extracted pure
