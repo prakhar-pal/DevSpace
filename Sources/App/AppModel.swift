@@ -20,7 +20,7 @@ struct AppShortcutState {
     let isModalOpen: Bool
     let selectedID: String?
     let selectedTerminalIsVisible: Bool
-    let selectedWorkspaceIsRunning: Bool
+    let selectedWorkspaceCanOpenInZed: Bool
     let visibleWorkspaceIDs: [String]
     let pastedImage: PastedImage?
 }
@@ -589,6 +589,13 @@ final class AppModel: ObservableObject {
         )
     }
 
+    func canOpenInZed(_ id: String) -> Bool {
+        byID[id]?.state == "Running"
+            && !starting.contains(id)
+            && !shuttingDown.contains(id)
+            && !recreating.contains(id)
+    }
+
     func name(_ id: String) -> String { aliases[id] ?? id }
 
     /// The bundle's display name — "DevSpaceDev" for dev builds, "DevSpace"
@@ -947,7 +954,7 @@ final class AppModel: ObservableObject {
     /// `dide` target, so it must never fall back to DevPod's default IDE
     /// launcher (which would silently open a different folder).
     func openInZed(_ id: String, workdir: String?) {
-        guard validID(id) else { return }
+        guard validID(id), canOpenInZed(id) else { return }
         guard workdir == nil || (workdir?.hasPrefix("/") == true && !(workdir?.isEmpty ?? true)) else {
             Log.write("zed: rejected non-absolute explicit workdir")
             return
@@ -1658,7 +1665,7 @@ final class AppModel: ObservableObject {
             return .action(.reload(id))
         }
         if chars == "o" {
-            guard let id = state.selectedID, state.selectedWorkspaceIsRunning else {
+            guard let id = state.selectedID, state.selectedWorkspaceCanOpenInZed else {
                 return .handledNoOp
             }
             return .action(.openInZed(id))
@@ -1699,7 +1706,7 @@ final class AppModel: ObservableObject {
             selectedTerminalIsVisible: id.map {
                 phase(of: $0) == .terminal && isTerminalVisible($0)
             } ?? false,
-            selectedWorkspaceIsRunning: id.flatMap { byID[$0] }?.state == "Running",
+            selectedWorkspaceCanOpenInZed: id.map(canOpenInZed) ?? false,
             visibleWorkspaceIDs: split.visible.map(\.id),
             pastedImage: pastedImage
         )

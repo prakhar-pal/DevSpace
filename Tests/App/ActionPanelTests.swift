@@ -103,6 +103,33 @@ final class ActionPanelTests: XCTestCase {
         wait(for: [notLaunched], timeout: 0.1)
     }
 
+    func testDidePayloadRejectsWorkspaceWhileRecreating() {
+        let notLaunched = expectation(description: "Zed must not launch during recreation")
+        notLaunched.isInverted = true
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "docker",
+                source: "test",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            zedLaunchURL: { _ in notLaunched.fulfill() }
+        )
+        model.beginRecreate("wc-1")
+        model.confirmRecreate()
+
+        model.receiveDide(DidePayload(
+            podID: "wc-1",
+            path: "/workspace",
+            token: "ignored"
+        ))
+
+        wait(for: [notLaunched], timeout: 0.1)
+    }
+
     func testConnectingStateRequiresAnOpenedSessionWithoutPanes() {
         XCTAssertTrue(AppModel.isConnecting(isOpened: true, hasPanes: false))
         XCTAssertFalse(AppModel.isConnecting(isOpened: false, hasPanes: false))

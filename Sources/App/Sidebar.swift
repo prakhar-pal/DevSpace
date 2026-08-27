@@ -240,7 +240,7 @@ private struct WorkspaceRow: View {
         }
         // Only for running pods: the remote open rides the live SSH alias, and
         // opening a stopped pod's folder isn't possible without starting it.
-        if workspace.state == "Running" {
+        if model.canOpenInZed(workspace.id) {
             Divider()
             Button("Open in Zed") { model.openInZed(workspace.id) }
         }

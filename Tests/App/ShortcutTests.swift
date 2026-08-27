@@ -137,8 +137,15 @@ final class ShortcutTests: XCTestCase {
     func testCommandORoutesToOpenInZedForARunningSelectedWorkspace() {
         XCTAssertEqual(AppModel.shortcutRoute(
             event: keyEvent(characters: "o"),
-            state: .fixture(selectedID: "wc-1", selectedWorkspaceIsRunning: true)
+            state: .fixture(selectedID: "wc-1", selectedWorkspaceCanOpenInZed: true)
         ), .action(.openInZed("wc-1")))
+    }
+
+    func testCommandODoesNothingWhenSelectedWorkspaceIsNotLive() {
+        XCTAssertEqual(AppModel.shortcutRoute(
+            event: keyEvent(characters: "o"),
+            state: .fixture(selectedID: "wc-1", selectedWorkspaceCanOpenInZed: false)
+        ), .handledNoOp)
     }
 
     func testCommandRConsumesAsNoOpWithoutVisibleTerminal() {
@@ -305,7 +312,7 @@ private extension AppShortcutState {
         isModalOpen: Bool = false,
         selectedID: String? = nil,
         selectedTerminalIsVisible: Bool = true,
-        selectedWorkspaceIsRunning: Bool = false,
+        selectedWorkspaceCanOpenInZed: Bool = false,
         visibleWorkspaceIDs: [String] = [],
         hasPastedImage: Bool = false
     ) -> Self {
@@ -313,7 +320,7 @@ private extension AppShortcutState {
             isModalOpen: isModalOpen,
             selectedID: selectedID,
             selectedTerminalIsVisible: selectedTerminalIsVisible,
-            selectedWorkspaceIsRunning: selectedWorkspaceIsRunning,
+            selectedWorkspaceCanOpenInZed: selectedWorkspaceCanOpenInZed,
             visibleWorkspaceIDs: visibleWorkspaceIDs,
             pastedImage: hasPastedImage ? PastedImage(data: Data([0]), ext: "png") : nil
         )

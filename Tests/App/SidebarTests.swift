@@ -108,6 +108,38 @@ final class SidebarTests: XCTestCase {
         ))
     }
 
+    func testOpenInZedRequiresRunningStatusOutsideLifecycleTransitions() {
+        func model(state: String) -> AppModel {
+            AppModel(
+                initialWorkspaces: [WorkspaceView(
+                    id: "wc-1",
+                    provider: "test",
+                    source: "",
+                    lastUsed: "",
+                    state: state,
+                    error: nil
+                )],
+                startsRuntimeServices: false
+            )
+        }
+
+        let running = model(state: "Running")
+        XCTAssertTrue(running.canOpenInZed("wc-1"))
+        XCTAssertFalse(model(state: "Stopped").canOpenInZed("wc-1"))
+
+        running.beginRecreate("wc-1")
+        running.confirmRecreate()
+        XCTAssertFalse(running.canOpenInZed("wc-1"))
+
+        let starting = model(state: "Running")
+        starting.start("wc-1")
+        XCTAssertFalse(starting.canOpenInZed("wc-1"))
+
+        let stopping = model(state: "Running")
+        stopping.stop("wc-1")
+        XCTAssertFalse(stopping.canOpenInZed("wc-1"))
+    }
+
     func testPendingHandoffBlocksReloadAndNewTerminalUntilVisible() async {
         let id = "pending-pod"
         let runner = BlockingShellIntegrationRunner()
