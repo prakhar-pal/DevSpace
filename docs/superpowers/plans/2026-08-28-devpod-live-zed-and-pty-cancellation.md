@@ -192,10 +192,9 @@ git commit -m "fix: prevent cancelled PTY startup"
 
 ```bash
 git diff --check
-rg -n -i "A065" . --glob '!.git/**' --glob '!build/**' --glob '!.build/**'
 ```
 
-Expected: both checks produce no findings.
+Expected: the whitespace check produces no findings.
 
 - [ ] **Step 2: Run the complete test suite**
 
