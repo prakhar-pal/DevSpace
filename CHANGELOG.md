@@ -1,5 +1,57 @@
 # dev-space
 
+## v0.7.0 - 2026-08-27
+
+### Features
+- feat: expose devpod workspace actions (b93021d)
+- feat: present devpod lifecycle dialogs and logs (d368014)
+- feat: manage create and recreate lifecycle (00720d6)
+- feat: build devpod create and recreate requests (12696c6)
+- feat: open dide folders in zed (7f95ea2)
+- feat: inject dide pod folder helper (bdc6d3e)
+- feat: add authenticated dide listener requests (471effa)
+- feat: classify app shortcut routes (1df81ea)
+
+### Fixes
+- fix: invalidate delayed Zed launches (808793b)
+- fix: prevent cancelled PTY startup (a3f2fbc)
+- fix: restrict Zed to live devpods (d07f4c0)
+- fix: reap cancelled PTY children (24a259b)
+- fix: isolate creation callbacks (bd81f7d)
+- fix: expose creation cancellation (3777c7b)
+- fix: cancel active devpod creation (4474332)
+- fix: order devpod lifecycle polling (420aa70)
+- fix: guard devpod lifecycle interactions (515074e)
+- fix: isolate dev reverse tunnel ports (1f89d6f)
+- fix: harden dide shell helper (5881ac7)
+- fix: document dide listener and utf8 validation (9c311f5)
+- fix: avoid clipboard reads while modal is open (9ee3a85)
+- fix: guard terminal shortcut ownership (2e11ac6)
+- fix: route app shortcuts through terminal (f9f2852)
+- fix: show devpod lifecycle logs (65cfeb7)
+
+### Other
+- docs: remove milestone scan reference (5570a55)
+- docs: plan lifecycle review fixes (b7ba32e)
+- docs: remove lifecycle milestone label (06cb2e4)
+- docs: tighten devpod lifecycle guards (8407b91)
+- test: cover cancelled creation refresh (6242da9)
+- docs: record cancellation review fixes (98c1469)
+- docs: plan devpod creation cancellation (179340c)
+- docs: preserve terminal escape input (83a9489)
+- docs: make devpod creation dismissible (659e3a7)
+- docs: plan devpod lifecycle (fce4e8a)
+- docs: define devpod lifecycle (a50d4dc)
+- docs: record DIDE review correction (14f33b6)
+- docs: plan dide zed folder launcher (a096575)
+- docs: require conventional branch names (4adb013)
+- docs: design dide zed folder launcher (05c82ae)
+- test: verify terminal monitor handoff (b4f5132)
+- docs: refine terminal shortcut routing plan (41caac4)
+- docs: strengthen shortcut routing design (99acb16)
+- docs: design terminal shortcut routing (742101f)
+
+
 ## v0.6.4 - 2026-08-18
 
 ### Fixes
