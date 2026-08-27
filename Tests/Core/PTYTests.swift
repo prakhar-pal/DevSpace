@@ -61,4 +61,19 @@ final class PTYTests: XCTestCase {
         lock.unlock()
         XCTAssertEqual(codes, [143])
     }
+
+    func testTerminateBeforeStartPreventsChildLaunch() {
+        let pty = PTYSession()
+        let output = expectation(description: "terminated PTY emits no output")
+        output.isInverted = true
+        let exited = expectation(description: "terminated PTY starts no child")
+        exited.isInverted = true
+        pty.onOutput = { _ in output.fulfill() }
+        pty.onExit = { _ in exited.fulfill() }
+
+        pty.terminate()
+        pty.start(path: "/bin/echo", args: ["must-not-launch"], cols: 80, rows: 24)
+
+        wait(for: [output, exited], timeout: 0.25)
+    }
 }
