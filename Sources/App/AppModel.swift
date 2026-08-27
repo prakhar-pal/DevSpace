@@ -147,6 +147,8 @@ final class AppModel: ObservableObject {
     private let pastedImageResolver: PastedImageResolving
     private let shortcutMonitorObserver: ShortcutMonitorObserving?
     private let injectedZedURLLauncher: ((String) -> Void)?
+    private let injectedZedLaunchContext: (() -> (processTable: String, cli: String?))?
+    private let injectedZedDevpodLauncher: (([String]) -> Void)?
     private lazy var shortcutActionExecutor: AppShortcutActionExecuting =
         injectedShortcutActionExecutor ?? DefaultShortcutActionExecutor(model: self)
 #if DEBUG
@@ -171,6 +173,9 @@ final class AppModel: ObservableObject {
     /// The active primary SSH resolution attempt for each pod. A completion
     /// may mount only if it still owns this generation.
     private var sshConnectionGenerations: [String: UUID] = [:]
+    /// The latest Open-in-Zed request accepted for each workspace. Lifecycle
+    /// transitions invalidate the generation before delayed launch/fallback work.
+    private var zedRequestGenerations: [String: UUID] = [:]
     private var creationBeforeIDs: Set<String> = []
     private var creationExplicitID: String?
     private var creationPreviousSelection: String?
@@ -282,6 +287,8 @@ final class AppModel: ObservableObject {
         pastedImageResolver: PastedImageResolving? = nil,
         shortcutMonitorObserver: ShortcutMonitorObserving? = nil,
         zedLaunchURL: ((String) -> Void)? = nil,
+        zedLaunchContext: (() -> (processTable: String, cli: String?))? = nil,
+        zedDevpodLaunch: (([String]) -> Void)? = nil,
         pollRevisionSource: PollRevisionSource? = nil
     ) {
         let revisions = pollRevisionSource ?? PollRevisionSource()
@@ -295,6 +302,8 @@ final class AppModel: ObservableObject {
         self.pastedImageResolver = pastedImageResolver ?? { AppModel.pastedImage() }
         self.shortcutMonitorObserver = shortcutMonitorObserver
         injectedZedURLLauncher = zedLaunchURL
+        injectedZedLaunchContext = zedLaunchContext
+        injectedZedDevpodLauncher = zedDevpodLaunch
         notifyToken = startsRuntimeServices ? (try? Notify.loadOrCreateToken()) ?? "" : ""
         loop = PollLoop(
             runner: runner,
@@ -497,6 +506,9 @@ final class AppModel: ObservableObject {
     private func apply(_ views: [WorkspaceView], reconcilesLifecycle: Bool = true) {
         if reconcilesLifecycle { notifyStateTransitions(views) }
         workspaces = views
+        for id in zedRequestGenerations.keys.filter({ !canOpenInZed($0) }) {
+            zedRequestGenerations[id] = nil
+        }
         let ids = views.map(\.id)
         let newOrder = SidebarLayout.normalizeOrder(order, ids: ids)
         let newHidden = SidebarLayout.pruneHidden(hidden, ids: ids)
@@ -848,6 +860,7 @@ final class AppModel: ObservableObject {
               let args = try? Devpod.recreateArgs(id)
         else { return }
 
+        invalidateZedRequest(id)
         invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
         opened.remove(id)
@@ -891,6 +904,7 @@ final class AppModel: ObservableObject {
 
     func start(_ id: String) {
         guard validID(id) else { return }
+        invalidateZedRequest(id)
         invalidateSSHConnection(id)
         select(id)
         starting.insert(id)
@@ -921,6 +935,7 @@ final class AppModel: ObservableObject {
 
     func stop(_ id: String) {
         guard validID(id), !recreating.contains(id) else { return }
+        invalidateZedRequest(id)
         invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
         opened.remove(id)
@@ -934,6 +949,7 @@ final class AppModel: ObservableObject {
 
     func delete(_ id: String) {
         guard validID(id) else { return }
+        invalidateZedRequest(id)
         invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
         let r = runner
@@ -959,10 +975,11 @@ final class AppModel: ObservableObject {
             Log.write("zed: rejected non-absolute explicit workdir")
             return
         }
-        let r = runner
+        let generation = UUID()
+        zedRequestGenerations[id] = generation
         let currentDirectory = activeModel(id)?.state.workingDirectory
-        let injectedZedURLLauncher = injectedZedURLLauncher
-        DispatchQueue.global(qos: .userInitiated).async {
+        let injectedZedLaunchContext = injectedZedLaunchContext
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             // Always hand Zed the pod's URL: the CLI focuses the existing
             // window when the project is already open (verified live — no
             // duplicate workspace is created). App-level activation, the old
@@ -971,74 +988,123 @@ final class AppModel: ObservableObject {
             // workspace). The session check now only guards the fallbacks:
             // re-running the devpod provision flow while a session exists is
             // what duplicates windows.
-            let sessionActive = SSH.zedSessionActive(psOutput: Self.processTable(), podID: id)
+            let context = injectedZedLaunchContext?()
+                ?? (processTable: Self.processTable(), cli: Self.zedCLI())
+            let sessionActive = SSH.zedSessionActive(psOutput: context.processTable, podID: id)
             let targetWorkdir = workdir ?? SSH.zedWorkdir(
                 currentDirectory: currentDirectory,
                 fallback: SSH.workdir(podID: id)
             )
             let url = SSH.zedRemoteURL(podID: id, workdir: targetWorkdir)
-            if let injectedZedURLLauncher {
-                injectedZedURLLauncher(url)
-                return
-            }
-            guard let cli = Self.zedCLI() else {
-                switch Self.zedFallbackAction(
+            DispatchQueue.main.async {
+                self?.launchZedRequest(
+                    id: id,
+                    workdir: workdir,
+                    url: url,
                     sessionActive: sessionActive,
-                    hasExplicitWorkdir: workdir != nil
-                ) {
-                case .activateExistingSession:
-                    Log.write("zed: cli not found; session for \(id) already open — activating Zed")
-                    Self.activateZed()
-                case .none:
-                    Log.write("zed: cli not found — cannot open explicit folder \(url)")
-                case .openViaDevpod:
-                    Log.write("zed: cli not found — falling back to devpod")
-                    Self.openViaDevpod(id, runner: r)
-                }
-                return
+                    cli: context.cli,
+                    generation: generation
+                )
             }
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: cli)
-            proc.arguments = [url]
-            // Observe the exit asynchronously — a hung zed process must not
-            // pin a shared global-QoS worker the way a blocking wait would.
-            proc.terminationHandler = { p in
-                if p.terminationStatus == 0 {
+        }
+    }
+
+    private func launchZedRequest(
+        id: String,
+        workdir: String?,
+        url: String,
+        sessionActive: Bool,
+        cli: String?,
+        generation: UUID
+    ) {
+        guard isCurrentZedRequest(id, generation: generation) else { return }
+        if let injectedZedURLLauncher {
+            injectedZedURLLauncher(url)
+            return
+        }
+        guard let cli else {
+            performZedFallback(
+                id: id,
+                url: url,
+                sessionActive: sessionActive,
+                hasExplicitWorkdir: workdir != nil,
+                generation: generation,
+                reason: "cli not found"
+            )
+            return
+        }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: cli)
+        proc.arguments = [url]
+        // `Process.run()` returns after launch, so doing it on the main actor
+        // makes the final lifecycle check and external launch one serialized
+        // action. Process completion remains asynchronous.
+        proc.terminationHandler = { [weak self] p in
+            DispatchQueue.main.async {
+                guard p.terminationStatus != 0 else {
                     Log.write("zed: opened \(url) via \(cli)")
                     return
                 }
-                switch Self.zedFallbackAction(
+                self?.performZedFallback(
+                    id: id,
+                    url: url,
                     sessionActive: sessionActive,
-                    hasExplicitWorkdir: workdir != nil
-                ) {
-                case .activateExistingSession:
-                    Log.write("zed: \(cli) exit \(p.terminationStatus) for \(url); session open — activating instead of devpod fallback")
-                    Self.activateZed()
-                case .none:
-                    Log.write("zed: \(cli) exit \(p.terminationStatus) for explicit folder \(url)")
-                case .openViaDevpod:
-                    Log.write("zed: \(cli) exit \(p.terminationStatus) for \(url) — falling back to devpod")
-                    Self.openViaDevpod(id, runner: r)
-                }
-            }
-            do {
-                try proc.run()
-            } catch {
-                switch Self.zedFallbackAction(
-                    sessionActive: sessionActive,
-                    hasExplicitWorkdir: workdir != nil
-                ) {
-                case .activateExistingSession:
-                    Log.write("zed: \(cli) not runnable (\(error)); session open — activating instead of devpod fallback")
-                    Self.activateZed()
-                case .none:
-                    Log.write("zed: \(cli) not runnable (\(error)) for explicit folder \(url)")
-                case .openViaDevpod:
-                    Log.write("zed: \(cli) not runnable (\(error)) — falling back to devpod")
-                    Self.openViaDevpod(id, runner: r)
-                }
+                    hasExplicitWorkdir: workdir != nil,
+                    generation: generation,
+                    reason: "\(cli) exit \(p.terminationStatus)"
+                )
             }
         }
+        do {
+            try proc.run()
+        } catch {
+            performZedFallback(
+                id: id,
+                url: url,
+                sessionActive: sessionActive,
+                hasExplicitWorkdir: workdir != nil,
+                generation: generation,
+                reason: "\(cli) not runnable (\(error))"
+            )
+        }
+    }
+
+    private func performZedFallback(
+        id: String,
+        url: String,
+        sessionActive: Bool,
+        hasExplicitWorkdir: Bool,
+        generation: UUID,
+        reason: String
+    ) {
+        guard isCurrentZedRequest(id, generation: generation) else { return }
+        switch Self.zedFallbackAction(
+            sessionActive: sessionActive,
+            hasExplicitWorkdir: hasExplicitWorkdir
+        ) {
+        case .activateExistingSession:
+            Log.write("zed: \(reason) for \(url); session open — activating instead of devpod fallback")
+            Self.activateZed()
+        case .none:
+            Log.write("zed: \(reason) for explicit folder \(url)")
+        case .openViaDevpod:
+            Log.write("zed: \(reason) for \(url) — falling back to devpod")
+            let args = Devpod.ideArgs(id, ide: "zed")
+            if let injectedZedDevpodLauncher {
+                injectedZedDevpodLauncher(args)
+            } else {
+                Self.launchDevpodIDE(args)
+            }
+        }
+    }
+
+    private func isCurrentZedRequest(_ id: String, generation: UUID) -> Bool {
+        zedRequestGenerations[id] == generation && canOpenInZed(id)
+    }
+
+    private func invalidateZedRequest(_ id: String) {
+        zedRequestGenerations[id] = nil
     }
 
     /// The current process table (`ps axww -o command=`), for detecting an
@@ -1069,11 +1135,23 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
     }
 
-    /// Legacy fallback: `devpod up --ide zed` (slow — re-runs the up flow).
-    private nonisolated static func openViaDevpod(_ id: String, runner: CommandRunning) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            guard (try? Devpod.validateIde("zed")) != nil else { return }
-            _ = try? runner.run(Devpod.ideArgs(id, ide: "zed"))
+    /// Legacy fallback: spawn `devpod up --ide zed` without waiting for the
+    /// slow up flow. This is called on the main actor so generation validation
+    /// and process creation cannot be separated by a lifecycle transition.
+    private static func launchDevpodIDE(_ args: [String]) {
+        guard (try? Devpod.validateIde("zed")) != nil else { return }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        proc.arguments = ["devpod"] + args
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { p in
+            Log.write("zed: devpod fallback exited \(p.terminationStatus)")
+        }
+        do {
+            try proc.run()
+        } catch {
+            Log.write("zed: devpod fallback failed to spawn: \(error)")
         }
     }
 

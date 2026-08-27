@@ -38,7 +38,9 @@ currently starting, stopping, or recreating. The same policy applies at every
 entry point: the sidebar menu, keyboard shortcuts, DIDE requests, and the
 model-level action. This prevents a cached `Running` status from opening SSH or
 starting the legacy `devpod up --ide zed` fallback while recreation replaces
-the container.
+the container. An accepted request is also revalidated immediately before any
+delayed Zed launch or fallback. Starting, stopping, recreating, deleting, or a
+poll that reports the workspace non-live invalidates the pending request.
 
 ## Command Construction and Validation
 

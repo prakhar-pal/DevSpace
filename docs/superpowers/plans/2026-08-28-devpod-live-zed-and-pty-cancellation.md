@@ -223,3 +223,15 @@ gh stack submit --auto --open
 
 Expected: the working tree is clean, PR #99 remains above PR #98, and the stack
 is synchronized on GitHub.
+
+### Review Correction: Invalidate Delayed Zed Launches
+
+A Zed request that passed the initial live-workspace guard must not launch or
+fall back after a lifecycle transition begins. Bind each accepted request to a
+generation, invalidate it on start, stop, recreate, delete, and non-live poll
+results, and revalidate the generation plus live policy on the main actor
+immediately before every external launch or fallback.
+
+Regression coverage starts a recreation after DIDE accepts a request but before
+its asynchronous process lookup completes, and verifies that no Zed launch is
+performed.
