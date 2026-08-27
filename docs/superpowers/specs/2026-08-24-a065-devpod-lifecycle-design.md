@@ -32,6 +32,14 @@ workspace and states that its existing container will be replaced. The
 destructive confirmation button is labelled **Recreate**. The action is
 disabled while that workspace is starting, stopping, or recreating.
 
+Open in Zed is available only for a live workspace. DevSpace defines live for
+this action as a workspace whose latest status is `Running` and which is not
+currently starting, stopping, or recreating. The same policy applies at every
+entry point: the sidebar menu, keyboard shortcuts, DIDE requests, and the
+model-level action. This prevents a cached `Running` status from opening SSH or
+starting the legacy `devpod up --ide zed` fallback while recreation replaces
+the container.
+
 ## Command Construction and Validation
 
 Creation runs the following argument-vector form without invoking a shell:
@@ -103,6 +111,12 @@ restores the previous workspace selection. A late process-exit callback must
 not recreate failure state. Keyboard input, including Escape, remains owned by
 the embedded terminal and never dismisses or cancels the operation.
 
+PTY termination is irreversible even when it races lazy terminal startup.
+`PTYSession` owns one lock-protected lifecycle state: idle, running, or
+terminated. Calling `terminate()` moves idle or running sessions to terminated;
+once terminated, a later resize-driven `start()` is a no-op. A running child is
+still signalled and reaped exactly once.
+
 This explicit lifecycle action is preferred over a timeout, because a valid
 creation may provision for an arbitrary duration, and over parsing terminal
 output, because DevPod's human-readable error text is not a stable API. The
@@ -142,7 +156,10 @@ include:
 - Successful and failed create/recreate completion behavior.
 - Cancelling an active or discovery-stalled creation clears its pane and ignores
   later completion callbacks.
+- Terminating a PTY before its first start prevents the child from launching.
 - Escape and other terminal input do not invoke the header's Cancel/Close action.
+- Open in Zed is rejected through UI, shortcut, DIDE, and direct model paths
+  unless the workspace is `Running` and outside every transient lifecycle state.
 - Explicit-ID selection and derived-ID discovery after immediate refresh.
 - Ambiguous discovery preserving the existing selection.
 - Sidebar footer and workspace-menu action availability through extracted pure
