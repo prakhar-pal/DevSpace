@@ -133,6 +133,7 @@ final class AppModel: ObservableObject {
     private let injectedShortcutActionExecutor: AppShortcutActionExecuting?
     private let pastedImageResolver: PastedImageResolving
     private let shortcutMonitorObserver: ShortcutMonitorObserving?
+    private let injectedZedURLLauncher: ((String) -> Void)?
     private lazy var shortcutActionExecutor: AppShortcutActionExecuting =
         injectedShortcutActionExecutor ?? DefaultShortcutActionExecutor(model: self)
 #if DEBUG
@@ -257,7 +258,8 @@ final class AppModel: ObservableObject {
         sshProxyResolver: SSHProxyResolving? = nil,
         shortcutActionExecutor: AppShortcutActionExecuting? = nil,
         pastedImageResolver: PastedImageResolving? = nil,
-        shortcutMonitorObserver: ShortcutMonitorObserving? = nil
+        shortcutMonitorObserver: ShortcutMonitorObserving? = nil,
+        zedLaunchURL: ((String) -> Void)? = nil
     ) {
         self.runner = runner
         self.handoffTimeout = max(0, handoffTimeout)
@@ -267,6 +269,7 @@ final class AppModel: ObservableObject {
         injectedShortcutActionExecutor = shortcutActionExecutor
         self.pastedImageResolver = pastedImageResolver ?? { AppModel.pastedImage() }
         self.shortcutMonitorObserver = shortcutMonitorObserver
+        injectedZedURLLauncher = zedLaunchURL
         notifyToken = startsRuntimeServices ? (try? Notify.loadOrCreateToken()) ?? "" : ""
         loop = PollLoop(runner: runner, interval: interval, excluded: excluded)
         let l = LayoutStore.load()
@@ -313,9 +316,15 @@ final class AppModel: ObservableObject {
             Log.write("notify: no token — listener disabled")
             return
         }
-        let l = NotifyListener(expectedToken: notifyToken) { [weak self] podID, message in
-            DispatchQueue.main.async { self?.receiveNotification(podID: podID, message: message) }
-        }
+        let l = NotifyListener(
+            expectedToken: notifyToken,
+            onNotify: { [weak self] podID, message in
+                DispatchQueue.main.async { self?.receiveNotification(podID: podID, message: message) }
+            },
+            onDide: { [weak self] payload in
+                DispatchQueue.main.async { self?.receiveDide(payload) }
+            }
+        )
         do {
             try l.start()
             listener = l
@@ -330,6 +339,49 @@ final class AppModel: ObservableObject {
     func receiveNotification(podID: String, message: String) {
         if podID != selectedID { badges.insert(podID) }
         Notifier.notify(title: name(podID), body: message, podID: podID)
+    }
+
+    /// Validate a folder-opening request against the current workspace list.
+    /// The listener has already authenticated and decoded it, but this second
+    /// boundary check prevents stale/unknown pod aliases and relative paths
+    /// from reaching the Zed launcher.
+    nonisolated static func dideWorkdir(
+        podID: String,
+        path: String,
+        knownWorkspaceIDs: Set<String>
+    ) -> String? {
+        guard !path.isEmpty,
+              path.hasPrefix("/"),
+              knownWorkspaceIDs.contains(podID),
+              (try? Devpod.validateId(podID)) != nil
+        else { return nil }
+        return path
+    }
+
+    enum ZedFallbackAction: Equatable {
+        case activateExistingSession
+        case openViaDevpod
+        case none
+    }
+
+    nonisolated static func zedFallbackAction(
+        sessionActive: Bool,
+        hasExplicitWorkdir: Bool
+    ) -> ZedFallbackAction {
+        if sessionActive { return .activateExistingSession }
+        return hasExplicitWorkdir ? .none : .openViaDevpod
+    }
+
+    func receiveDide(_ payload: DidePayload) {
+        guard let workdir = Self.dideWorkdir(
+            podID: payload.podID,
+            path: payload.path,
+            knownWorkspaceIDs: Set(workspaces.map(\.id))
+        ) else {
+            Log.write("dide: rejected unknown pod or invalid path")
+            return
+        }
+        openInZed(payload.podID, workdir: workdir)
     }
 
     /// Inject the Claude hooks after a connect. This is best-effort and must
@@ -378,12 +430,13 @@ final class AppModel: ObservableObject {
         then completion: @escaping (Bool) -> Void = { _ in }
     ) {
         let r = runner
+        let token = notifyToken
         DispatchQueue.global(qos: .utility).async {
             var sshOK = false
             do {
-                try ShellIntegration.inject(r, podID: id)
+                try ShellIntegration.inject(r, podID: id, token: token)
                 sshOK = true
-                Log.write("inject: shell integration (OSC 7) written to pod=\(id)")
+                Log.write("inject: shell integration written to pod=\(id)")
             } catch {
                 Log.write("inject: shell integration FAILED pod=\(id): \(error)")
             }
@@ -626,9 +679,21 @@ final class AppModel: ObservableObject {
     /// legacy devpod path remains only as a fallback when the `zed` CLI is
     /// not installed. Only offered for Running workspaces (Sidebar gates it).
     func openInZed(_ id: String) {
+        openInZed(id, workdir: nil)
+    }
+
+    /// Open a pod folder in Zed. A supplied `workdir` is a pod-validated
+    /// `dide` target, so it must never fall back to DevPod's default IDE
+    /// launcher (which would silently open a different folder).
+    func openInZed(_ id: String, workdir: String?) {
         guard validID(id) else { return }
+        guard workdir == nil || (workdir?.hasPrefix("/") == true && !(workdir?.isEmpty ?? true)) else {
+            Log.write("zed: rejected non-absolute explicit workdir")
+            return
+        }
         let r = runner
         let currentDirectory = activeModel(id)?.state.workingDirectory
+        let injectedZedURLLauncher = injectedZedURLLauncher
         DispatchQueue.global(qos: .userInitiated).async {
             // Always hand Zed the pod's URL: the CLI focuses the existing
             // window when the project is already open (verified live — no
@@ -639,16 +704,26 @@ final class AppModel: ObservableObject {
             // re-running the devpod provision flow while a session exists is
             // what duplicates windows.
             let sessionActive = SSH.zedSessionActive(psOutput: Self.processTable(), podID: id)
-            let workdir = SSH.zedWorkdir(
+            let targetWorkdir = workdir ?? SSH.zedWorkdir(
                 currentDirectory: currentDirectory,
                 fallback: SSH.workdir(podID: id)
             )
-            let url = SSH.zedRemoteURL(podID: id, workdir: workdir)
+            let url = SSH.zedRemoteURL(podID: id, workdir: targetWorkdir)
+            if let injectedZedURLLauncher {
+                injectedZedURLLauncher(url)
+                return
+            }
             guard let cli = Self.zedCLI() else {
-                if sessionActive {
+                switch Self.zedFallbackAction(
+                    sessionActive: sessionActive,
+                    hasExplicitWorkdir: workdir != nil
+                ) {
+                case .activateExistingSession:
                     Log.write("zed: cli not found; session for \(id) already open — activating Zed")
                     Self.activateZed()
-                } else {
+                case .none:
+                    Log.write("zed: cli not found — cannot open explicit folder \(url)")
+                case .openViaDevpod:
                     Log.write("zed: cli not found — falling back to devpod")
                     Self.openViaDevpod(id, runner: r)
                 }
@@ -662,10 +737,18 @@ final class AppModel: ObservableObject {
             proc.terminationHandler = { p in
                 if p.terminationStatus == 0 {
                     Log.write("zed: opened \(url) via \(cli)")
-                } else if sessionActive {
+                    return
+                }
+                switch Self.zedFallbackAction(
+                    sessionActive: sessionActive,
+                    hasExplicitWorkdir: workdir != nil
+                ) {
+                case .activateExistingSession:
                     Log.write("zed: \(cli) exit \(p.terminationStatus) for \(url); session open — activating instead of devpod fallback")
                     Self.activateZed()
-                } else {
+                case .none:
+                    Log.write("zed: \(cli) exit \(p.terminationStatus) for explicit folder \(url)")
+                case .openViaDevpod:
                     Log.write("zed: \(cli) exit \(p.terminationStatus) for \(url) — falling back to devpod")
                     Self.openViaDevpod(id, runner: r)
                 }
@@ -673,10 +756,16 @@ final class AppModel: ObservableObject {
             do {
                 try proc.run()
             } catch {
-                if sessionActive {
+                switch Self.zedFallbackAction(
+                    sessionActive: sessionActive,
+                    hasExplicitWorkdir: workdir != nil
+                ) {
+                case .activateExistingSession:
                     Log.write("zed: \(cli) not runnable (\(error)); session open — activating instead of devpod fallback")
                     Self.activateZed()
-                } else {
+                case .none:
+                    Log.write("zed: \(cli) not runnable (\(error)) for explicit folder \(url)")
+                case .openViaDevpod:
                     Log.write("zed: \(cli) not runnable (\(error)) — falling back to devpod")
                     Self.openViaDevpod(id, runner: r)
                 }

@@ -31,6 +31,44 @@ public struct NotifyPayload: Decodable, Equatable {
     }
 }
 
+public struct DidePayload: Decodable, Equatable {
+    public let podID: String
+    public let path: String
+    public let token: String
+
+    enum CodingKeys: String, CodingKey {
+        case podID = "pod_id"
+        case pathB64 = "path_b64"
+        case token
+    }
+
+    public init(podID: String, path: String, token: String) {
+        self.podID = podID
+        self.path = path
+        self.token = token
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        podID = try c.decode(String.self, forKey: .podID)
+        token = try c.decode(String.self, forKey: .token)
+
+        let encodedPath = try c.decode(String.self, forKey: .pathB64)
+        guard let pathData = Data(base64Encoded: encodedPath),
+              let decodedPath = String(data: pathData, encoding: .utf8),
+              !decodedPath.isEmpty,
+              (decodedPath as NSString).isAbsolutePath
+        else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .pathB64,
+                in: c,
+                debugDescription: "path_b64 must decode to a non-empty absolute UTF-8 path"
+            )
+        }
+        path = decodedPath
+    }
+}
+
 public enum Notify {
     /// Map a Claude Code hook event name to a user-facing message.
     public static func messageFor(_ event: String) -> String {
@@ -76,25 +114,40 @@ public enum Notify {
     static func parsePayload(_ body: Data) -> NotifyPayload? {
         try? JSONDecoder().decode(NotifyPayload.self, from: body)
     }
+
+    static func parseDidePayload(_ body: Data) -> DidePayload? {
+        try? JSONDecoder().decode(DidePayload.self, from: body)
+    }
 }
 
-/// Loopback HTTP listener on `SSH.listenerPort`. For each `POST /notify` whose
-/// token matches, invokes `onNotify(podID, message)`. Minimal HTTP/1.1 parsing
-/// over Network.framework (the in-pod `curl` is the only client).
+/// Loopback HTTP listener on `SSH.listenerPort` for authenticated `POST /notify`
+/// and `POST /dide` requests. Matching `/notify` payloads invoke
+/// `onNotify(podID, message)`; matching `/dide` payloads invoke `onDide` with
+/// the decoded `DidePayload`. Minimal HTTP/1.1 parsing over
+/// Network.framework (the in-pod `curl` is the only client).
 public final class NotifyListener: @unchecked Sendable {
+    private struct HTTPRequest {
+        let method: String
+        let path: String
+        let body: Data
+    }
+
     private let expectedToken: String
     private let port: UInt16
     private let onNotify: (String, String) -> Void
+    private let onDide: (DidePayload) -> Void
     private var listener: NWListener?
 
     public init(
         expectedToken: String,
         port: UInt16 = SSH.listenerPort,
-        onNotify: @escaping (String, String) -> Void
+        onNotify: @escaping (String, String) -> Void,
+        onDide: @escaping (DidePayload) -> Void = { _ in }
     ) {
         self.expectedToken = expectedToken
         self.port = port
         self.onNotify = onNotify
+        self.onDide = onDide
     }
 
     public func start() throws {
@@ -124,8 +177,8 @@ public final class NotifyListener: @unchecked Sendable {
             var buf = buffer
             if let data { buf.append(data) }
 
-            if let body = Self.completeBody(buf) {
-                self.process(body: body, conn: conn)
+            if let request = Self.completeRequest(buf) {
+                self.process(request: request, conn: conn)
                 return
             }
             if isComplete || error != nil {
@@ -138,11 +191,12 @@ public final class NotifyListener: @unchecked Sendable {
 
     /// Returns the request body once headers + Content-Length bytes have all
     /// arrived; nil if more data is needed.
-    private static func completeBody(_ buf: Data) -> Data? {
+    private static func completeRequest(_ buf: Data) -> HTTPRequest? {
         let sep = Data("\r\n\r\n".utf8)
         guard let r = buf.range(of: sep) else { return nil }
         let headerData = buf.subdata(in: buf.startIndex ..< r.lowerBound)
         let header = String(decoding: headerData, as: UTF8.self)
+        let lines = header.split(separator: "\r\n", omittingEmptySubsequences: false)
         let contentLength = header
             .split(separator: "\r\n")
             .first { $0.lowercased().hasPrefix("content-length:") }
@@ -150,18 +204,39 @@ public final class NotifyListener: @unchecked Sendable {
         let bodyStart = r.upperBound
         let available = buf.distance(from: bodyStart, to: buf.endIndex)
         guard available >= contentLength else { return nil }
-        return buf.subdata(in: bodyStart ..< buf.index(bodyStart, offsetBy: contentLength))
+        let body = buf.subdata(in: bodyStart ..< buf.index(bodyStart, offsetBy: contentLength))
+        let requestLine = lines.first?.split(separator: " ", omittingEmptySubsequences: true) ?? []
+        let method = requestLine.count > 0 ? String(requestLine[0]) : ""
+        let path = requestLine.count > 1 ? String(requestLine[1]) : ""
+        return HTTPRequest(method: method, path: path, body: body)
     }
 
-    private func process(body: Data, conn: NWConnection) {
-        if let p = Notify.parsePayload(body) {
-            if p.token == expectedToken {
-                onNotify(p.podID, Notify.messageFor(p.event))
+    private func process(request: HTTPRequest, conn: NWConnection) {
+        switch (request.method, request.path) {
+        case ("POST", "/notify"):
+            if let payload = Notify.parsePayload(request.body) {
+                if payload.token == expectedToken {
+                    onNotify(payload.podID, Notify.messageFor(payload.event))
+                } else {
+                    Log.write("notify: token mismatch — ignoring (stale hook?)")
+                }
             } else {
-                Log.write("notify: token mismatch — ignoring (stale hook?)")
+                Log.write("notify: unparseable body (ignored)")
             }
-        } else {
-            Log.write("notify: unparseable body (ignored)")
+
+        case ("POST", "/dide"):
+            if let payload = Notify.parseDidePayload(request.body) {
+                if payload.token == expectedToken {
+                    onDide(payload)
+                } else {
+                    Log.write("dide: token mismatch — ignoring")
+                }
+            } else {
+                Log.write("dide: invalid request (ignored)")
+            }
+
+        default:
+            break
         }
         let response = Data("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
         conn.send(content: response, completion: .contentProcessed { _ in conn.cancel() })

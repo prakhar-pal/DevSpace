@@ -101,6 +101,10 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
 
 ## Agent Rules
 
+- **Use conventional-commit-style branch names.** Prefix the branch with the
+  change type, followed by a concise kebab-case description; for example,
+  `feat/dide-zed-folder`, `fix/terminal-shortcut-routing`, or
+  `docs/update-contributing-guide`.
 - **Agents may commit only on a non-`main`/non-`master` branch.** Never run
   `git commit` or `git push` while checked out on `main` or `master`; create
   and use a feature branch instead.
