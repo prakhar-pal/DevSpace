@@ -108,7 +108,7 @@ final class ShortcutTests: XCTestCase {
         XCTAssertEqual(recorder.actions, [])
     }
 
-    func testA065SheetsOwnAppShortcuts() {
+    func testDevpodLifecycleSheetsOwnAppShortcuts() {
         let recorder = RecordingShortcutExecutor()
         let model = fixtureModel(executor: recorder, selectedVisibleTerminal: "wc-1")
         let event = keyEvent(characters: "r")

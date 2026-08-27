@@ -1,4 +1,4 @@
-# A065 DevPod Lifecycle Design
+# DevPod Lifecycle Design
 
 ## Goal
 
@@ -166,7 +166,7 @@ include:
   view-policy helpers where direct SwiftUI inspection is impractical.
 
 Final verification uses `make test` and `make build-dev`. The production bundle
-must not be built or stopped during A065 development.
+must not be built or stopped during DevPod lifecycle development.
 
 ## Out of Scope
 
@@ -176,4 +176,4 @@ must not be built or stopped during A065 development.
 - Multiple simultaneous creation operations.
 - Resetting workspace sources (`devpod up --reset`).
 - Changing existing Start, Stop, Delete, or Zed behavior beyond shared lifecycle
-  helpers needed by A065.
+  helpers needed by this feature.

@@ -1,4 +1,4 @@
-# A065 DevPod Lifecycle Implementation Plan
+# DevPod Lifecycle Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -212,7 +212,7 @@ swift test --filter DevpodLifecycleTests/testCreationRejectsDuplicateExplicitIDB
   --filter DevpodLifecycleTests/testCreatedWorkspaceDiscoveryUsesExplicitOrSingleNewID
 ```
 
-Expected: compilation fails because the A065 AppModel API does not exist.
+Expected: compilation fails because the DevPod lifecycle AppModel API does not exist.
 
 - [ ] **Step 3: Add the minimal published state and pure discovery logic**
 
@@ -335,7 +335,7 @@ Implement dismiss functions that clear only the failed pane/state.
 
 - [ ] **Step 8: Run `swift test --filter DevpodLifecycleTests` and verify GREEN**
 
-Expected: all A065 model tests pass with zero failures.
+Expected: all DevPod lifecycle model tests pass with zero failures.
 
 - [ ] **Step 9: Run AppModel regression suites**
 
@@ -415,7 +415,7 @@ Keep all normal workspace panes mounted under the creation overlay.
 
 - [ ] **Step 5: Run `swift test --filter DevpodLifecycleTests` and verify GREEN**
 
-Expected: all A065 form/presentation and lifecycle tests pass.
+Expected: all DevPod form/presentation and lifecycle tests pass.
 
 - [ ] **Step 6: Commit modal and main-pane presentation**
 
@@ -491,7 +491,7 @@ Expected: all selected tests pass with zero failures.
 
 ```bash
 git add Sources/App/Sidebar.swift Sources/App/Modals.swift Tests/App/SidebarTests.swift
-git commit -m "feat: expose A065 workspace actions"
+git commit -m "feat: expose devpod workspace actions"
 ```
 
 ---
@@ -502,8 +502,8 @@ git commit -m "feat: expose A065 workspace actions"
 - Verify: all files changed by Tasks 1–4
 
 **Interfaces:**
-- Consumes: complete A065 implementation.
-- Produces: verified dev bundle and clean scoped diff on `feat/a065-devpod-lifecycle`.
+- Consumes: complete DevPod lifecycle implementation.
+- Produces: verified dev bundle and clean scoped diff on the feature branch.
 
 - [ ] **Step 1: Run formatting/whitespace validation**
 
@@ -540,7 +540,7 @@ gh stack view
 ```
 
 Expected: only the pre-existing unrelated report/browser files remain dirty or
-untracked; A065 commits appear above `feat/dide-zed-folder` in the local stack.
+untracked; DevPod lifecycle commits appear above `feat/dide-zed-folder` in the local stack.
 
 - [ ] **Step 5: Request focused code review and address all Critical/Important findings**
 

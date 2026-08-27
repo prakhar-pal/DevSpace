@@ -1,4 +1,4 @@
-# A065 Creation Cancellation Implementation Plan
+# DevPod Creation Cancellation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -15,7 +15,7 @@
 - Cancel detaches the PTY exit callback before terminating the local process.
 - A late completion callback cannot recreate creation or failure state.
 - Failure output remains visible until the existing Close action is used.
-- Work on `feat/a065-devpod-lifecycle`; do not create a worktree.
+- Work on the current DevPod lifecycle feature branch; do not create a worktree.
 - Use only `make test` and `make build-dev`; never build or stop the production `DevSpace.app`.
 
 ---
@@ -117,7 +117,7 @@ git commit -m "fix: cancel active devpod creation"
 
 - [ ] **Step 1: Add the terminal-input characterization**
 
-Extend `testA065SheetsOwnAppShortcuts` after creation starts:
+Extend `testDevpodLifecycleSheetsOwnAppShortcuts` after creation starts:
 
 ```swift
 let escape = keyEvent(characters: "\u{1b}", modifiers: [])
@@ -183,7 +183,7 @@ Run:
 
 ```bash
 swift test --filter DevpodLifecycleTests
-swift test --filter ShortcutTests.testA065SheetsOwnAppShortcuts
+swift test --filter ShortcutTests.testDevpodLifecycleSheetsOwnAppShortcuts
 ```
 
 Expected: all selected tests pass with zero failures.
@@ -216,7 +216,7 @@ and a real `/bin/sleep` PTY termination test.
 
 **Interfaces:**
 - Consumes: completed Tasks 1 and 2.
-- Produces: a verified dev bundle and updated A065 PR #99.
+- Produces: a verified dev bundle and updated DevPod lifecycle PR #99.
 
 - [ ] **Step 1: Run whitespace verification**
 
@@ -250,8 +250,8 @@ git log --oneline feat/dide-zed-folder..HEAD
 gh stack view
 ```
 
-Expected: only intentional A065 commits appear above the DIDE parent, the
-working tree is clean, and A065 remains the upper PR in stack #100.
+Expected: only intentional DevPod lifecycle commits appear above the DIDE parent,
+the working tree is clean, and the DevPod lifecycle PR remains upper in stack #100.
 
 - [ ] **Step 5: Resubmit the stack**
 
