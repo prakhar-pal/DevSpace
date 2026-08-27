@@ -56,4 +56,41 @@ final class DevpodTests: XCTestCase {
         XCTAssertNoThrow(try Devpod.validateId("task-queue"))
         XCTAssertThrowsError(try Devpod.validateId(""))
     }
+
+    func testCreateRequestBuildsArgsWithOptionalID() throws {
+        let withID = try Devpod.CreateRequest(
+            repositoryURL: "  https://github.com/acme/app.git  ",
+            id: "  app-dev  "
+        )
+        XCTAssertEqual(withID.repositoryURL, "https://github.com/acme/app.git")
+        XCTAssertEqual(withID.id, "app-dev")
+        XCTAssertEqual(withID.args, [
+            "up", "--ide", "none", "--id", "app-dev", "--",
+            "https://github.com/acme/app.git",
+        ])
+
+        let derived = try Devpod.CreateRequest(
+            repositoryURL: "git@github.com:acme/app.git",
+            id: "  "
+        )
+        XCTAssertNil(derived.id)
+        XCTAssertEqual(derived.args, [
+            "up", "--ide", "none", "--", "git@github.com:acme/app.git",
+        ])
+    }
+
+    func testCreateRequestRejectsEmptyRepositoryAndInvalidID() {
+        XCTAssertThrowsError(try Devpod.CreateRequest(repositoryURL: "  ", id: nil))
+        XCTAssertThrowsError(try Devpod.CreateRequest(
+            repositoryURL: "https://github.com/acme/app.git",
+            id: "--provider"
+        ))
+    }
+
+    func testRecreateArgsUseRecreateFlagAndValidatedID() throws {
+        XCTAssertEqual(try Devpod.recreateArgs("wc-1"), [
+            "up", "--recreate", "--ide", "none", "--", "wc-1",
+        ])
+        XCTAssertThrowsError(try Devpod.recreateArgs("--provider"))
+    }
 }

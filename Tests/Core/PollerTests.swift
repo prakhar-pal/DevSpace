@@ -26,6 +26,14 @@ private struct ScriptedRunner: CommandRunning {
 }
 
 final class PollerTests: XCTestCase {
+    func testPollRevisionsIncreaseMonotonically() {
+        let revisions = PollRevisionSource()
+
+        XCTAssertEqual(revisions.next(), 1)
+        XCTAssertEqual(revisions.next(), 2)
+        XCTAssertEqual(revisions.next(), 3)
+    }
+
     func testMergeAppliesStatusAndError() throws {
         let ws = try Devpod.parseList(listJSON)
         var statuses: [String: Result<WorkspaceStatus, DevpodError>] = [:]

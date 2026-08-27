@@ -103,6 +103,92 @@ final class ActionPanelTests: XCTestCase {
         wait(for: [notLaunched], timeout: 0.1)
     }
 
+    func testDidePayloadRejectsWorkspaceWhileRecreating() {
+        let notLaunched = expectation(description: "Zed must not launch during recreation")
+        notLaunched.isInverted = true
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "docker",
+                source: "test",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            zedLaunchURL: { _ in notLaunched.fulfill() }
+        )
+        model.beginRecreate("wc-1")
+        model.confirmRecreate()
+
+        model.receiveDide(DidePayload(
+            podID: "wc-1",
+            path: "/workspace",
+            token: "ignored"
+        ))
+
+        wait(for: [notLaunched], timeout: 0.1)
+    }
+
+    func testAcceptedDideDoesNotLaunchAfterRecreationBegins() {
+        let notLaunched = expectation(description: "accepted DIDE must be invalidated")
+        notLaunched.isInverted = true
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "docker",
+                source: "test",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            zedLaunchURL: { _ in notLaunched.fulfill() }
+        )
+
+        model.receiveDide(DidePayload(
+            podID: "wc-1",
+            path: "/workspace",
+            token: "ignored"
+        ))
+        model.beginRecreate("wc-1")
+        model.confirmRecreate()
+
+        wait(for: [notLaunched], timeout: 0.1)
+    }
+
+    func testPendingLegacyFallbackDoesNotSpawnAfterRecreationBegins() {
+        let contextStarted = expectation(description: "Zed environment lookup started")
+        let notLaunched = expectation(description: "legacy fallback must be invalidated")
+        notLaunched.isInverted = true
+        let releaseContext = DispatchSemaphore(value: 0)
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "docker",
+                source: "test",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            zedLaunchContext: {
+                contextStarted.fulfill()
+                releaseContext.wait()
+                return (processTable: "", cli: nil)
+            },
+            zedDevpodLaunch: { _ in notLaunched.fulfill() }
+        )
+
+        model.openInZed("wc-1")
+        wait(for: [contextStarted], timeout: 1)
+        model.beginRecreate("wc-1")
+        model.confirmRecreate()
+        releaseContext.signal()
+
+        wait(for: [notLaunched], timeout: 0.1)
+    }
+
     func testConnectingStateRequiresAnOpenedSessionWithoutPanes() {
         XCTAssertTrue(AppModel.isConnecting(isOpened: true, hasPanes: false))
         XCTAssertFalse(AppModel.isConnecting(isOpened: false, hasPanes: false))

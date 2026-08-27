@@ -108,11 +108,44 @@ final class ShortcutTests: XCTestCase {
         XCTAssertEqual(recorder.actions, [])
     }
 
+    func testDevpodLifecycleSheetsOwnAppShortcuts() {
+        let recorder = RecordingShortcutExecutor()
+        let model = fixtureModel(executor: recorder, selectedVisibleTerminal: "wc-1")
+        let event = keyEvent(characters: "r")
+
+        model.beginCreation()
+        XCTAssertFalse(model.dispatchAppShortcut(event))
+        model.cancelCreation()
+
+        model.beginRecreate("wc-1")
+        XCTAssertFalse(model.dispatchAppShortcut(event))
+
+        model.cancelRecreate()
+        model.beginCreation()
+        model.submitCreation(
+            repositoryURL: "https://github.com/acme/new.git",
+            devpodID: ""
+        )
+        let escape = keyEvent(characters: "\u{1b}", modifiers: [])
+        XCTAssertFalse(model.handleTerminalKeyEquivalent(escape))
+        XCTAssertEqual(model.creationPhase, .running)
+        XCTAssertNotNil(model.creationPane)
+        XCTAssertFalse(model.dispatchAppShortcut(event))
+        XCTAssertEqual(recorder.actions, [])
+    }
+
     func testCommandORoutesToOpenInZedForARunningSelectedWorkspace() {
         XCTAssertEqual(AppModel.shortcutRoute(
             event: keyEvent(characters: "o"),
-            state: .fixture(selectedID: "wc-1", selectedWorkspaceIsRunning: true)
+            state: .fixture(selectedID: "wc-1", selectedWorkspaceCanOpenInZed: true)
         ), .action(.openInZed("wc-1")))
+    }
+
+    func testCommandODoesNothingWhenSelectedWorkspaceIsNotLive() {
+        XCTAssertEqual(AppModel.shortcutRoute(
+            event: keyEvent(characters: "o"),
+            state: .fixture(selectedID: "wc-1", selectedWorkspaceCanOpenInZed: false)
+        ), .handledNoOp)
     }
 
     func testCommandRConsumesAsNoOpWithoutVisibleTerminal() {
@@ -279,7 +312,7 @@ private extension AppShortcutState {
         isModalOpen: Bool = false,
         selectedID: String? = nil,
         selectedTerminalIsVisible: Bool = true,
-        selectedWorkspaceIsRunning: Bool = false,
+        selectedWorkspaceCanOpenInZed: Bool = false,
         visibleWorkspaceIDs: [String] = [],
         hasPastedImage: Bool = false
     ) -> Self {
@@ -287,7 +320,7 @@ private extension AppShortcutState {
             isModalOpen: isModalOpen,
             selectedID: selectedID,
             selectedTerminalIsVisible: selectedTerminalIsVisible,
-            selectedWorkspaceIsRunning: selectedWorkspaceIsRunning,
+            selectedWorkspaceCanOpenInZed: selectedWorkspaceCanOpenInZed,
             visibleWorkspaceIDs: visibleWorkspaceIDs,
             pastedImage: hasPastedImage ? PastedImage(data: Data([0]), ext: "png") : nil
         )

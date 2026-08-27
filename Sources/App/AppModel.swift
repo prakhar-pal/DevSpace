@@ -20,7 +20,7 @@ struct AppShortcutState {
     let isModalOpen: Bool
     let selectedID: String?
     let selectedTerminalIsVisible: Bool
-    let selectedWorkspaceIsRunning: Bool
+    let selectedWorkspaceCanOpenInZed: Bool
     let visibleWorkspaceIDs: [String]
     let pastedImage: PastedImage?
 }
@@ -76,6 +76,11 @@ private func resolveNoSSHProxyCommand(
 /// workspace session lifecycle (starting / running terminal / shutting down).
 @MainActor
 final class AppModel: ObservableObject {
+    enum CreationPhase: Equatable {
+        case running
+        case failed
+    }
+
     private final class DefaultShortcutActionExecutor: AppShortcutActionExecuting {
         weak var model: AppModel?
 
@@ -104,6 +109,11 @@ final class AppModel: ObservableObject {
     @Published var sidebarOpen = true
     @Published var renaming: String?
     @Published var guideOpen = false
+    @Published var creationSheetOpen = false
+    @Published private(set) var creationError: String?
+    @Published private(set) var creationPane: TerminalPaneModel?
+    @Published private(set) var creationPhase: CreationPhase?
+    @Published var recreateConfirmationID: String?
 
     // Persisted sidebar layout.
     @Published private(set) var order: [String] = []
@@ -115,6 +125,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var opened: Set<String> = []       // pods with an SSH terminal
     @Published private(set) var starting: Set<String> = []     // pods running `devpod up`
     @Published private(set) var shuttingDown: Set<String> = [] // pods running `devpod stop`
+    @Published private(set) var recreating: Set<String> = []
+    @Published private(set) var recreateFailures: Set<String> = []
     @Published private var terminalHandoffs: [String: TerminalHandoffState] = [:]
     /// PTY-backed panes per pod (a devpod up/stop log, or one or more SSH
     /// terminals). Terminals are tabs: index 0 is the primary session (it
@@ -125,6 +137,7 @@ final class AppModel: ObservableObject {
 
     private let runner: CommandRunning
     private let loop: PollLoop
+    private let pollRevisionSource: PollRevisionSource
     private let excluded = ExcludedIDs()
     private let notifyToken: String
     private let handoffTimeout: TimeInterval
@@ -134,6 +147,8 @@ final class AppModel: ObservableObject {
     private let pastedImageResolver: PastedImageResolving
     private let shortcutMonitorObserver: ShortcutMonitorObserving?
     private let injectedZedURLLauncher: ((String) -> Void)?
+    private let injectedZedLaunchContext: (() -> (processTable: String, cli: String?))?
+    private let injectedZedDevpodLauncher: (([String]) -> Void)?
     private lazy var shortcutActionExecutor: AppShortcutActionExecuting =
         injectedShortcutActionExecutor ?? DefaultShortcutActionExecutor(model: self)
 #if DEBUG
@@ -158,6 +173,18 @@ final class AppModel: ObservableObject {
     /// The active primary SSH resolution attempt for each pod. A completion
     /// may mount only if it still owns this generation.
     private var sshConnectionGenerations: [String: UUID] = [:]
+    /// The latest Open-in-Zed request accepted for each workspace. Lifecycle
+    /// transitions invalidate the generation before delayed launch/fallback work.
+    private var zedRequestGenerations: [String: UUID] = [:]
+    private var creationBeforeIDs: Set<String> = []
+    private var creationExplicitID: String?
+    private var creationPreviousSelection: String?
+    private var creationGeneration: UUID?
+    private var creationAwaitingRefresh = false
+    private var creationDiscoveryMissCount = 0
+    private var creationLastMissRevision: UInt64?
+    private var lastAppliedPollRevision: UInt64 = 0
+    private static let maxCreationDiscoveryMisses = 3
 
     enum TerminalHandoffAction: Equatable {
         case revealOriginal
@@ -259,9 +286,14 @@ final class AppModel: ObservableObject {
         shortcutActionExecutor: AppShortcutActionExecuting? = nil,
         pastedImageResolver: PastedImageResolving? = nil,
         shortcutMonitorObserver: ShortcutMonitorObserving? = nil,
-        zedLaunchURL: ((String) -> Void)? = nil
+        zedLaunchURL: ((String) -> Void)? = nil,
+        zedLaunchContext: (() -> (processTable: String, cli: String?))? = nil,
+        zedDevpodLaunch: (([String]) -> Void)? = nil,
+        pollRevisionSource: PollRevisionSource? = nil
     ) {
+        let revisions = pollRevisionSource ?? PollRevisionSource()
         self.runner = runner
+        self.pollRevisionSource = revisions
         self.handoffTimeout = max(0, handoffTimeout)
         self.handoffTimeoutScheduler = handoffTimeoutScheduler
         self.sshProxyResolver = sshProxyResolver
@@ -270,8 +302,15 @@ final class AppModel: ObservableObject {
         self.pastedImageResolver = pastedImageResolver ?? { AppModel.pastedImage() }
         self.shortcutMonitorObserver = shortcutMonitorObserver
         injectedZedURLLauncher = zedLaunchURL
+        injectedZedLaunchContext = zedLaunchContext
+        injectedZedDevpodLauncher = zedDevpodLaunch
         notifyToken = startsRuntimeServices ? (try? Notify.loadOrCreateToken()) ?? "" : ""
-        loop = PollLoop(runner: runner, interval: interval, excluded: excluded)
+        loop = PollLoop(
+            runner: runner,
+            interval: interval,
+            excluded: excluded,
+            revisions: revisions
+        )
         let l = LayoutStore.load()
         order = l.order
         hidden = l.hidden
@@ -282,8 +321,8 @@ final class AppModel: ObservableObject {
         workspaces = initialWorkspaces
         updateExcluded() // didSet doesn't fire for init assignments
         guard startsRuntimeServices else { return }
-        loop.start { [weak self] views in
-            DispatchQueue.main.async { self?.apply(views) }
+        loop.start { [weak self] update in
+            DispatchQueue.main.async { self?.receivePollUpdate(update) }
         }
         startNotifyListener()
         Notifier.requestPermission()
@@ -455,9 +494,21 @@ final class AppModel: ObservableObject {
 
     // MARK: - Poll updates
 
-    private func apply(_ views: [WorkspaceView]) {
-        notifyStateTransitions(views)
+    func receivePollUpdate(_ update: PollUpdate) {
+        guard update.revision >= lastAppliedPollRevision else { return }
+        lastAppliedPollRevision = update.revision
+        apply(update.views, reconcilesLifecycle: update.hasFreshStatuses)
+        if creationAwaitingRefresh {
+            resolveCreation(after: update.views, revision: update.revision)
+        }
+    }
+
+    private func apply(_ views: [WorkspaceView], reconcilesLifecycle: Bool = true) {
+        if reconcilesLifecycle { notifyStateTransitions(views) }
         workspaces = views
+        for id in zedRequestGenerations.keys.filter({ !canOpenInZed($0) }) {
+            zedRequestGenerations[id] = nil
+        }
         let ids = views.map(\.id)
         let newOrder = SidebarLayout.normalizeOrder(order, ids: ids)
         let newHidden = SidebarLayout.pruneHidden(hidden, ids: ids)
@@ -465,7 +516,7 @@ final class AppModel: ObservableObject {
         if newOrder != order { order = newOrder; changed = true }
         if newHidden != hidden { hidden = newHidden; changed = true }
         if changed { persist() }
-        reconcileLifecycle()
+        if reconcilesLifecycle { reconcileLifecycle() }
     }
 
     /// Notify on definitive devpod state transitions (Stopped→Running and
@@ -550,6 +601,13 @@ final class AppModel: ObservableObject {
         )
     }
 
+    func canOpenInZed(_ id: String) -> Bool {
+        byID[id]?.state == "Running"
+            && !starting.contains(id)
+            && !shuttingDown.contains(id)
+            && !recreating.contains(id)
+    }
+
     func name(_ id: String) -> String { aliases[id] ?? id }
 
     /// The bundle's display name — "DevSpaceDev" for dev builds, "DevSpace"
@@ -617,6 +675,224 @@ final class AppModel: ObservableObject {
 
     // MARK: - Session lifecycle actions
 
+    func beginCreation() {
+        guard creationPhase == nil else { return }
+        creationError = nil
+        creationSheetOpen = true
+    }
+
+    func cancelCreation() {
+        creationError = nil
+        creationSheetOpen = false
+    }
+
+    func submitCreation(repositoryURL: String, devpodID: String) {
+        guard creationPhase == nil else { return }
+        do {
+            let request = try Devpod.CreateRequest(repositoryURL: repositoryURL, id: devpodID)
+            if let id = request.id, byID[id] != nil {
+                creationError = "A workspace named \(id) already exists."
+                return
+            }
+            creationBeforeIDs = Set(workspaces.map(\.id))
+            creationExplicitID = request.id
+            creationPreviousSelection = selectedID
+            creationError = nil
+            creationPhase = .running
+            let generation = UUID()
+            creationGeneration = generation
+            let pane = TerminalPaneModel(command: "devpod", args: request.args)
+            pane.onExit = { [weak self] code in
+                self?.creationProcessExited(code, generation: generation)
+            }
+            creationPane = pane
+            creationSheetOpen = false
+        } catch let error as DevpodError {
+            creationError = error.message
+        } catch {
+            creationError = error.localizedDescription
+        }
+    }
+
+    nonisolated static func createdWorkspaceID(
+        explicitID: String?,
+        before: Set<String>,
+        after: Set<String>
+    ) -> String? {
+        if let explicitID {
+            return after.contains(explicitID) ? explicitID : nil
+        }
+        let created = after.subtracting(before)
+        return created.count == 1 ? created.first : nil
+    }
+
+    private func creationProcessExited(_ exitCode: Int32, generation: UUID) {
+        guard creationGeneration == generation else { return }
+        guard exitCode == 0 else {
+            completeCreation(
+                exitCode: exitCode,
+                refreshedViews: nil,
+                generation: generation
+            )
+            return
+        }
+        let revision = pollRevisionSource.next()
+        creationAwaitingRefresh = true
+        lastAppliedPollRevision = max(lastAppliedPollRevision, revision)
+        let runner = runner
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let views = try? Poller.pollOnce(runner)
+            DispatchQueue.main.async {
+                self?.completeCreation(
+                    exitCode: exitCode,
+                    refreshedViews: views,
+                    refreshRevision: revision,
+                    generation: generation
+                )
+            }
+        }
+    }
+
+    func completeCreation(
+        exitCode: Int32,
+        refreshedViews: [WorkspaceView]?,
+        refreshRevision: UInt64? = nil,
+        generation: UUID? = nil
+    ) {
+        if let generation, creationGeneration != generation { return }
+        guard creationPhase != nil else { return }
+        guard exitCode == 0 else {
+            creationPhase = .failed
+            return
+        }
+
+        creationAwaitingRefresh = true
+        if let refreshRevision {
+            lastAppliedPollRevision = max(lastAppliedPollRevision, refreshRevision)
+        }
+        if let refreshedViews {
+            if let refreshRevision {
+                receivePollUpdate(PollUpdate(revision: refreshRevision, views: refreshedViews))
+            } else {
+                apply(refreshedViews)
+                resolveCreation(after: refreshedViews, revision: nil)
+            }
+        }
+    }
+
+    private func resolveCreation(after refreshedViews: [WorkspaceView], revision: UInt64?) {
+        guard creationAwaitingRefresh else { return }
+        let afterIDs = Set(refreshedViews.map(\.id))
+        if let explicitID = creationExplicitID {
+            // A successful list can still lag behind the completed `up`.
+            guard afterIDs.contains(explicitID) else {
+                finishCreationIfDiscoveryExhausted(revision: revision)
+                return
+            }
+            select(explicitID)
+        } else {
+            let createdIDs = afterIDs.subtracting(creationBeforeIDs)
+            guard !createdIDs.isEmpty else {
+                finishCreationIfDiscoveryExhausted(revision: revision)
+                return
+            }
+            if createdIDs.count == 1, let createdID = createdIDs.first {
+                select(createdID)
+            } else {
+                selectedID = creationPreviousSelection
+            }
+        }
+        clearCreationSession()
+    }
+
+    private func finishCreationIfDiscoveryExhausted(revision: UInt64?) {
+        if let revision {
+            guard creationLastMissRevision != revision else { return }
+            creationLastMissRevision = revision
+        }
+        creationDiscoveryMissCount += 1
+        guard creationDiscoveryMissCount >= Self.maxCreationDiscoveryMisses else { return }
+        selectedID = creationPreviousSelection
+        clearCreationSession()
+    }
+
+    func dismissCreationFailure() {
+        guard creationPhase == .failed else { return }
+        clearCreationSession()
+    }
+
+    func cancelActiveCreation() {
+        guard creationPhase == .running else { return }
+        selectedID = creationPreviousSelection
+        clearCreationSession()
+    }
+
+    private func clearCreationSession() {
+        creationPane?.onExit = nil
+        creationPane?.terminate()
+        creationPane = nil
+        creationPhase = nil
+        creationBeforeIDs = []
+        creationExplicitID = nil
+        creationPreviousSelection = nil
+        creationGeneration = nil
+        creationAwaitingRefresh = false
+        creationDiscoveryMissCount = 0
+        creationLastMissRevision = nil
+    }
+
+    func beginRecreate(_ id: String) {
+        guard validID(id), byID[id] != nil,
+              !starting.contains(id), !shuttingDown.contains(id), !recreating.contains(id)
+        else { return }
+        recreateConfirmationID = id
+    }
+
+    func cancelRecreate() {
+        recreateConfirmationID = nil
+    }
+
+    func confirmRecreate() {
+        guard let id = recreateConfirmationID else { return }
+        recreateConfirmationID = nil
+        guard validID(id), byID[id] != nil,
+              !starting.contains(id), !shuttingDown.contains(id), !recreating.contains(id),
+              let args = try? Devpod.recreateArgs(id)
+        else { return }
+
+        invalidateZedRequest(id)
+        invalidateSSHConnection(id)
+        cancelShellIntegrationHandoff(id)
+        opened.remove(id)
+        autoConnect.remove(id)
+        closePane(id)
+        recreateFailures.remove(id)
+        recreating.insert(id)
+        select(id)
+
+        let pane = TerminalPaneModel(command: "devpod", args: args)
+        pane.onExit = { [weak self] code in self?.completeRecreate(id, exitCode: code) }
+        setPanes(id, [pane])
+    }
+
+    func completeRecreate(_ id: String, exitCode: Int32) {
+        guard recreating.remove(id) != nil else { return }
+        // Reject any poll that began before this lifecycle command completed.
+        lastAppliedPollRevision = max(lastAppliedPollRevision, pollRevisionSource.next())
+        if exitCode == 0 {
+            recreateFailures.remove(id)
+            completeSuccessfulUp(id)
+        } else {
+            autoConnect.remove(id)
+            recreateFailures.insert(id)
+        }
+    }
+
+    func dismissRecreateFailure(_ id: String) {
+        guard recreateFailures.remove(id) != nil else { return }
+        closePane(id)
+    }
+
     /// Defense-in-depth: reject ids that could smuggle CLI flags into an exec
     /// before they reach argv (ids originate from `devpod list`). Mirrors the
     /// validate_id guard the Rust command handlers apply.
@@ -628,6 +904,7 @@ final class AppModel: ObservableObject {
 
     func start(_ id: String) {
         guard validID(id) else { return }
+        invalidateZedRequest(id)
         invalidateSSHConnection(id)
         select(id)
         starting.insert(id)
@@ -640,6 +917,10 @@ final class AppModel: ObservableObject {
     /// pod Running so the SSH terminal mounts; the next poll confirms.
     private func onUpFinished(_ id: String) {
         starting.remove(id)
+        completeSuccessfulUp(id)
+    }
+
+    private func completeSuccessfulUp(_ id: String) {
         autoConnect.insert(id) // user-initiated start: a session is wanted
         closePane(id)
         if let i = workspaces.firstIndex(where: { $0.id == id }) {
@@ -653,11 +934,13 @@ final class AppModel: ObservableObject {
     }
 
     func stop(_ id: String) {
-        guard validID(id) else { return }
+        guard validID(id), !recreating.contains(id) else { return }
+        invalidateZedRequest(id)
         invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
         opened.remove(id)
         autoConnect.remove(id)
+        recreateFailures.remove(id)
         closePane(id)
         shuttingDown.insert(id)
         let pane = TerminalPaneModel(command: "devpod", args: Devpod.stopArgs(id))
@@ -666,6 +949,7 @@ final class AppModel: ObservableObject {
 
     func delete(_ id: String) {
         guard validID(id) else { return }
+        invalidateZedRequest(id)
         invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
         let r = runner
@@ -686,15 +970,16 @@ final class AppModel: ObservableObject {
     /// `dide` target, so it must never fall back to DevPod's default IDE
     /// launcher (which would silently open a different folder).
     func openInZed(_ id: String, workdir: String?) {
-        guard validID(id) else { return }
+        guard validID(id), canOpenInZed(id) else { return }
         guard workdir == nil || (workdir?.hasPrefix("/") == true && !(workdir?.isEmpty ?? true)) else {
             Log.write("zed: rejected non-absolute explicit workdir")
             return
         }
-        let r = runner
+        let generation = UUID()
+        zedRequestGenerations[id] = generation
         let currentDirectory = activeModel(id)?.state.workingDirectory
-        let injectedZedURLLauncher = injectedZedURLLauncher
-        DispatchQueue.global(qos: .userInitiated).async {
+        let injectedZedLaunchContext = injectedZedLaunchContext
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             // Always hand Zed the pod's URL: the CLI focuses the existing
             // window when the project is already open (verified live — no
             // duplicate workspace is created). App-level activation, the old
@@ -703,74 +988,123 @@ final class AppModel: ObservableObject {
             // workspace). The session check now only guards the fallbacks:
             // re-running the devpod provision flow while a session exists is
             // what duplicates windows.
-            let sessionActive = SSH.zedSessionActive(psOutput: Self.processTable(), podID: id)
+            let context = injectedZedLaunchContext?()
+                ?? (processTable: Self.processTable(), cli: Self.zedCLI())
+            let sessionActive = SSH.zedSessionActive(psOutput: context.processTable, podID: id)
             let targetWorkdir = workdir ?? SSH.zedWorkdir(
                 currentDirectory: currentDirectory,
                 fallback: SSH.workdir(podID: id)
             )
             let url = SSH.zedRemoteURL(podID: id, workdir: targetWorkdir)
-            if let injectedZedURLLauncher {
-                injectedZedURLLauncher(url)
-                return
-            }
-            guard let cli = Self.zedCLI() else {
-                switch Self.zedFallbackAction(
+            DispatchQueue.main.async {
+                self?.launchZedRequest(
+                    id: id,
+                    workdir: workdir,
+                    url: url,
                     sessionActive: sessionActive,
-                    hasExplicitWorkdir: workdir != nil
-                ) {
-                case .activateExistingSession:
-                    Log.write("zed: cli not found; session for \(id) already open — activating Zed")
-                    Self.activateZed()
-                case .none:
-                    Log.write("zed: cli not found — cannot open explicit folder \(url)")
-                case .openViaDevpod:
-                    Log.write("zed: cli not found — falling back to devpod")
-                    Self.openViaDevpod(id, runner: r)
-                }
-                return
+                    cli: context.cli,
+                    generation: generation
+                )
             }
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: cli)
-            proc.arguments = [url]
-            // Observe the exit asynchronously — a hung zed process must not
-            // pin a shared global-QoS worker the way a blocking wait would.
-            proc.terminationHandler = { p in
-                if p.terminationStatus == 0 {
+        }
+    }
+
+    private func launchZedRequest(
+        id: String,
+        workdir: String?,
+        url: String,
+        sessionActive: Bool,
+        cli: String?,
+        generation: UUID
+    ) {
+        guard isCurrentZedRequest(id, generation: generation) else { return }
+        if let injectedZedURLLauncher {
+            injectedZedURLLauncher(url)
+            return
+        }
+        guard let cli else {
+            performZedFallback(
+                id: id,
+                url: url,
+                sessionActive: sessionActive,
+                hasExplicitWorkdir: workdir != nil,
+                generation: generation,
+                reason: "cli not found"
+            )
+            return
+        }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: cli)
+        proc.arguments = [url]
+        // `Process.run()` returns after launch, so doing it on the main actor
+        // makes the final lifecycle check and external launch one serialized
+        // action. Process completion remains asynchronous.
+        proc.terminationHandler = { [weak self] p in
+            DispatchQueue.main.async {
+                guard p.terminationStatus != 0 else {
                     Log.write("zed: opened \(url) via \(cli)")
                     return
                 }
-                switch Self.zedFallbackAction(
+                self?.performZedFallback(
+                    id: id,
+                    url: url,
                     sessionActive: sessionActive,
-                    hasExplicitWorkdir: workdir != nil
-                ) {
-                case .activateExistingSession:
-                    Log.write("zed: \(cli) exit \(p.terminationStatus) for \(url); session open — activating instead of devpod fallback")
-                    Self.activateZed()
-                case .none:
-                    Log.write("zed: \(cli) exit \(p.terminationStatus) for explicit folder \(url)")
-                case .openViaDevpod:
-                    Log.write("zed: \(cli) exit \(p.terminationStatus) for \(url) — falling back to devpod")
-                    Self.openViaDevpod(id, runner: r)
-                }
-            }
-            do {
-                try proc.run()
-            } catch {
-                switch Self.zedFallbackAction(
-                    sessionActive: sessionActive,
-                    hasExplicitWorkdir: workdir != nil
-                ) {
-                case .activateExistingSession:
-                    Log.write("zed: \(cli) not runnable (\(error)); session open — activating instead of devpod fallback")
-                    Self.activateZed()
-                case .none:
-                    Log.write("zed: \(cli) not runnable (\(error)) for explicit folder \(url)")
-                case .openViaDevpod:
-                    Log.write("zed: \(cli) not runnable (\(error)) — falling back to devpod")
-                    Self.openViaDevpod(id, runner: r)
-                }
+                    hasExplicitWorkdir: workdir != nil,
+                    generation: generation,
+                    reason: "\(cli) exit \(p.terminationStatus)"
+                )
             }
         }
+        do {
+            try proc.run()
+        } catch {
+            performZedFallback(
+                id: id,
+                url: url,
+                sessionActive: sessionActive,
+                hasExplicitWorkdir: workdir != nil,
+                generation: generation,
+                reason: "\(cli) not runnable (\(error))"
+            )
+        }
+    }
+
+    private func performZedFallback(
+        id: String,
+        url: String,
+        sessionActive: Bool,
+        hasExplicitWorkdir: Bool,
+        generation: UUID,
+        reason: String
+    ) {
+        guard isCurrentZedRequest(id, generation: generation) else { return }
+        switch Self.zedFallbackAction(
+            sessionActive: sessionActive,
+            hasExplicitWorkdir: hasExplicitWorkdir
+        ) {
+        case .activateExistingSession:
+            Log.write("zed: \(reason) for \(url); session open — activating instead of devpod fallback")
+            Self.activateZed()
+        case .none:
+            Log.write("zed: \(reason) for explicit folder \(url)")
+        case .openViaDevpod:
+            Log.write("zed: \(reason) for \(url) — falling back to devpod")
+            let args = Devpod.ideArgs(id, ide: "zed")
+            if let injectedZedDevpodLauncher {
+                injectedZedDevpodLauncher(args)
+            } else {
+                Self.launchDevpodIDE(args)
+            }
+        }
+    }
+
+    private func isCurrentZedRequest(_ id: String, generation: UUID) -> Bool {
+        zedRequestGenerations[id] == generation && canOpenInZed(id)
+    }
+
+    private func invalidateZedRequest(_ id: String) {
+        zedRequestGenerations[id] = nil
     }
 
     /// The current process table (`ps axww -o command=`), for detecting an
@@ -801,11 +1135,23 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
     }
 
-    /// Legacy fallback: `devpod up --ide zed` (slow — re-runs the up flow).
-    private nonisolated static func openViaDevpod(_ id: String, runner: CommandRunning) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            guard (try? Devpod.validateIde("zed")) != nil else { return }
-            _ = try? runner.run(Devpod.ideArgs(id, ide: "zed"))
+    /// Legacy fallback: spawn `devpod up --ide zed` without waiting for the
+    /// slow up flow. This is called on the main actor so generation validation
+    /// and process creation cannot be separated by a lifecycle transition.
+    private static func launchDevpodIDE(_ args: [String]) {
+        guard (try? Devpod.validateIde("zed")) != nil else { return }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        proc.arguments = ["devpod"] + args
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { p in
+            Log.write("zed: devpod fallback exited \(p.terminationStatus)")
+        }
+        do {
+            try proc.run()
+        } catch {
+            Log.write("zed: devpod fallback failed to spawn: \(error)")
         }
     }
 
@@ -985,7 +1331,9 @@ final class AppModel: ObservableObject {
 
     private func openSSHIfNeeded(_ id: String, startedAt: UInt64? = nil) {
         guard validID(id) else { return }
-        guard !opened.contains(id), !starting.contains(id), !shuttingDown.contains(id) else { return }
+        guard !opened.contains(id), !starting.contains(id), !shuttingDown.contains(id),
+              !recreating.contains(id)
+        else { return }
         let attemptStartedAt = startedAt ?? DispatchTime.now().uptimeNanoseconds
         let generation = UUID()
         sshConnectionGenerations[id] = generation
@@ -1159,6 +1507,15 @@ final class AppModel: ObservableObject {
         return list.first { $0.id == activePane[id] } ?? list[0]
     }
 
+    /// The terminal surface that should own keyboard focus. An app-wide
+    /// creation log visually covers the selected workspace, so its PTY must
+    /// take precedence over the otherwise-active workspace terminal.
+    func focusTargetModel() -> TerminalPaneModel? {
+        if let creationPane { return creationPane }
+        guard let selectedID, isTerminalVisible(selectedID) else { return nil }
+        return activeModel(selectedID)
+    }
+
     private func makeTerminal(
         _ id: String,
         tunnel: Bool,
@@ -1240,10 +1597,12 @@ final class AppModel: ObservableObject {
 
     // MARK: - Phase (drives the main pane)
 
-    enum Phase { case starting, shuttingDown, terminal, none }
+    enum Phase { case starting, recreating, recreateFailed, shuttingDown, terminal, none }
 
     func phase(of id: String) -> Phase {
         if starting.contains(id) { return .starting }
+        if recreating.contains(id) { return .recreating }
+        if recreateFailures.contains(id) { return .recreateFailed }
         if shuttingDown.contains(id) { return .shuttingDown }
         if opened.contains(id), !(panes[id] ?? []).isEmpty { return .terminal }
         return .none
@@ -1290,7 +1649,7 @@ final class AppModel: ObservableObject {
     ) -> Bool {
         guard isSelected else { return false }
         switch phase {
-        case .starting, .shuttingDown: return true
+        case .starting, .recreating, .recreateFailed, .shuttingDown: return true
         case .terminal: return isTerminalVisible
         case .none: return false
         }
@@ -1384,7 +1743,7 @@ final class AppModel: ObservableObject {
             return .action(.reload(id))
         }
         if chars == "o" {
-            guard let id = state.selectedID, state.selectedWorkspaceIsRunning else {
+            guard let id = state.selectedID, state.selectedWorkspaceCanOpenInZed else {
                 return .handledNoOp
             }
             return .action(.openInZed(id))
@@ -1410,7 +1769,11 @@ final class AppModel: ObservableObject {
 
     func dispatchAppShortcut(_ event: NSEvent) -> Bool {
         let id = selectedID
-        let isModalOpen = renaming != nil || guideOpen
+        let isModalOpen = renaming != nil
+            || guideOpen
+            || creationSheetOpen
+            || recreateConfirmationID != nil
+            || creationPhase != nil
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
         let pastedImage = !isModalOpen && flags == [.command] && event.charactersIgnoringModifiers == "v"
             ? pastedImageResolver()
@@ -1421,7 +1784,7 @@ final class AppModel: ObservableObject {
             selectedTerminalIsVisible: id.map {
                 phase(of: $0) == .terminal && isTerminalVisible($0)
             } ?? false,
-            selectedWorkspaceIsRunning: id.flatMap { byID[$0] }?.state == "Running",
+            selectedWorkspaceCanOpenInZed: id.map(canOpenInZed) ?? false,
             visibleWorkspaceIDs: split.visible.map(\.id),
             pastedImage: pastedImage
         )

@@ -1,5 +1,87 @@
 import SwiftUI
 
+struct NewWorkspaceSheet: View {
+    @State private var repositoryURL = ""
+    @State private var devpodID = ""
+    let error: String?
+    let isCreating: Bool
+    let onSubmit: (String, String) -> Void
+    let onCancel: () -> Void
+
+    static func canSubmit(repositoryURL: String, isCreating: Bool) -> Bool {
+        !repositoryURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !isCreating
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Create DevPod workspace").font(.headline)
+                Text("Provision a workspace from a Git repository.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Repository URL").font(.caption).foregroundStyle(.secondary)
+                TextField("https://github.com/organization/repository.git", text: $repositoryURL)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("DevPod ID (optional)").font(.caption).foregroundStyle(.secondary)
+                TextField("Derived from repository when empty", text: $devpodID)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            if let error {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Create") { onSubmit(repositoryURL, devpodID) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!Self.canSubmit(
+                        repositoryURL: repositoryURL,
+                        isCreating: isCreating
+                    ))
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+    }
+}
+
+struct RecreateWorkspaceSheet: View {
+    let workspaceID: String
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Recreate \(workspaceID)?").font(.headline)
+            Text("DevPod will replace the existing container and provision the workspace again. The current terminal session will disconnect.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Recreate", role: .destructive, action: onConfirm)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 430)
+    }
+}
+
 /// Port of src/components/RenameModal.tsx.
 struct RenameSheet: View {
     let workspaceID: String
@@ -68,8 +150,10 @@ struct GuideSheet: View {
                         row("Blue dot", "Claude Code in that pod posted a notification. Selecting the workspace clears it.")
                     }
                     section("Start & stop") {
+                        row("New workspace", "Click New, enter a repository URL, and optionally choose a DevPod ID. The provisioning log streams in the main pane.")
                         row("Start", "Select a stopped workspace and press Start. The live devpod up log streams until it's ready, then the terminal opens.")
                         row("Stop", "Hover a running workspace and click the ⬛ stop button, or use Stop on its status card. Exiting a shell only disconnects — the workspace keeps running.")
+                        row("Recreate", "Open a workspace's … menu → Recreate…, confirm, and watch DevPod replace the container before reconnecting.")
                     }
                     section("The terminal") {
                         row("Auto-connect", "Workspaces that are running when DevSpace launches (or that you start) SSH in automatically. After you disconnect, the status card's Connect reopens the session — DevSpace never wakes a stopped workspace on its own.")

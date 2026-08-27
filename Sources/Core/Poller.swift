@@ -30,6 +30,39 @@ public struct WorkspaceView: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A poll cycle's result, tagged when the cycle starts so consumers can reject
+/// an older result that arrives after a lifecycle command has completed.
+public struct PollUpdate: Equatable, Sendable {
+    public let revision: UInt64
+    public let views: [WorkspaceView]
+    public let hasFreshStatuses: Bool
+
+    public init(
+        revision: UInt64,
+        views: [WorkspaceView],
+        hasFreshStatuses: Bool = true
+    ) {
+        self.revision = revision
+        self.views = views
+        self.hasFreshStatuses = hasFreshStatuses
+    }
+}
+
+/// Shared monotonic sequence for background polls and lifecycle refreshes.
+public final class PollRevisionSource: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+
+    public init() {}
+
+    public func next() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        value &+= 1
+        return value
+    }
+}
+
 /// How many `devpod status` calls run concurrently per poll cycle.
 let maxConcurrentStatus = 4
 
@@ -127,19 +160,27 @@ public final class PollLoop: @unchecked Sendable {
     private let runner: CommandRunning
     private let interval: TimeInterval
     private let excluded: ExcludedIDs
+    private let revisions: PollRevisionSource
     private let stop = StopFlag()
 
-    public init(runner: CommandRunning, interval: TimeInterval = 5, excluded: ExcludedIDs = ExcludedIDs()) {
+    public init(
+        runner: CommandRunning,
+        interval: TimeInterval = 5,
+        excluded: ExcludedIDs = ExcludedIDs(),
+        revisions: PollRevisionSource = PollRevisionSource()
+    ) {
         self.runner = runner
         self.interval = interval
         self.excluded = excluded
+        self.revisions = revisions
     }
 
-    public func start(emit: @escaping @Sendable ([WorkspaceView]) -> Void) {
+    public func start(emit: @escaping @Sendable (PollUpdate) -> Void) {
         guard !stop.isSet else { return }
         let runner = self.runner
         let interval = self.interval
         let excluded = self.excluded
+        let revisions = self.revisions
         let stop = self.stop
         Thread.detachNewThread {
             var cache: [String: Result<WorkspaceStatus, DevpodError>] = [:]
@@ -147,13 +188,22 @@ public final class PollLoop: @unchecked Sendable {
             // twice) to suppress k8s' transient Running-after-stop reports.
             var debouncer = RunningDebouncer()
             while !stop.isSet {
+                let revision = revisions.next()
                 if let workspaces = try? Devpod.list(runner) {
-                    emit(Poller.merge(workspaces, cache))
+                    emit(PollUpdate(
+                        revision: revision,
+                        views: Poller.merge(workspaces, cache),
+                        hasFreshStatuses: false
+                    ))
                     // Skip `devpod status` for excluded (hidden) workspaces.
                     let skip = excluded.snapshot()
                     let toFetch = workspaces.filter { !skip.contains($0.id) }
                     cache = debouncer.filter(Poller.fetchStatuses(runner, toFetch))
-                    emit(Poller.merge(workspaces, cache))
+                    emit(PollUpdate(
+                        revision: revision,
+                        views: Poller.merge(workspaces, cache),
+                        hasFreshStatuses: true
+                    ))
                 }
                 Thread.sleep(forTimeInterval: interval)
             }

@@ -9,11 +9,18 @@ import CPTY
 /// (libghostty in this build renders + handles input but does not own a PTY).
 /// It is also the foundation the SSH session in Stack 6 builds on.
 public final class PTYSession: @unchecked Sendable {
+    private enum Lifecycle {
+        case idle
+        case running
+        case terminated
+    }
+
     private let lock = NSLock()
     private var masterFD: Int32 = -1
     private var childPID: pid_t = -1
     private var readSource: DispatchSourceRead?
-    private var started = false
+    private var lifecycle: Lifecycle = .idle
+    private var reapStarted = false
 
     /// Called with raw bytes read from the PTY (on a background queue).
     public var onOutput: ((Data) -> Void)?
@@ -33,8 +40,11 @@ public final class PTYSession: @unchecked Sendable {
         extraEnv: [String: String] = [:]
     ) {
         lock.lock()
-        if started { lock.unlock(); return }
-        started = true
+        guard lifecycle == .idle else {
+            lock.unlock()
+            return
+        }
+        lifecycle = .running
         lock.unlock()
 
         // Build argv/envp in the PARENT so the child only makes async-signal-safe
@@ -48,6 +58,9 @@ public final class PTYSession: @unchecked Sendable {
         if pid < 0 {
             Self.freeCArray(argv)
             Self.freeCArray(envp)
+            lock.lock()
+            lifecycle = .terminated
+            lock.unlock()
             onExit?(-1)
             return
         }
@@ -86,9 +99,16 @@ public final class PTYSession: @unchecked Sendable {
     }
 
     public func terminate() {
-        lock.lock(); let pid = childPID; lock.unlock()
+        lock.lock()
+        lifecycle = .terminated
+        let pid = childPID
+        let source = readSource
+        lock.unlock()
         if pid > 0 { kill(pid, SIGTERM) }
-        readSource?.cancel()
+        source?.cancel()
+        if pid > 0 {
+            DispatchQueue.global(qos: .utility).async { self.reap() }
+        }
     }
 
     // MARK: - Reading
@@ -124,9 +144,22 @@ public final class PTYSession: @unchecked Sendable {
     }
 
     private func reap() {
-        lock.lock(); let pid = childPID; lock.unlock()
+        lock.lock()
+        guard !reapStarted else {
+            lock.unlock()
+            return
+        }
+        reapStarted = true
+        let pid = childPID
+        lock.unlock()
+
+        guard pid > 0 else { return }
         var status: Int32 = 0
-        if pid > 0 { waitpid(pid, &status, 0) }
+        while waitpid(pid, &status, 0) < 0, errno == EINTR {}
+        lock.lock()
+        childPID = -1
+        lifecycle = .terminated
+        lock.unlock()
         // Decode wait status into a conventional exit code.
         let code: Int32 = (status & 0x7F) == 0
             ? (status >> 8) & 0xFF
