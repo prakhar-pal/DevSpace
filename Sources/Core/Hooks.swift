@@ -14,8 +14,8 @@ public enum Hooks {
     ]
 
     static func hookCommand(_ eventLabel: String, podID: String, token: String) -> String {
-        let port = SSH.sharedPodForwardFallback
-        return "port=\"${DEVSPACE_POD_FORWARD_PORT:-\(port)}\"; curl -s -m 2 -X POST "
+        return PodPortRouting.resolverShell
+            + "port=\"$(__devspace_resolve_port)\" || exit 0; curl -s -m 2 -X POST "
             + "-d '{\"pod_id\":\"\(podID)\",\"event\":\"\(eventLabel)\",\"token\":\"\(token)\"}' "
             + "http://localhost:$port/notify >/dev/null 2>&1 || true"
     }
@@ -58,13 +58,16 @@ public enum Hooks {
 
     /// The manual-trigger helper written to ~/.devspace-notify in the pod.
     static func notifyHelperScript(podID: String, token: String) -> String {
-        let port = SSH.sharedPodForwardFallback
         return """
         #!/usr/bin/env bash
         # DevSpace manual notification trigger. Must run inside the DevSpace
         # terminal — it uses the reverse SSH tunnel this session set up.
+        \(PodPortRouting.resolverShell)
         event="${1:-Stop}"
-        port="${DEVSPACE_POD_FORWARD_PORT:-\(port)}"
+        port="$(__devspace_resolve_port)" || {
+          echo "devspace-notify: failed (is this the DevSpace terminal?)"
+          exit 0
+        }
         curl -s -m 2 -X POST -d "{\\"pod_id\\":\\"\(podID)\\",\\"event\\":\\"$event\\",\\"token\\":\\"\(token)\\"}" http://localhost:$port/notify && echo "devspace-notify: sent event=$event" || echo "devspace-notify: failed (is this the DevSpace terminal?)"
 
         """

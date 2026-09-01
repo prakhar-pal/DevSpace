@@ -153,9 +153,24 @@ final class HooksTests: XCTestCase {
         XCTAssertFalse(cmd.contains("$DEVSPACE_NOTIFY_TOKEN"))
     }
 
-    func testHookCommandPrefersTheOwningSessionForwardPort() {
+    func testHookCommandResolvesProductionThenDevelopment() {
         let command = Hooks.hookCommand("Stop", podID: "wc-1", token: "tok")
-        XCTAssertTrue(command.contains("${DEVSPACE_POD_FORWARD_PORT:-\(SSH.sharedPodForwardFallback)}"))
+        XCTAssertTrue(command.contains("__devspace_resolve_port"))
+        XCTAssertTrue(command.contains("DEVSPACE_PROD_POD_FORWARD_PORT"))
+        XCTAssertTrue(command.contains("DEVSPACE_DEV_POD_FORWARD_PORT"))
+        XCTAssertFalse(command.contains("DEVSPACE_POD_FORWARD_PORT="))
+        XCTAssertTrue(command.contains("port=\"$(__devspace_resolve_port)\""))
+        XCTAssertTrue(command.contains("wc-1"))
+        XCTAssertTrue(command.contains("Stop"))
+        XCTAssertTrue(command.contains("tok"))
+        XCTAssertTrue(command.contains("/notify"))
+        XCTAssertTrue(command.contains(">/dev/null 2>&1 || true"))
+    }
+
+    func testManualHelperUsesSharedResolver() {
+        let script = Hooks.notifyHelperScript(podID: "wc-1", token: "tok")
+        XCTAssertTrue(script.contains(PodPortRouting.resolverShell))
+        XCTAssertTrue(script.contains("port=\"$(__devspace_resolve_port)\""))
     }
 
     func testToleratesMalformedSettings() {
