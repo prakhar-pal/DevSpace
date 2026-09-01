@@ -4,6 +4,11 @@ import Foundation
 // notify port constants. We connect through the `<id>.devpod` host alias DevPod
 // writes into ~/.ssh/config and carry the reverse notification tunnel via -R.
 public enum SSH {
+    public enum BuildChannel: Equatable {
+        case production
+        case development
+    }
+
     public struct Ports: Equatable {
         public let listenerPort: UInt16
         public let podForwardPort: UInt16
@@ -18,9 +23,16 @@ public enum SSH {
     /// DevSpaceDev must not bind the daily-driver app's listener: otherwise
     /// reverse-tunnel traffic reaches whichever bundle won port 17865.
     public static func ports(bundleIdentifier: String?) -> Ports {
-        bundleIdentifier == "com.prakharp.devspace.dev"
-            ? Ports(listenerPort: 17866, podForwardPort: 8766)
-            : Ports(listenerPort: 17865, podForwardPort: 8765)
+        switch buildChannel(bundleIdentifier: bundleIdentifier) {
+        case .production:
+            Ports(listenerPort: 17865, podForwardPort: PodPortRouting.productionPort)
+        case .development:
+            Ports(listenerPort: 17866, podForwardPort: PodPortRouting.developmentPort)
+        }
+    }
+
+    public static func buildChannel(bundleIdentifier: String?) -> BuildChannel {
+        bundleIdentifier == "com.prakharp.devspace.dev" ? .development : .production
     }
 
     private static let activePorts = ports(bundleIdentifier: Bundle.main.bundleIdentifier)
@@ -31,7 +43,7 @@ public enum SSH {
     /// Fallback for pod-wide scripts written into shared home directories.
     /// Existing production terminals may predate the session-scoped port
     /// variable, so their safe fallback must remain the production tunnel.
-    public static let sharedPodForwardFallback: UInt16 = 8765
+    public static let sharedPodForwardFallback = PodPortRouting.productionPort
 
     /// TERM advertised to the remote container. Fixed to xterm-256color — a
     /// widely available terminfo so prompts/editors render correctly inside the
@@ -43,7 +55,20 @@ public enum SSH {
     /// second and later terminals of a pod, where the primary session already
     /// holds the remote port (a second bind would fail and print a warning
     /// into the terminal).
-    public static func args(podID: String, tunnel: Bool = true, proxyCommand: String? = nil) -> [String] {
+    public static func args(
+        podID: String,
+        tunnel: Bool = true,
+        proxyCommand: String? = nil,
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier
+    ) -> [String] {
+        let ports = ports(bundleIdentifier: bundleIdentifier)
+        let podForwardEnvironment: String
+        switch buildChannel(bundleIdentifier: bundleIdentifier) {
+        case .production:
+            podForwardEnvironment = "\(PodPortRouting.productionEnvironmentVariable)=\(ports.podForwardPort)"
+        case .development:
+            podForwardEnvironment = "\(PodPortRouting.developmentEnvironmentVariable)=\(ports.podForwardPort)"
+        }
         var args = [
             "-tt",
             "-o", "StrictHostKeyChecking=no",
@@ -54,10 +79,10 @@ public enum SSH {
             "-o", "SetEnv=TERM=\(remoteTerm)",
             // The shared pod rc/hook files read this to route events through
             // the tunnel owned by this particular app session.
-            "-o", "SetEnv=DEVSPACE_POD_FORWARD_PORT=\(podForwardPort)",
+            "-o", "SetEnv=\(podForwardEnvironment)",
         ]
         if tunnel {
-            args += ["-R", "\(podForwardPort):localhost:\(listenerPort)"]
+            args += ["-R", "\(ports.podForwardPort):localhost:\(ports.listenerPort)"]
         }
         if let proxyCommand {
             args += ["-o", "ProxyCommand=\(proxyCommand) --start-services=false"]
