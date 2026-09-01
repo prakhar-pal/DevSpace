@@ -11,6 +11,11 @@ enum ActionPanel {
         guard isConnecting || workspaceState == "Running" else { return nil }
         return isConnecting ? .connecting : .connect
     }
+
+    static func visibleConnectionFailure(_ failure: String?) -> String? {
+        guard let failure, !failure.isEmpty else { return nil }
+        return failure
+    }
 }
 
 /// Status card for a selected workspace with no open terminal: metadata plus
@@ -20,6 +25,7 @@ struct ActionPanelView: View {
     let workspace: WorkspaceView
     let displayName: String
     let isConnecting: Bool
+    let connectionFailure: String?
     let onStart: (String) -> Void
     let onConnect: (String) -> Void
     let onStop: (String) -> Void
@@ -38,6 +44,13 @@ struct ActionPanelView: View {
                 field("Provider", workspace.provider)
                 field("Source", workspace.source)
                 field("Last used", Self.formatLastUsed(workspace.lastUsed))
+
+                if let failure = ActionPanel.visibleConnectionFailure(connectionFailure) {
+                    Text(failure)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.red)
+                        .padding(.top, 16)
+                }
 
                 if let connectionAction = ActionPanel.connectionAction(
                     workspaceState: workspace.state,
