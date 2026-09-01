@@ -11,8 +11,11 @@ final class ConnectionTimingTests: XCTestCase {
             scheduled.append((delay, action))
         }
 
-        func fireNext() {
-            guard !scheduled.isEmpty else { return }
+        func fireNext(file: StaticString = #filePath, line: UInt = #line) {
+            guard !scheduled.isEmpty else {
+                XCTFail("Expected a scheduled connection retry", file: file, line: line)
+                return
+            }
             scheduled.removeFirst().action()
         }
     }
@@ -353,6 +356,7 @@ final class ConnectionTimingTests: XCTestCase {
 
         model.receivePollUpdate(PollUpdate(revision: 1, views: model.workspaces))
         model.panes["wc-1"]?.first?.onExit?(255)
+        XCTAssertEqual(scheduler.scheduled.map(\.delay), [0.5])
         model.receivePollUpdate(PollUpdate(revision: 2, views: []))
         scheduler.fireNext()
 
