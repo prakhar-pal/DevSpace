@@ -41,7 +41,7 @@ final class ShellIntegrationTests: XCTestCase {
         XCTAssertTrue(decoded.contains("wc-1"))
         XCTAssertTrue(decoded.contains("token"))
         XCTAssertTrue(decoded.contains("sekret-token"))
-        XCTAssertTrue(decoded.contains("DEVSPACE_POD_FORWARD_PORT:-\(SSH.sharedPodForwardFallback)"))
+        XCTAssertTrue(decoded.contains("__devspace_resolve_port()"))
         XCTAssertTrue(decoded.contains("http://localhost:$port/dide"))
     }
 
@@ -74,7 +74,7 @@ final class ShellIntegrationTests: XCTestCase {
             )
             XCTAssertTrue(defaultResult.curlArguments.contains("2"), "\(shell.name) curl args: \(defaultResult.curlArguments)")
             XCTAssertTrue(
-                defaultResult.curlArguments.contains("http://localhost:\(SSH.podForwardPort)/dide"),
+                defaultResult.curlArguments.contains("http://localhost:\(PodPortRouting.productionPort)/dide"),
                 "\(shell.name) curl args: \(defaultResult.curlArguments)"
             )
 
@@ -161,7 +161,7 @@ final class ShellIntegrationTests: XCTestCase {
         }
     }
 
-    func testDideHelperUsesTheOwningSessionForwardPort() throws {
+    func testDideHelperRoutesThroughALiveTunnelInBashAndZsh() throws {
         let harness = try DideHarness(
             snippet: injectedPayload(
                 from: ShellIntegration.injectScript(podID: "wc-1", token: "sekret-token")
@@ -170,16 +170,68 @@ final class ShellIntegrationTests: XCTestCase {
         defer { harness.cleanup() }
 
         for shell in try shellSpecs() {
-            let result = try harness.run(
+            let prod = try harness.run(
                 shell: shell,
                 arguments: [],
                 currentDirectory: harness.cwdReal,
-                sessionPodForwardPort: 9876
+                livePorts: [8765, 8766]
             )
-            XCTAssertEqual(result.status, 0, "\(shell.name) stderr: \(result.stderr)")
+            XCTAssertEqual(prod.status, 0, "\(shell.name) production stderr: \(prod.stderr)")
             XCTAssertTrue(
-                result.curlArguments.contains("http://localhost:9876/dide"),
-                "\(shell.name) curl args: \(result.curlArguments)"
+                prod.curlArguments.contains("http://localhost:8765/dide"),
+                "\(shell.name) production curl args: \(prod.curlArguments)"
+            )
+
+            let dev = try harness.run(
+                shell: shell,
+                arguments: [],
+                currentDirectory: harness.cwdReal,
+                livePorts: [8766]
+            )
+            XCTAssertEqual(dev.status, 0, "\(shell.name) development stderr: \(dev.stderr)")
+            XCTAssertTrue(
+                dev.curlArguments.contains("http://localhost:8766/dide"),
+                "\(shell.name) development curl args: \(dev.curlArguments)"
+            )
+
+            let missing = try harness.run(
+                shell: shell,
+                arguments: [],
+                currentDirectory: harness.cwdReal,
+                livePorts: []
+            )
+            XCTAssertNotEqual(missing.status, 0, "\(shell.name) missing tunnel unexpectedly succeeded")
+            XCTAssertTrue(
+                missing.stderr.contains("dide: no DevSpace connection available"),
+                "\(shell.name) missing stderr: \(missing.stderr)"
+            )
+            XCTAssertNil(missing.payload, "\(shell.name) should not POST without a live tunnel")
+
+            let customProduction = try harness.run(
+                shell: shell,
+                arguments: [],
+                currentDirectory: harness.cwdReal,
+                productionPodForwardPort: "9876",
+                livePorts: [9876, 8766]
+            )
+            XCTAssertEqual(customProduction.status, 0, "\(shell.name) custom production stderr: \(customProduction.stderr)")
+            XCTAssertTrue(
+                customProduction.curlArguments.contains("http://localhost:9876/dide"),
+                "\(shell.name) custom production curl args: \(customProduction.curlArguments)"
+            )
+
+            let invalidProduction = try harness.run(
+                shell: shell,
+                arguments: [],
+                currentDirectory: harness.cwdReal,
+                productionPodForwardPort: "8765/x",
+                developmentPodForwardPort: "9876",
+                livePorts: [9876]
+            )
+            XCTAssertEqual(invalidProduction.status, 0, "\(shell.name) invalid production stderr: \(invalidProduction.stderr)")
+            XCTAssertTrue(
+                invalidProduction.curlArguments.contains("http://localhost:9876/dide"),
+                "\(shell.name) invalid production curl args: \(invalidProduction.curlArguments)"
             )
         }
     }
@@ -327,6 +379,26 @@ private final class DideHarness {
         try writeExecutable(
             """
             #!/bin/sh
+            is_post=0
+            previous=
+            for arg in "$@"; do
+              if [ "$previous" = "-X" ] && [ "$arg" = "POST" ]; then
+                is_post=1
+              fi
+              previous=$arg
+            done
+            if [ "$is_post" != "1" ]; then
+              url=
+              for arg in "$@"; do
+                url=$arg
+              done
+              port=${url#http://localhost:}
+              port=${port%%/*}
+              case ",${DIDE_TEST_LIVE_PORTS:-}," in
+                *,"$port",*) exit 0 ;;
+                *) exit 7 ;;
+              esac
+            fi
             args_file=$DIDE_TEST_CURL_ARGS_FILE
             payload_file=$DIDE_TEST_PAYLOAD_FILE
             : > "$args_file"
@@ -362,7 +434,9 @@ private final class DideHarness {
         arguments: [String],
         currentDirectory: URL,
         failBase64: Bool = false,
-        sessionPodForwardPort: UInt16? = nil
+        productionPodForwardPort: String? = nil,
+        developmentPodForwardPort: String? = nil,
+        livePorts: [UInt16] = [PodPortRouting.productionPort, PodPortRouting.developmentPort]
     ) throws -> DideRunResult {
         let payloadFile = root.appendingPathComponent("payload-\(UUID().uuidString).json")
         let argsFile = root.appendingPathComponent("curl-args-\(UUID().uuidString).txt")
@@ -377,7 +451,9 @@ private final class DideHarness {
             "DIDE_TEST_PAYLOAD_FILE": payloadFile.path,
             "DIDE_TEST_CURL_ARGS_FILE": argsFile.path,
             "DIDE_TEST_BASE64_FAIL": failBase64 ? "1" : "0",
-            "DEVSPACE_POD_FORWARD_PORT": sessionPodForwardPort.map(String.init) ?? "",
+            "DEVSPACE_PROD_POD_FORWARD_PORT": productionPodForwardPort ?? "",
+            "DEVSPACE_DEV_POD_FORWARD_PORT": developmentPodForwardPort ?? "",
+            "DIDE_TEST_LIVE_PORTS": livePorts.map(String.init).joined(separator: ","),
         ]
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
