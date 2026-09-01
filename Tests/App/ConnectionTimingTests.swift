@@ -4,6 +4,10 @@ import DevSpaceCore
 
 @MainActor
 final class ConnectionTimingTests: XCTestCase {
+    private struct SuccessfulCommandRunner: CommandRunning {
+        func run(_: [String]) throws -> String { "" }
+    }
+
     private final class ManualConnectionRetryScheduler: AppModel.ConnectionRetryScheduling {
         private(set) var scheduled: [(delay: TimeInterval, action: () -> Void)] = []
 
@@ -403,7 +407,38 @@ final class ConnectionTimingTests: XCTestCase {
         XCTAssertTrue(model.isConnecting("wc-1"))
     }
 
-    func testEstablishedPrimaryExitDoesNotRetry() {
+    func testEstablishedPrimaryExitDoesNotRetry() async {
+        let retryScheduler = ManualConnectionRetryScheduler()
+        let handoffScheduler = ManualHandoffTimeoutScheduler()
+        let model = AppModel(
+            runner: SuccessfulCommandRunner(),
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            handoffTimeoutScheduler: handoffScheduler,
+            connectionRetryScheduler: retryScheduler
+        )
+
+        model.connect("wc-1")
+        let pane = model.panes["wc-1"]!.first!
+        pane.onFirstOutput?()
+        for _ in 0 ..< 100 where !model.isTerminalVisible("wc-1") {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        pane.onExit?(255)
+
+        XCTAssertFalse(model.opened.contains("wc-1"))
+        XCTAssertTrue(retryScheduler.scheduled.isEmpty)
+        XCTAssertNil(model.connectionFailure("wc-1"))
+    }
+
+    func testTimedOutOutputFreePrimaryExitStillRetries() {
         let retryScheduler = ManualConnectionRetryScheduler()
         let handoffScheduler = ManualHandoffTimeoutScheduler()
         let model = AppModel(
@@ -423,17 +458,68 @@ final class ConnectionTimingTests: XCTestCase {
         model.connect("wc-1")
         let pane = model.panes["wc-1"]!.first!
         handoffScheduler.fire()
+
+        XCTAssertTrue(model.isTerminalVisible("wc-1"))
+
         pane.onExit?(255)
 
-        XCTAssertFalse(model.opened.contains("wc-1"))
-        XCTAssertTrue(retryScheduler.scheduled.isEmpty)
+        XCTAssertEqual(retryScheduler.scheduled.map(\.delay), [0.5])
+        XCTAssertTrue(model.isConnecting("wc-1"))
         XCTAssertNil(model.connectionFailure("wc-1"))
     }
 
-    func testExtraTerminalExitDoesNotRetryOrDisconnectPrimary() {
+    func testTimedOutOutputFreePrimaryCannotOpenExtraTerminal() {
+        let handoffScheduler = ManualHandoffTimeoutScheduler()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            handoffTimeoutScheduler: handoffScheduler
+        )
+
+        model.connect("wc-1")
+        handoffScheduler.fire()
+
+        model.newTerminal("wc-1")
+
+        XCTAssertEqual(model.panes["wc-1"]?.count, 1)
+    }
+
+    func testTimedOutOutputFreePrimaryCannotReload() {
+        let handoffScheduler = ManualHandoffTimeoutScheduler()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            handoffTimeoutScheduler: handoffScheduler
+        )
+
+        model.connect("wc-1")
+        let primaryPaneID = model.panes["wc-1"]!.first!.id
+        handoffScheduler.fire()
+
+        model.reload("wc-1")
+
+        XCTAssertEqual(model.panes["wc-1"]?.first?.id, primaryPaneID)
+    }
+
+    func testExtraTerminalExitDoesNotRetryOrDisconnectPrimary() async {
         let retryScheduler = ManualConnectionRetryScheduler()
         let handoffScheduler = ManualHandoffTimeoutScheduler()
         let model = AppModel(
+            runner: SuccessfulCommandRunner(),
             initialWorkspaces: [WorkspaceView(
                 id: "wc-1",
                 provider: "test",
@@ -448,7 +534,10 @@ final class ConnectionTimingTests: XCTestCase {
         )
 
         model.connect("wc-1")
-        handoffScheduler.fire()
+        model.panes["wc-1"]?.first?.onFirstOutput?()
+        for _ in 0 ..< 100 where !model.isTerminalVisible("wc-1") {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
         model.newTerminal("wc-1")
         let extraPane = model.panes["wc-1"]![1]
         extraPane.onExit?(255)

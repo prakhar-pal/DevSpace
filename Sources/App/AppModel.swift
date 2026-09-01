@@ -188,6 +188,10 @@ final class AppModel: ObservableObject {
     /// The active primary SSH resolution attempt for each pod. A completion
     /// may mount only if it still owns this generation.
     private var sshConnectionGenerations: [String: UUID] = [:]
+    /// Primary SSH panes that have not produced PTY output yet. This startup
+    /// classification outlives the presentation handoff timeout so a late
+    /// pre-ready failure can still use the connection retry path.
+    private var sshStartupPanes: [String: UUID] = [:]
     /// Number of automatic retries consumed by the current user-visible
     /// connection attempt. A manual Connect starts a fresh budget.
     private var sshStartupRetryCounts: [String: Int] = [:]
@@ -1341,6 +1345,7 @@ final class AppModel: ObservableObject {
     /// primary tab keeps the reverse notify tunnel.
     func reload(_ id: String) {
         guard validID(id) else { return }
+        guard sshStartupPanes[id] == nil else { return }
         guard opened.contains(id), let list = panes[id], !list.isEmpty else {
             // No session (e.g. it already died): fall back to a full reopen —
             // an explicit user action, so the session intent is restored.
@@ -1421,6 +1426,7 @@ final class AppModel: ObservableObject {
         pane.onFirstOutput = { [weak self, paneID = pane.id] in
             self?.primarySSHProducedOutput(id, paneID: paneID)
         }
+        sshStartupPanes[id] = pane.id
         terminalHandoffs[id] = TerminalHandoffState(paneID: pane.id)
 
         Self.startTerminalHandoff(
@@ -1443,9 +1449,18 @@ final class AppModel: ObservableObject {
 
     private func primarySSHProducedOutput(_ id: String, paneID: UUID) {
         guard opened.contains(id),
-              panes[id]?.first?.id == paneID,
-              var handoff = terminalHandoffs[id]
+              let pane = panes[id]?.first,
+              pane.id == paneID
         else { return }
+
+        if sshStartupPanes[id] == paneID {
+            sshStartupPanes[id] = nil
+            sshStartupRetryCounts[id] = nil
+            sshConnectionFailures[id] = nil
+        }
+        pane.onFirstOutput = nil
+
+        guard var handoff = terminalHandoffs[id] else { return }
         _ = handoff.handle(.firstOutput(paneID: paneID))
         terminalHandoffs[id] = handoff
         beginShellIntegration(id, paneID: paneID)
@@ -1494,11 +1509,8 @@ final class AppModel: ObservableObject {
         {
             sshConfirmed(id)
         }
-        pane.onFirstOutput = nil
         shellIntegrationPanes.remove(paneID)
         terminalHandoffs[id] = nil
-        sshStartupRetryCounts[id] = nil
-        sshConnectionFailures[id] = nil
 
         if case .timedOut = event {
             Self.logConnection(id, phase: "shell-integration-timeout", startedAt: startedAt)
@@ -1525,7 +1537,7 @@ final class AppModel: ObservableObject {
 
     /// Open another shell to the same pod, as a new active tab.
     func newTerminal(_ id: String) {
-        guard validID(id), canMutateTerminal(id) else { return }
+        guard validID(id), sshStartupPanes[id] == nil, canMutateTerminal(id) else { return }
         guard let primaryPaneID = panes[id]?.first?.id else { return }
         sshProxyResolver(id) { [weak self] proxyCommand in
             guard let self,
@@ -1609,7 +1621,7 @@ final class AppModel: ObservableObject {
     private func paneExited(_ id: String, paneID: UUID, exitCode: Int32) {
         guard let list = panes[id], list.contains(where: { $0.id == paneID }) else { return }
         if list.count == 1,
-           terminalHandoffs[id]?.paneID == paneID,
+           sshStartupPanes[id] == paneID,
            exitCode != 0
         {
             retryStartupSSH(id, paneID: paneID, exitCode: exitCode)
@@ -1660,6 +1672,9 @@ final class AppModel: ObservableObject {
 
         if let pane = panes[id]?.first, pane.id == paneID {
             pane.onExit = nil
+        }
+        if sshStartupPanes[id] == paneID {
+            sshStartupPanes[id] = nil
         }
         cancelShellIntegrationHandoff(id)
         panes[id] = nil
@@ -1720,6 +1735,7 @@ final class AppModel: ObservableObject {
 
     private func invalidateSSHConnection(_ id: String) {
         sshConnectionGenerations[id] = nil
+        sshStartupPanes[id] = nil
     }
 
     private func setPanes(_ id: String, _ list: [TerminalPaneModel]) {
