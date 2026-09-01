@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import DevSpaceCore
 
@@ -173,6 +174,114 @@ final class HooksTests: XCTestCase {
         XCTAssertTrue(script.contains("port=\"$(__devspace_resolve_port)\""))
     }
 
+    func testGeneratedHookPrefersProductionAndPreservesRequest() throws {
+        let harness = try GeneratedNotificationClientHarness()
+        defer { harness.cleanup() }
+
+        let result = try harness.runHook(
+            Hooks.hookCommand("Stop", podID: "wc-1", token: "tok"),
+            livePorts: [8765, 8766]
+        )
+
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.stdout, "")
+        XCTAssertEqual(result.stderr, "")
+        XCTAssertEqual(result.probedPorts, ["8765"])
+        XCTAssertEqual(result.postURL, "http://localhost:8765/notify")
+        XCTAssertEqual(result.payload, #"{"pod_id":"wc-1","event":"Stop","token":"tok"}"#)
+    }
+
+    func testGeneratedHookFallsBackToDevelopmentAndPreservesRequest() throws {
+        let harness = try GeneratedNotificationClientHarness()
+        defer { harness.cleanup() }
+
+        let result = try harness.runHook(
+            Hooks.hookCommand("Stop", podID: "wc-1", token: "tok"),
+            livePorts: [8766]
+        )
+
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.stdout, "")
+        XCTAssertEqual(result.stderr, "")
+        XCTAssertEqual(result.probedPorts, ["8765", "8766"])
+        XCTAssertEqual(result.postURL, "http://localhost:8766/notify")
+        XCTAssertEqual(result.payload, #"{"pod_id":"wc-1","event":"Stop","token":"tok"}"#)
+    }
+
+    func testGeneratedHookExitsSilentlyWithoutPostingWhenNoRouteIsLive() throws {
+        let harness = try GeneratedNotificationClientHarness()
+        defer { harness.cleanup() }
+
+        let result = try harness.runHook(
+            Hooks.hookCommand("Stop", podID: "wc-1", token: "tok"),
+            livePorts: []
+        )
+
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.stdout, "")
+        XCTAssertEqual(result.stderr, "")
+        XCTAssertEqual(result.probedPorts, ["8765", "8766"])
+        XCTAssertNil(result.postURL)
+        XCTAssertNil(result.payload)
+    }
+
+    func testGeneratedHelperPrefersProductionAndReportsPreservedRequest() throws {
+        let harness = try GeneratedNotificationClientHarness()
+        defer { harness.cleanup() }
+
+        let result = try harness.runHelper(
+            Hooks.notifyHelperScript(podID: "wc-1", token: "tok"),
+            event: "Notification",
+            livePorts: [8765, 8766]
+        )
+
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.stdout, "devspace-notify: sent event=Notification\n")
+        XCTAssertEqual(result.stderr, "")
+        XCTAssertEqual(result.probedPorts, ["8765"])
+        XCTAssertEqual(result.postURL, "http://localhost:8765/notify")
+        XCTAssertEqual(result.payload, #"{"pod_id":"wc-1","event":"Notification","token":"tok"}"#)
+    }
+
+    func testGeneratedHelperFallsBackToDevelopmentAndReportsPreservedRequest() throws {
+        let harness = try GeneratedNotificationClientHarness()
+        defer { harness.cleanup() }
+
+        let result = try harness.runHelper(
+            Hooks.notifyHelperScript(podID: "wc-1", token: "tok"),
+            event: "AskUserQuestion",
+            livePorts: [8766]
+        )
+
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.stdout, "devspace-notify: sent event=AskUserQuestion\n")
+        XCTAssertEqual(result.stderr, "")
+        XCTAssertEqual(result.probedPorts, ["8765", "8766"])
+        XCTAssertEqual(result.postURL, "http://localhost:8766/notify")
+        XCTAssertEqual(result.payload, #"{"pod_id":"wc-1","event":"AskUserQuestion","token":"tok"}"#)
+    }
+
+    func testGeneratedHelperReportsFailureWithoutPostingWhenNoRouteIsLive() throws {
+        let harness = try GeneratedNotificationClientHarness()
+        defer { harness.cleanup() }
+
+        let result = try harness.runHelper(
+            Hooks.notifyHelperScript(podID: "wc-1", token: "tok"),
+            event: nil,
+            livePorts: []
+        )
+
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(
+            result.stdout,
+            "devspace-notify: failed (is this the DevSpace terminal?)\n"
+        )
+        XCTAssertEqual(result.stderr, "")
+        XCTAssertEqual(result.probedPorts, ["8765", "8766"])
+        XCTAssertNil(result.postURL)
+        XCTAssertNil(result.payload)
+    }
+
     func testToleratesMalformedSettings() {
         let m1 = Hooks.mergeSettings(["hooks": "garbage"], podID: "wc-1", token: "tok")
         XCTAssertNotNil(m1["hooks"] as? [String: Any])
@@ -183,5 +292,135 @@ final class HooksTests: XCTestCase {
         let m2 = Hooks.mergeSettings(["hooks": ["Stop": 5]], podID: "wc-1", token: "tok")
         XCTAssertEqual(eventArray(m2, "Stop")?.count, 1)
         XCTAssertEqual(eventArray(m2, "Notification")?.count, 1)
+    }
+}
+
+private struct GeneratedNotificationClientResult {
+    let status: Int32
+    let stdout: String
+    let stderr: String
+    let probedPorts: [String]
+    let postURL: String?
+    let payload: String?
+}
+
+private final class GeneratedNotificationClientHarness {
+    private let root: URL
+    private let binDir: URL
+
+    init() throws {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("devspace-notification-client-\(UUID().uuidString)")
+        binDir = root.appendingPathComponent("bin", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+        try writeExecutable(
+            """
+            #!/bin/sh
+            is_post=0
+            previous=
+            data=
+            url=
+            for arg in "$@"; do
+              if [ "$previous" = "-X" ] && [ "$arg" = "POST" ]; then
+                is_post=1
+              fi
+              if [ "$previous" = "-d" ]; then
+                data=$arg
+              fi
+              previous=$arg
+              url=$arg
+            done
+            port=${url#http://localhost:}
+            port=${port%%/*}
+            if [ "$is_post" = "1" ]; then
+              printf '%s' "$url" > "$DEVSPACE_TEST_POST_URL"
+              printf '%s' "$data" > "$DEVSPACE_TEST_POST_PAYLOAD"
+              exit 0
+            fi
+            printf '%s\n' "$port" >> "$DEVSPACE_TEST_PROBES"
+            case ",${DEVSPACE_TEST_LIVE_PORTS:-}," in
+              *,"$port",*) exit 0 ;;
+              *) exit 7 ;;
+            esac
+            """,
+            to: binDir.appendingPathComponent("curl")
+        )
+    }
+
+    func cleanup() {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    func runHook(_ command: String, livePorts: [UInt16]) throws -> GeneratedNotificationClientResult {
+        try run(
+            executable: "/bin/sh",
+            arguments: ["-c", command],
+            livePorts: livePorts
+        )
+    }
+
+    func runHelper(
+        _ script: String,
+        event: String?,
+        livePorts: [UInt16]
+    ) throws -> GeneratedNotificationClientResult {
+        let helperFile = root.appendingPathComponent("helper-\(UUID().uuidString).sh")
+        try writeExecutable(script, to: helperFile)
+        return try run(
+            executable: "/bin/bash",
+            arguments: [helperFile.path] + (event.map { [$0] } ?? []),
+            livePorts: livePorts
+        )
+    }
+
+    private func run(
+        executable: String,
+        arguments: [String],
+        livePorts: [UInt16]
+    ) throws -> GeneratedNotificationClientResult {
+        let runID = UUID().uuidString
+        let probesFile = root.appendingPathComponent("probes-\(runID).txt")
+        let postURLFile = root.appendingPathComponent("post-url-\(runID).txt")
+        let payloadFile = root.appendingPathComponent("payload-\(runID).json")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.currentDirectoryURL = root
+        process.environment = [
+            "PATH": "\(binDir.path):/usr/bin:/bin:/usr/sbin:/sbin",
+            "DEVSPACE_TEST_LIVE_PORTS": livePorts.map(String.init).joined(separator: ","),
+            "DEVSPACE_TEST_PROBES": probesFile.path,
+            "DEVSPACE_TEST_POST_URL": postURLFile.path,
+            "DEVSPACE_TEST_POST_PAYLOAD": payloadFile.path,
+        ]
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        try process.run()
+        process.waitUntilExit()
+
+        let probes = (try? String(contentsOf: probesFile, encoding: .utf8)) ?? ""
+        return GeneratedNotificationClientResult(
+            status: process.terminationStatus,
+            stdout: String(
+                decoding: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
+                as: UTF8.self
+            ),
+            stderr: String(
+                decoding: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
+                as: UTF8.self
+            ),
+            probedPorts: probes.split(separator: "\n").map(String.init),
+            postURL: try? String(contentsOf: postURLFile, encoding: .utf8),
+            payload: try? String(contentsOf: payloadFile, encoding: .utf8)
+        )
+    }
+
+    private func writeExecutable(_ contents: String, to url: URL) throws {
+        try contents.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 }

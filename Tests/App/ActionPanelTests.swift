@@ -224,15 +224,19 @@ final class ActionPanelTests: XCTestCase {
 
     func testExhaustedConnectionFailureKeepsConnectAvailableAndVisible() {
         let failure = "SSH connection failed (exit 255)."
-
-        XCTAssertEqual(
-            ActionPanel.connectionAction(
-                workspaceState: "Running",
-                isConnecting: false
-            ),
-            .connect
+        let presentation = ActionPanel.presentation(
+            workspaceState: "Running",
+            isConnecting: false,
+            connectionFailure: failure
         )
-        XCTAssertEqual(ActionPanel.visibleConnectionFailure(failure), failure)
-        XCTAssertNil(ActionPanel.visibleConnectionFailure(""))
+
+        XCTAssertEqual(presentation.connectionFailure, failure)
+        XCTAssertEqual(presentation.connectionAction, .connect)
+        XCTAssertTrue(presentation.isConnectionActionEnabled)
+        XCTAssertNil(ActionPanel.presentation(
+            workspaceState: "Running",
+            isConnecting: false,
+            connectionFailure: ""
+        ).connectionFailure)
     }
 }

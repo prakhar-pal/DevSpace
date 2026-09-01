@@ -7,6 +7,12 @@ enum ActionPanel {
         case connecting
     }
 
+    struct Presentation: Equatable {
+        let connectionFailure: String?
+        let connectionAction: ConnectionAction?
+        let isConnectionActionEnabled: Bool
+    }
+
     static func connectionAction(workspaceState: String, isConnecting: Bool) -> ConnectionAction? {
         guard isConnecting || workspaceState == "Running" else { return nil }
         return isConnecting ? .connecting : .connect
@@ -15,6 +21,22 @@ enum ActionPanel {
     static func visibleConnectionFailure(_ failure: String?) -> String? {
         guard let failure, !failure.isEmpty else { return nil }
         return failure
+    }
+
+    static func presentation(
+        workspaceState: String,
+        isConnecting: Bool,
+        connectionFailure: String?
+    ) -> Presentation {
+        let action = connectionAction(
+            workspaceState: workspaceState,
+            isConnecting: isConnecting
+        )
+        return Presentation(
+            connectionFailure: visibleConnectionFailure(connectionFailure),
+            connectionAction: action,
+            isConnectionActionEnabled: action == .connect
+        )
     }
 }
 
@@ -31,6 +53,11 @@ struct ActionPanelView: View {
     let onStop: (String) -> Void
 
     var body: some View {
+        let presentation = ActionPanel.presentation(
+            workspaceState: workspace.state,
+            isConnecting: isConnecting,
+            connectionFailure: connectionFailure
+        )
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .center) {
@@ -45,17 +72,14 @@ struct ActionPanelView: View {
                 field("Source", workspace.source)
                 field("Last used", Self.formatLastUsed(workspace.lastUsed))
 
-                if let failure = ActionPanel.visibleConnectionFailure(connectionFailure) {
+                if let failure = presentation.connectionFailure {
                     Text(failure)
                         .font(.system(size: 13))
                         .foregroundStyle(.red)
                         .padding(.top, 16)
                 }
 
-                if let connectionAction = ActionPanel.connectionAction(
-                    workspaceState: workspace.state,
-                    isConnecting: isConnecting
-                ) {
+                if let connectionAction = presentation.connectionAction {
                     HStack(spacing: 12) {
                         Button { onConnect(workspace.id) } label: {
                             HStack(spacing: 6) {
@@ -70,7 +94,7 @@ struct ActionPanelView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.blue)
-                        .disabled(connectionAction == .connecting)
+                        .disabled(!presentation.isConnectionActionEnabled)
                         Button { onStop(workspace.id) } label: {
                             Text("Stop")
                                 .font(.system(size: 13, weight: .medium))
