@@ -71,4 +71,3 @@
 - [ ] Run `make build-dev` and confirm `build/DevSpaceDev.app` assembles; do not launch or stop the production app.
 - [ ] Inspect `git diff --check`, `git status`, and the complete branch diff.
 - [ ] Request adversarial code review focused on stale callbacks, retry loops, lifecycle wakeups, and helper-handoff races; fix verified findings and repeat relevant tests.
-

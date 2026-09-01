@@ -54,4 +54,3 @@ terminal disconnects without automatic retry. This preserves intentional
   output, and the timeout still reveals the terminal if no output arrives.
 - Action-panel tests cover rendering the failure copy with an enabled Connect
   action; the full SwiftPM test suite remains green.
-

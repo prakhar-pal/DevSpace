@@ -539,10 +539,18 @@ final class AppModel: ObservableObject {
         if newHidden != hidden { hidden = newHidden; changed = true }
         if changed { persist() }
         let liveIDs = Set(ids)
-        for id in Set(sshStartupRetryCounts.keys).union(sshConnectionFailures.keys)
-            where !liveIDs.contains(id)
-        {
+        let removedSessionIDs = opened
+            .union(autoConnect)
+            .union(sshStartupRetryCounts.keys)
+            .union(sshConnectionFailures.keys)
+            .subtracting(liveIDs)
+        for id in removedSessionIDs {
+            invalidateSSHConnection(id)
+            cancelShellIntegrationHandoff(id)
             cancelSSHRecovery(id)
+            opened.remove(id)
+            autoConnect.remove(id)
+            closePane(id)
         }
         if reconcilesLifecycle { reconcileLifecycle() }
     }
@@ -1384,6 +1392,11 @@ final class AppModel: ObservableObject {
                   self.sshConnectionGenerations[id] == generation,
                   (self.panes[id] ?? []).isEmpty
             else { return }
+            guard self.byID[id]?.state == "Running" else {
+                self.invalidateSSHConnection(id)
+                self.opened.remove(id)
+                return
+            }
             self.openResolvedSSH(
                 id,
                 proxyCommand: proxyCommand,
@@ -1637,7 +1650,10 @@ final class AppModel: ObservableObject {
     }
 
     private func retryStartupSSH(_ id: String, paneID: UUID, exitCode: Int32) {
-        guard opened.contains(id), autoConnect.contains(id), byID[id]?.state == "Running" else {
+        guard opened.contains(id), autoConnect.contains(id),
+              let state = byID[id]?.state,
+              state != "Stopped"
+        else {
             disconnect(id)
             return
         }
