@@ -4,6 +4,23 @@ import DevSpaceCore
 
 @MainActor
 final class ConnectionTimingTests: XCTestCase {
+    private final class LockedOutputBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+
+        func append(_ chunk: Data) {
+            lock.lock()
+            data.append(chunk)
+            lock.unlock()
+        }
+
+        var text: String {
+            lock.lock()
+            defer { lock.unlock() }
+            return String(decoding: data, as: UTF8.self)
+        }
+    }
+
     private struct SuccessfulCommandRunner: CommandRunning {
         func run(_: [String]) throws -> String { "" }
     }
@@ -50,6 +67,14 @@ final class ConnectionTimingTests: XCTestCase {
         }
 
         var completionCount: Int { completions.count }
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async -> Bool {
+        for _ in 0 ..< 300 {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
     }
 
     func testConnectWaitsForProxyResolutionBeforeMountingSSHPane() {
@@ -736,10 +761,38 @@ final class ConnectionTimingTests: XCTestCase {
         )))
     }
 
-    func testRemoteShellRestartCommandResetsThenExecsInteractiveShell() {
-        XCTAssertEqual(
-            TerminalPaneModel.restartRemoteShellCommand,
-            "\u{3}reset; exec \"${SHELL:-/bin/sh}\" -i\r"
+    func testRemoteShellRestartPreservesResetAfterInterruptHandlerConsumesNextByte() async {
+        let pty = PTYSession()
+        let output = LockedOutputBuffer()
+        pty.onOutput = { output.append($0) }
+        defer { pty.terminate() }
+
+        pty.start(
+            path: "/bin/zsh",
+            args: ["-f", "-i"],
+            cols: 80,
+            rows: 24,
+            extraEnv: ["PS1": "DEVSPACE_READY> ", "SHELL": "/bin/sh"]
         )
+        let initialPromptAppeared = await waitUntil {
+            output.text.contains("DEVSPACE_READY> ")
+        }
+        XCTAssertTrue(initialPromptAppeared)
+        guard initialPromptAppeared else { return }
+
+        pty.write(Data("TRAPINT() { read -rk 1; }\r".utf8))
+        let trapInstalled = await waitUntil {
+            output.text.components(separatedBy: "DEVSPACE_READY> ").count >= 3
+        }
+        XCTAssertTrue(trapInstalled)
+        guard trapInstalled else { return }
+
+        pty.write(Data(TerminalPaneModel.restartRemoteShellCommand.utf8))
+        let restartedPromptAppeared = await waitUntil {
+            output.text.components(separatedBy: "DEVSPACE_READY> ").count >= 4
+        }
+
+        XCTAssertTrue(restartedPromptAppeared)
+        XCTAssertFalse(output.text.contains("command not found: eset"))
     }
 }
