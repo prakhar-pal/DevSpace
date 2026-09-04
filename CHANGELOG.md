@@ -1,5 +1,25 @@
 # dev-space
 
+## v0.7.1 - 2026-09-04
+
+### Fixes
+- fix: separate shell restart from interrupt (c7bccab)
+- fix: retain ssh startup state after timeout (afbc72d)
+- fix: close final review gaps (062fcdf)
+- fix: route pod notifications through a live build (88602f2)
+- fix: route dide through an available build (b0d4e5a)
+- fix: separate dev and prod tunnel environments (35f5f51)
+- fix: guard ssh retries across status changes (48c04a4)
+- fix: recover transient ssh connection failures (6406359)
+
+### Other
+- docs: plan build-aware pod routing (1ed2c39)
+- docs: simplify pod routing design (c9710e8)
+- docs: design build-aware pod routing (2b45b1c)
+- test: require scheduled ssh retry (46c3f04)
+- docs: design resilient ssh connect (1d0205c)
+
+
 ## v0.7.0 - 2026-08-27
 
 ### Features
