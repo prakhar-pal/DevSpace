@@ -148,24 +148,30 @@ re-ported to Swift**. Rust and the entire `src/` + `src-tauri/` tree are retired
 | IPC | Tauri `invoke`/`emit` | direct in-process Swift calls / Combine/observation |
 | devpod CLI, poller | Rust `devpod`/`poller` | Swift `Process` + `Codable` JSON |
 | PTY / SSH session | `portable-pty` | libghostty surface owns the `ssh -R …` command |
-| Notify listener | Rust `tiny_http` :17865 | Swift `Network.framework` listener :17865 |
+| Notify listener | Rust `tiny_http` :17865 | Swift `Network.framework` listener :17865 release / :17866 development |
 | Hook injection | Rust `hooks` | Swift (`Process` + `devpod ssh`, base64 write) |
 | Token / layout files | Rust file I/O | Swift `FileManager` (same paths, 0600 token) |
 | Notifications / dock | Tauri plugins | `UserNotifications` + `NSApplication` attention |
 | Build / bundle | Tauri + Vite | Xcode (`cmux`-style `.xcodeproj`) |
 
-### Preserved external contracts (must not change behavior)
+### Preserved external contracts (as amended)
 
-- Notify wire protocol: `POST /notify` on desktop `:17865`, pod-side reverse
-  tunnel `:8765`, payload `{pod_id, event, token}`, shared-secret token at
+The original single-port notification and SSH clauses are superseded by the
+build-aware routing design adopted on 2026-09-01. Release uses desktop/pod
+ports `17865`/`8765`; development uses `17866`/`8766`. Pod-side clients select
+a live tunnel at invocation time, preferring production and falling back to
+development. The listener still exposes no metadata or health API.
+
+- Notify wire protocol: `POST /notify` through the selected build's reverse
+  tunnel, payload `{pod_id, event, token}`, shared-secret token at
   `~/Library/Application Support/DevSpace/notify-token` (mode 0600).
 - Event→message mapping: `Stop` → "Claude finished", else "Claude needs your
   input"; hook events `Notification`, `Stop`, `PreToolUse:AskUserQuestion`.
 - The DevSpaceDev-only `~/.devspace-notify` in-pod helper script and the
   idempotent settings merge used by both builds.
 - SSH invocation flags (`-tt`, `StrictHostKeyChecking=no`,
-  `UserKnownHostsFile=/dev/null`, `SetEnv TERM`, `-R 8765:localhost:17865`,
-  target `<id>.devpod`).
+  `UserKnownHostsFile=/dev/null`, `SetEnv TERM`, the matching build-specific
+  environment variable and reverse tunnel, target `<id>.devpod`).
 - Layout persistence (`layout.json`): order, hidden, aliases, hidden_collapsed.
 - Dev vs prod distinction (amber "DevSpace Dev" icon/name vs "DevSpace").
 

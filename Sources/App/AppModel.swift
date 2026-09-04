@@ -97,7 +97,17 @@ final class AppModel: ObservableObject {
         func schedule(after delay: TimeInterval, action: @escaping () -> Void)
     }
 
+    protocol ConnectionRetryScheduling: AnyObject {
+        func schedule(after delay: TimeInterval, action: @escaping () -> Void)
+    }
+
     final class MainQueueHandoffTimeoutScheduler: HandoffTimeoutScheduling {
+        func schedule(after delay: TimeInterval, action: @escaping () -> Void) {
+            Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in action() }
+        }
+    }
+
+    final class MainQueueConnectionRetryScheduler: ConnectionRetryScheduling {
         func schedule(after delay: TimeInterval, action: @escaping () -> Void) {
             Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in action() }
         }
@@ -128,6 +138,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var recreating: Set<String> = []
     @Published private(set) var recreateFailures: Set<String> = []
     @Published private var terminalHandoffs: [String: TerminalHandoffState] = [:]
+    /// Primary panes whose post-connect shell integration helper has started.
+    /// The helper is gated on primary PTY output so DevPod does not establish
+    /// multiple transports during initial SSH startup.
+    private var shellIntegrationPanes: Set<UUID> = []
     /// PTY-backed panes per pod (a devpod up/stop log, or one or more SSH
     /// terminals). Terminals are tabs: index 0 is the primary session (it
     /// carries the reverse notify tunnel); further ones are extra shells.
@@ -142,6 +156,7 @@ final class AppModel: ObservableObject {
     private let notifyToken: String
     private let handoffTimeout: TimeInterval
     private let handoffTimeoutScheduler: HandoffTimeoutScheduling
+    private let connectionRetryScheduler: ConnectionRetryScheduling
     private let sshProxyResolver: SSHProxyResolving
     private let injectedShortcutActionExecutor: AppShortcutActionExecuting?
     private let pastedImageResolver: PastedImageResolving
@@ -173,6 +188,16 @@ final class AppModel: ObservableObject {
     /// The active primary SSH resolution attempt for each pod. A completion
     /// may mount only if it still owns this generation.
     private var sshConnectionGenerations: [String: UUID] = [:]
+    /// Primary SSH panes that have not produced PTY output yet. This startup
+    /// classification outlives the presentation handoff timeout so a late
+    /// pre-ready failure can still use the connection retry path.
+    private var sshStartupPanes: [String: UUID] = [:]
+    /// Number of automatic retries consumed by the current user-visible
+    /// connection attempt. A manual Connect starts a fresh budget.
+    private var sshStartupRetryCounts: [String: Int] = [:]
+    /// Final startup failures stay visible on the status card until the user
+    /// retries or the workspace lifecycle changes.
+    @Published private var sshConnectionFailures: [String: String] = [:]
     /// The latest Open-in-Zed request accepted for each workspace. Lifecycle
     /// transitions invalidate the generation before delayed launch/fallback work.
     private var zedRequestGenerations: [String: UUID] = [:]
@@ -185,6 +210,7 @@ final class AppModel: ObservableObject {
     private var creationLastMissRevision: UInt64?
     private var lastAppliedPollRevision: UInt64 = 0
     private static let maxCreationDiscoveryMisses = 3
+    private static let sshStartupRetryDelays: [TimeInterval] = [0.5, 1.5]
 
     enum TerminalHandoffAction: Equatable {
         case revealOriginal
@@ -247,12 +273,10 @@ final class AppModel: ObservableObject {
 
     static func startTerminalHandoff(
         mountPrimary: () -> Void,
-        beginShellIntegration: () -> Void,
         scheduleTimeout: (TimeInterval) -> Void,
         timeout: TimeInterval = 10
     ) {
         mountPrimary()
-        beginShellIntegration()
         scheduleTimeout(timeout)
     }
 
@@ -282,6 +306,7 @@ final class AppModel: ObservableObject {
         startsRuntimeServices: Bool = true,
         handoffTimeout: TimeInterval = 10,
         handoffTimeoutScheduler: HandoffTimeoutScheduling = MainQueueHandoffTimeoutScheduler(),
+        connectionRetryScheduler: ConnectionRetryScheduling = MainQueueConnectionRetryScheduler(),
         sshProxyResolver: SSHProxyResolving? = nil,
         shortcutActionExecutor: AppShortcutActionExecuting? = nil,
         pastedImageResolver: PastedImageResolving? = nil,
@@ -296,6 +321,7 @@ final class AppModel: ObservableObject {
         self.pollRevisionSource = revisions
         self.handoffTimeout = max(0, handoffTimeout)
         self.handoffTimeoutScheduler = handoffTimeoutScheduler
+        self.connectionRetryScheduler = connectionRetryScheduler
         self.sshProxyResolver = sshProxyResolver
             ?? (startsRuntimeServices ? resolveSSHProxyCommand : resolveNoSSHProxyCommand)
         injectedShortcutActionExecutor = shortcutActionExecutor
@@ -516,6 +542,20 @@ final class AppModel: ObservableObject {
         if newOrder != order { order = newOrder; changed = true }
         if newHidden != hidden { hidden = newHidden; changed = true }
         if changed { persist() }
+        let liveIDs = Set(ids)
+        let removedSessionIDs = opened
+            .union(autoConnect)
+            .union(sshStartupRetryCounts.keys)
+            .union(sshConnectionFailures.keys)
+            .subtracting(liveIDs)
+        for id in removedSessionIDs {
+            invalidateSSHConnection(id)
+            cancelShellIntegrationHandoff(id)
+            cancelSSHRecovery(id)
+            opened.remove(id)
+            autoConnect.remove(id)
+            closePane(id)
+        }
         if reconcilesLifecycle { reconcileLifecycle() }
     }
 
@@ -566,7 +606,10 @@ final class AppModel: ObservableObject {
         // whoever starts it next (user via Start/Connect, or someone external)
         // decides whether a session opens.
         for w in workspaces where w.state == "Stopped" {
-            if !starting.contains(w.id) { autoConnect.remove(w.id) }
+            if !starting.contains(w.id) {
+                autoConnect.remove(w.id)
+                cancelSSHRecovery(w.id)
+            }
         }
         for id in opened {
             let s = states[id]?.state
@@ -863,6 +906,7 @@ final class AppModel: ObservableObject {
         invalidateZedRequest(id)
         invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
+        cancelSSHRecovery(id)
         opened.remove(id)
         autoConnect.remove(id)
         closePane(id)
@@ -906,6 +950,7 @@ final class AppModel: ObservableObject {
         guard validID(id) else { return }
         invalidateZedRequest(id)
         invalidateSSHConnection(id)
+        cancelSSHRecovery(id)
         select(id)
         starting.insert(id)
         let pane = TerminalPaneModel(command: "devpod", args: Devpod.upArgs(id))
@@ -938,6 +983,7 @@ final class AppModel: ObservableObject {
         invalidateZedRequest(id)
         invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
+        cancelSSHRecovery(id)
         opened.remove(id)
         autoConnect.remove(id)
         recreateFailures.remove(id)
@@ -952,6 +998,7 @@ final class AppModel: ObservableObject {
         invalidateZedRequest(id)
         invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
+        cancelSSHRecovery(id)
         let r = runner
         DispatchQueue.global(qos: .userInitiated).async { try? Devpod.delete(r, id: id) }
     }
@@ -1298,6 +1345,7 @@ final class AppModel: ObservableObject {
     /// primary tab keeps the reverse notify tunnel.
     func reload(_ id: String) {
         guard validID(id) else { return }
+        guard sshStartupPanes[id] == nil else { return }
         guard opened.contains(id), let list = panes[id], !list.isEmpty else {
             // No session (e.g. it already died): fall back to a full reopen —
             // an explicit user action, so the session intent is restored.
@@ -1334,10 +1382,13 @@ final class AppModel: ObservableObject {
         guard !opened.contains(id), !starting.contains(id), !shuttingDown.contains(id),
               !recreating.contains(id)
         else { return }
-        let attemptStartedAt = startedAt ?? DispatchTime.now().uptimeNanoseconds
+        opened.insert(id)
+        beginSSHAttempt(id, startedAt: startedAt ?? DispatchTime.now().uptimeNanoseconds)
+    }
+
+    private func beginSSHAttempt(_ id: String, startedAt attemptStartedAt: UInt64) {
         let generation = UUID()
         sshConnectionGenerations[id] = generation
-        opened.insert(id)
         Self.logConnection(id, phase: "requested", startedAt: attemptStartedAt)
         sshProxyResolver(id) { [weak self] proxyCommand in
             guard let self,
@@ -1346,6 +1397,11 @@ final class AppModel: ObservableObject {
                   self.sshConnectionGenerations[id] == generation,
                   (self.panes[id] ?? []).isEmpty
             else { return }
+            guard self.byID[id]?.state == "Running" else {
+                self.invalidateSSHConnection(id)
+                self.opened.remove(id)
+                return
+            }
             self.openResolvedSSH(
                 id,
                 proxyCommand: proxyCommand,
@@ -1370,29 +1426,13 @@ final class AppModel: ObservableObject {
         pane.onFirstOutput = { [weak self, paneID = pane.id] in
             self?.primarySSHProducedOutput(id, paneID: paneID)
         }
+        sshStartupPanes[id] = pane.id
         terminalHandoffs[id] = TerminalHandoffState(paneID: pane.id)
 
-        injectClaudeHooks(id, startedAt: attemptStartedAt)
         Self.startTerminalHandoff(
             mountPrimary: {
                 self.setPanes(id, [pane])
                 Self.logConnection(id, phase: "ssh-pane-mounted", startedAt: attemptStartedAt)
-            },
-            beginShellIntegration: {
-                self.injectShellIntegration(id, startedAt: attemptStartedAt) { [weak self, paneID = pane.id] success in
-                    if Self.shouldConfirmSSH(forShellIntegrationSuccess: success) {
-                        self?.sshConfirmed(id)
-                    }
-                    self?.resolveShellIntegration(
-                        id,
-                        event: .integrationFinished(
-                            paneID: paneID,
-                            succeeded: success,
-                            sshProducedOutputAtIngress: pane.hasReceivedPTYOutput
-                        ),
-                        startedAt: attemptStartedAt
-                    )
-                }
             },
             scheduleTimeout: { delay in
                 self.handoffTimeoutScheduler.schedule(after: delay) { [weak self, paneID = pane.id] in
@@ -1409,11 +1449,43 @@ final class AppModel: ObservableObject {
 
     private func primarySSHProducedOutput(_ id: String, paneID: UUID) {
         guard opened.contains(id),
-              panes[id]?.first?.id == paneID,
-              var handoff = terminalHandoffs[id]
+              let pane = panes[id]?.first,
+              pane.id == paneID
         else { return }
+
+        if sshStartupPanes[id] == paneID {
+            sshStartupPanes[id] = nil
+            sshStartupRetryCounts[id] = nil
+            sshConnectionFailures[id] = nil
+        }
+        pane.onFirstOutput = nil
+
+        guard var handoff = terminalHandoffs[id] else { return }
         _ = handoff.handle(.firstOutput(paneID: paneID))
         terminalHandoffs[id] = handoff
+        beginShellIntegration(id, paneID: paneID)
+    }
+
+    private func beginShellIntegration(_ id: String, paneID: UUID) {
+        guard opened.contains(id),
+              let pane = panes[id]?.first,
+              pane.id == paneID,
+              terminalHandoffs[id]?.paneID == paneID,
+              shellIntegrationPanes.insert(paneID).inserted
+        else { return }
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        injectShellIntegration(id, startedAt: startedAt) { [weak self, weak pane] success in
+            guard let pane else { return }
+            self?.resolveShellIntegration(
+                id,
+                event: .integrationFinished(
+                    paneID: paneID,
+                    succeeded: success,
+                    sshProducedOutputAtIngress: pane.hasReceivedPTYOutput
+                ),
+                startedAt: startedAt
+            )
+        }
     }
 
     private func resolveShellIntegration(
@@ -1432,7 +1504,12 @@ final class AppModel: ObservableObject {
               var handoff = terminalHandoffs[id],
               let action = handoff.handle(event)
         else { return }
-        pane.onFirstOutput = nil
+        if case .integrationFinished(_, let succeeded, _) = event,
+           Self.shouldConfirmSSH(forShellIntegrationSuccess: succeeded)
+        {
+            sshConfirmed(id)
+        }
+        shellIntegrationPanes.remove(paneID)
         terminalHandoffs[id] = nil
 
         if case .timedOut = event {
@@ -1446,10 +1523,12 @@ final class AppModel: ObservableObject {
             Self.logConnection(id, phase: "remote-shell-restarted", startedAt: startedAt)
         }
         Self.logConnection(id, phase: "terminal-revealed", startedAt: startedAt)
+        injectClaudeHooks(id, startedAt: startedAt)
     }
 
     private func cancelShellIntegrationHandoff(_ id: String) {
         guard var handoff = terminalHandoffs[id] else { return }
+        shellIntegrationPanes.remove(handoff.paneID)
         handoff.cancel()
         terminalHandoffs[id] = nil
     }
@@ -1458,7 +1537,7 @@ final class AppModel: ObservableObject {
 
     /// Open another shell to the same pod, as a new active tab.
     func newTerminal(_ id: String) {
-        guard validID(id), canMutateTerminal(id) else { return }
+        guard validID(id), sshStartupPanes[id] == nil, canMutateTerminal(id) else { return }
         guard let primaryPaneID = panes[id]?.first?.id else { return }
         sshProxyResolver(id) { [weak self] proxyCommand in
             guard let self,
@@ -1526,7 +1605,9 @@ final class AppModel: ObservableObject {
             command: "ssh",
             args: SSH.args(podID: id, tunnel: tunnel, proxyCommand: proxyCommand)
         )
-        pane.onExit = { [weak self] _ in self?.paneExited(id, paneID: pane.id) }
+        pane.onExit = { [weak self] code in
+            self?.paneExited(id, paneID: pane.id, exitCode: code)
+        }
         pane.onStart = onStart
         return pane
     }
@@ -1537,8 +1618,15 @@ final class AppModel: ObservableObject {
     /// (It used to stop the pod — but a shell exit isn't a stop request, and
     /// when the connection died because the pod stopped externally, running
     /// `devpod stop`/reconnect machinery could wake the pod right back up.)
-    private func paneExited(_ id: String, paneID: UUID) {
+    private func paneExited(_ id: String, paneID: UUID, exitCode: Int32) {
         guard let list = panes[id], list.contains(where: { $0.id == paneID }) else { return }
+        if list.count == 1,
+           sshStartupPanes[id] == paneID,
+           exitCode != 0
+        {
+            retryStartupSSH(id, paneID: paneID, exitCode: exitCode)
+            return
+        }
         if list.first?.id == paneID { cancelShellIntegrationHandoff(id) }
         if list.count > 1 {
             removePane(id, paneID: paneID)
@@ -1553,6 +1641,7 @@ final class AppModel: ObservableObject {
     func disconnect(_ id: String) {
         invalidateSSHConnection(id)
         cancelShellIntegrationHandoff(id)
+        cancelSSHRecovery(id)
         opened.remove(id)
         autoConnect.remove(id)
         closePane(id)
@@ -1563,8 +1652,76 @@ final class AppModel: ObservableObject {
     func connect(_ id: String) {
         guard validID(id), byID[id]?.state == "Running" else { return }
         let startedAt = DispatchTime.now().uptimeNanoseconds
+        cancelSSHRecovery(id)
         autoConnect.insert(id)
         openSSHIfNeeded(id, startedAt: startedAt)
+    }
+
+    func connectionFailure(_ id: String) -> String? {
+        sshConnectionFailures[id]
+    }
+
+    private func retryStartupSSH(_ id: String, paneID: UUID, exitCode: Int32) {
+        guard opened.contains(id), autoConnect.contains(id),
+              let state = byID[id]?.state,
+              state != "Stopped"
+        else {
+            disconnect(id)
+            return
+        }
+
+        if let pane = panes[id]?.first, pane.id == paneID {
+            pane.onExit = nil
+        }
+        if sshStartupPanes[id] == paneID {
+            sshStartupPanes[id] = nil
+        }
+        cancelShellIntegrationHandoff(id)
+        panes[id] = nil
+        activePane[id] = nil
+
+        let retryCount = sshStartupRetryCounts[id, default: 0]
+        guard retryCount < Self.sshStartupRetryDelays.count else {
+            invalidateSSHConnection(id)
+            opened.remove(id)
+            autoConnect.remove(id)
+            sshStartupRetryCounts[id] = nil
+            let message = "SSH connection failed (exit \(exitCode))."
+            sshConnectionFailures[id] = message
+            Log.write("connect pod=\(id) phase=failed exit=\(exitCode)")
+            return
+        }
+
+        let delay = Self.sshStartupRetryDelays[retryCount]
+        sshStartupRetryCounts[id] = retryCount + 1
+        let retryGeneration = UUID()
+        sshConnectionGenerations[id] = retryGeneration
+        Log.write("connect pod=\(id) phase=retry-scheduled attempt=\(retryCount + 1) exit=\(exitCode)")
+        connectionRetryScheduler.schedule(after: delay) { [weak self] in
+            guard let self,
+                  self.sshConnectionGenerations[id] == retryGeneration,
+                  self.opened.contains(id),
+                  self.autoConnect.contains(id),
+                  !self.starting.contains(id),
+                  !self.shuttingDown.contains(id),
+                  !self.recreating.contains(id),
+                  (self.panes[id] ?? []).isEmpty
+            else { return }
+            guard self.byID[id]?.state == "Running" else {
+                // Do not attempt SSH against an uncertain/stopped workspace.
+                // Releasing `opened` lets a later definitive Running poll
+                // resume the still-intended connection through reconciliation.
+                self.invalidateSSHConnection(id)
+                self.opened.remove(id)
+                return
+            }
+            self.beginSSHAttempt(id, startedAt: DispatchTime.now().uptimeNanoseconds)
+        }
+    }
+
+    private func cancelSSHRecovery(_ id: String) {
+        sshStartupRetryCounts[id] = nil
+        sshConnectionFailures[id] = nil
     }
 
     private func removePane(_ id: String, paneID: UUID) {
@@ -1578,6 +1735,7 @@ final class AppModel: ObservableObject {
 
     private func invalidateSSHConnection(_ id: String) {
         sshConnectionGenerations[id] = nil
+        sshStartupPanes[id] = nil
     }
 
     private func setPanes(_ id: String, _ list: [TerminalPaneModel]) {

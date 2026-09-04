@@ -159,6 +159,11 @@ final class SidebarTests: XCTestCase {
         defer { runner.releaseShellIntegration.signal() }
 
         model.connect(id)
+        XCTAssertEqual(
+            runner.shellIntegrationStarted.wait(timeout: .now() + 0.05),
+            .timedOut
+        )
+        model.panes[id]?.first?.onFirstOutput?()
         XCTAssertEqual(runner.shellIntegrationStarted.wait(timeout: .now() + 1), .success)
 
         let pendingPaneIDs = model.panes[id]!.map(\.id)
@@ -203,6 +208,7 @@ final class SidebarTests: XCTestCase {
         )
 
         model.connect(id)
+        model.panes[id]?.first?.onFirstOutput?()
         let mountedPaneID = model.panes[id]!.first!.id
         for _ in 0 ..< 100 where !model.isTerminalVisible(id) {
             try? await Task.sleep(for: .milliseconds(10))
@@ -234,7 +240,10 @@ final class SidebarTests: XCTestCase {
         defer { runner.releaseShellIntegration.signal() }
 
         model.connect(id)
-        XCTAssertEqual(runner.shellIntegrationStarted.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(
+            runner.shellIntegrationStarted.wait(timeout: .now() + 0.05),
+            .timedOut
+        )
         let mountedPaneID = model.panes[id]!.first!.id
         XCTAssertFalse(model.isTerminalVisible(id))
         scheduler.fire()
@@ -242,8 +251,11 @@ final class SidebarTests: XCTestCase {
         XCTAssertTrue(model.isTerminalVisible(id))
         XCTAssertEqual(model.panes[id]?.count, 1)
         XCTAssertEqual(model.panes[id]?.first?.id, mountedPaneID)
+        XCTAssertEqual(
+            runner.shellIntegrationStarted.wait(timeout: .now() + 0.05),
+            .timedOut
+        )
 
-        runner.releaseShellIntegration.signal()
         for _ in 0 ..< 100 {
             await Task.yield()
         }

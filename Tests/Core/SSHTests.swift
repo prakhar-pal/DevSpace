@@ -9,8 +9,32 @@ final class SSHTests: XCTestCase {
         XCTAssertTrue(args.contains { $0.hasPrefix("SetEnv=TERM=") })
         XCTAssertTrue(args.contains("-R"))
         XCTAssertTrue(args.contains("\(SSH.podForwardPort):localhost:\(SSH.listenerPort)"))
-        XCTAssertTrue(args.contains("SetEnv=DEVSPACE_POD_FORWARD_PORT=\(SSH.podForwardPort)"))
         XCTAssertEqual(args.last, "wc-1.devpod")
+    }
+
+    func testProductionSSHUsesOnlyProductionPortVariable() {
+        let args = SSH.args(podID: "wc-1", bundleIdentifier: "com.prakharp.devspace")
+        XCTAssertTrue(args.contains("SetEnv=DEVSPACE_PROD_POD_FORWARD_PORT=8765"))
+        XCTAssertFalse(args.contains { $0.contains("DEVSPACE_DEV_POD_FORWARD_PORT") })
+        XCTAssertFalse(args.contains { $0.contains("DEVSPACE_POD_FORWARD_PORT=") })
+    }
+
+    func testDevelopmentSSHUsesOnlyDevelopmentPortVariable() {
+        let args = SSH.args(podID: "wc-1", bundleIdentifier: "com.prakharp.devspace.dev")
+        XCTAssertTrue(args.contains("SetEnv=DEVSPACE_DEV_POD_FORWARD_PORT=8766"))
+        XCTAssertFalse(args.contains { $0.contains("DEVSPACE_PROD_POD_FORWARD_PORT") })
+        XCTAssertFalse(args.contains { $0.contains("DEVSPACE_POD_FORWARD_PORT=") })
+    }
+
+    func testBundleSpecificSSHUsesMatchingReverseTunnelPair() {
+        XCTAssertTrue(
+            SSH.args(podID: "wc-1", bundleIdentifier: "com.prakharp.devspace")
+                .contains("8765:localhost:17865")
+        )
+        XCTAssertTrue(
+            SSH.args(podID: "wc-1", bundleIdentifier: "com.prakharp.devspace.dev")
+                .contains("8766:localhost:17866")
+        )
     }
 
     func testPorts() {

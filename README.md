@@ -100,12 +100,17 @@ Notes:
 
 ## How notifications work
 
-The app listens on `127.0.0.1:17865` (token-gated `POST /notify`). Each
-workspace's primary SSH session carries `-R 8765:localhost:17865`, and on
-connect both builds inject Claude Code hooks into the pod. DevSpaceDev also
-installs a `~/.devspace-notify` manual-test helper. Claude Code events inside
-the pod then post through the tunnel and surface as macOS banners (with a
-dock-bounce + sidebar-badge fallback). To test from an open DevSpaceDev
+The release app listens on `127.0.0.1:17865` and forwards pod port `8765`;
+DevSpaceDev listens on `127.0.0.1:17866` and forwards pod port `8766`. Both
+listeners accept the same token-gated `POST /notify` contract. On connect,
+both builds inject Claude Code hooks into the pod, and DevSpaceDev also
+installs a `~/.devspace-notify` manual-test helper.
+
+At each invocation, pod-side clients probe the production tunnel first and
+use the development tunnel only when production is unavailable. If neither
+tunnel is live, notification clients remain best-effort and do not send a
+POST. Events sent through the selected tunnel surface as macOS banners (with
+a dock-bounce + sidebar-badge fallback). To test from an open DevSpaceDev
 workspace terminal, run `~/.devspace-notify`.
 
 ## Development

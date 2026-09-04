@@ -256,6 +256,7 @@ private struct MainPane: View {
                     workspace: w,
                     displayName: model.name(sel),
                     isConnecting: model.isConnecting(sel),
+                    connectionFailure: model.connectionFailure(sel),
                     onStart: { model.start($0) },
                     onConnect: { model.connect($0) },
                     onStop: { model.stop($0) }

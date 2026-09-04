@@ -62,10 +62,10 @@ public enum ShellIntegration {
     }
 
     private static func dideFunction(podID: String, token: String) -> String {
-        let port = SSH.sharedPodForwardFallback
         let shellPodID = shellDoubleQuoted(podID)
         let shellToken = shellDoubleQuoted(token)
         return """
+        \(PodPortRouting.resolverShell)
         # Open a pod folder in Zed through the authenticated /dide listener.
         dide() {
           if [ "$#" -gt 1 ]; then
@@ -99,7 +99,11 @@ public enum ShellIntegration {
           }
           local payload
           payload="{\\"pod_id\\":\\"\(shellPodID)\\",\\"path_b64\\":\\"$path_b64\\",\\"token\\":\\"\(shellToken)\\"}"
-          local port="${DEVSPACE_POD_FORWARD_PORT:-\(port)}"
+          local port
+          port="$(__devspace_resolve_port)" || {
+            printf 'dide: no DevSpace connection available\\n' >&2
+            return 1
+          }
           curl -fsS --max-time 2 -X POST -H 'Content-Type: application/json' -d "$payload" "http://localhost:$port/dide" >/dev/null || {
             printf 'dide: request failed\\n' >&2
             return 1

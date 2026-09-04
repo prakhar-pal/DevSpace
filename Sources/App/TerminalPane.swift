@@ -31,7 +31,7 @@ private final class FirstOutputSignal: @unchecked Sendable {
 /// lazy PTY start on first layout); PTY output -> surface; PTY exit -> onExit.
 @MainActor
 final class TerminalPaneModel: ObservableObject, Identifiable {
-    static let restartRemoteShellCommand = "\u{3}reset; exec \"${SHELL:-/bin/sh}\" -i\r"
+    static let restartRemoteShellCommand = "\u{3}\rreset; exec \"${SHELL:-/bin/sh}\" -i\r"
 
     let id = UUID()
     let state: TerminalViewState

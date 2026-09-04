@@ -4,6 +4,56 @@ import DevSpaceCore
 
 @MainActor
 final class ConnectionTimingTests: XCTestCase {
+    private final class LockedOutputBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+
+        func append(_ chunk: Data) {
+            lock.lock()
+            data.append(chunk)
+            lock.unlock()
+        }
+
+        var text: String {
+            lock.lock()
+            defer { lock.unlock() }
+            return String(decoding: data, as: UTF8.self)
+        }
+    }
+
+    private struct SuccessfulCommandRunner: CommandRunning {
+        func run(_: [String]) throws -> String { "" }
+    }
+
+    private final class ManualConnectionRetryScheduler: AppModel.ConnectionRetryScheduling {
+        private(set) var scheduled: [(delay: TimeInterval, action: () -> Void)] = []
+
+        func schedule(after delay: TimeInterval, action: @escaping () -> Void) {
+            scheduled.append((delay, action))
+        }
+
+        func fireNext(file: StaticString = #filePath, line: UInt = #line) {
+            guard !scheduled.isEmpty else {
+                XCTFail("Expected a scheduled connection retry", file: file, line: line)
+                return
+            }
+            scheduled.removeFirst().action()
+        }
+    }
+
+    private final class ManualHandoffTimeoutScheduler: AppModel.HandoffTimeoutScheduling {
+        private var action: (() -> Void)?
+
+        func schedule(after _: TimeInterval, action: @escaping () -> Void) {
+            self.action = action
+        }
+
+        func fire() {
+            action?()
+            action = nil
+        }
+    }
+
     private final class DeferredSSHProxyResolver {
         private var completions: [(String?) -> Void] = []
 
@@ -15,6 +65,16 @@ final class ConnectionTimingTests: XCTestCase {
         func complete(at index: Int, with proxyCommand: String?) {
             completions[index](proxyCommand)
         }
+
+        var completionCount: Int { completions.count }
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async -> Bool {
+        for _ in 0 ..< 300 {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
     }
 
     func testConnectWaitsForProxyResolutionBeforeMountingSSHPane() {
@@ -65,6 +125,451 @@ final class ConnectionTimingTests: XCTestCase {
 
         resolver.complete(at: 1, with: "devpod ssh --stdio wc-1")
         XCTAssertEqual(model.panes["wc-1"]?.count, 1)
+    }
+
+    func testPreReadySSHExitRetriesTwiceThenShowsFailure() {
+        let scheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: scheduler
+        )
+
+        model.connect("wc-1")
+        let firstPane = model.panes["wc-1"]!.first!
+        firstPane.onExit?(255)
+
+        XCTAssertTrue(model.isConnecting("wc-1"))
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
+        XCTAssertEqual(scheduler.scheduled.map(\.delay), [0.5])
+        XCTAssertNil(model.connectionFailure("wc-1"))
+
+        scheduler.fireNext()
+        let secondPane = model.panes["wc-1"]!.first!
+        XCTAssertNotEqual(secondPane.id, firstPane.id)
+        secondPane.onExit?(255)
+        XCTAssertEqual(scheduler.scheduled.map(\.delay), [1.5])
+
+        scheduler.fireNext()
+        let thirdPane = model.panes["wc-1"]!.first!
+        thirdPane.onExit?(255)
+
+        XCTAssertFalse(model.isConnecting("wc-1"))
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
+        XCTAssertTrue(scheduler.scheduled.isEmpty)
+        XCTAssertEqual(model.connectionFailure("wc-1"), "SSH connection failed (exit 255).")
+    }
+
+    func testDisconnectCancelsPendingStartupRetry() {
+        let scheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: scheduler
+        )
+
+        model.connect("wc-1")
+        model.panes["wc-1"]?.first?.onExit?(255)
+        model.disconnect("wc-1")
+        scheduler.fireNext()
+
+        XCTAssertFalse(model.opened.contains("wc-1"))
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
+        XCTAssertNil(model.connectionFailure("wc-1"))
+    }
+
+    func testStoppedWorkspaceCancelsPendingStartupRetry() {
+        let scheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: scheduler
+        )
+
+        model.connect("wc-1")
+        model.panes["wc-1"]?.first?.onExit?(255)
+        model.receivePollUpdate(PollUpdate(revision: 1, views: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Stopped",
+                error: nil
+            )]))
+        scheduler.fireNext()
+
+        XCTAssertFalse(model.opened.contains("wc-1"))
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
+        XCTAssertNil(model.connectionFailure("wc-1"))
+    }
+
+    func testRetryWaitsForRunningAfterTransientUnknownStatus() {
+        let scheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: scheduler
+        )
+
+        model.connect("wc-1")
+        model.panes["wc-1"]?.first?.onExit?(255)
+        model.receivePollUpdate(PollUpdate(
+            revision: 1,
+            views: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Unknown",
+                error: "temporary status failure"
+            )],
+            hasFreshStatuses: false
+        ))
+        scheduler.fireNext()
+
+        XCTAssertFalse(model.opened.contains("wc-1"))
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
+
+        model.receivePollUpdate(PollUpdate(revision: 2, views: [WorkspaceView(
+            id: "wc-1",
+            provider: "test",
+            source: "",
+            lastUsed: "",
+            state: "Running",
+            error: nil
+        )]))
+
+        XCTAssertTrue(model.opened.contains("wc-1"))
+        XCTAssertEqual(model.panes["wc-1"]?.count, 1)
+    }
+
+    func testUnknownStatusBeforeExitPreservesRecoveryIntent() {
+        let scheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: scheduler
+        )
+
+        model.connect("wc-1")
+        let failedPane = model.panes["wc-1"]!.first!
+        model.receivePollUpdate(PollUpdate(
+            revision: 1,
+            views: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Unknown",
+                error: "temporary status failure"
+            )],
+            hasFreshStatuses: false
+        ))
+        failedPane.onExit?(255)
+
+        XCTAssertEqual(scheduler.scheduled.map(\.delay), [0.5])
+        scheduler.fireNext()
+        XCTAssertFalse(model.opened.contains("wc-1"))
+
+        model.receivePollUpdate(PollUpdate(revision: 2, views: [WorkspaceView(
+            id: "wc-1",
+            provider: "test",
+            source: "",
+            lastUsed: "",
+            state: "Running",
+            error: nil
+        )]))
+
+        XCTAssertTrue(model.opened.contains("wc-1"))
+        XCTAssertEqual(model.panes["wc-1"]?.count, 1)
+    }
+
+    func testProxyResolutionCannotMountAfterStatusBecomesUnknown() {
+        let resolver = DeferredSSHProxyResolver()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            sshProxyResolver: resolver.resolve
+        )
+
+        model.connect("wc-1")
+        model.receivePollUpdate(PollUpdate(
+            revision: 1,
+            views: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Unknown",
+                error: "temporary status failure"
+            )],
+            hasFreshStatuses: false
+        ))
+        resolver.complete(at: 0, with: "devpod ssh --stdio wc-1")
+
+        XCTAssertFalse(model.opened.contains("wc-1"))
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
+
+        model.receivePollUpdate(PollUpdate(revision: 2, views: [WorkspaceView(
+            id: "wc-1",
+            provider: "test",
+            source: "",
+            lastUsed: "",
+            state: "Running",
+            error: nil
+        )]))
+        XCTAssertEqual(resolver.completionCount, 2)
+        if resolver.completionCount == 2 {
+            resolver.complete(at: 1, with: "devpod ssh --stdio wc-1")
+        }
+
+        XCTAssertEqual(model.panes["wc-1"]?.count, 1)
+    }
+
+    func testWorkspaceRemovalCancelsRetryIntentWhenIDReappears() {
+        let scheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: scheduler
+        )
+
+        model.receivePollUpdate(PollUpdate(revision: 1, views: model.workspaces))
+        model.panes["wc-1"]?.first?.onExit?(255)
+        XCTAssertEqual(scheduler.scheduled.map(\.delay), [0.5])
+        model.receivePollUpdate(PollUpdate(revision: 2, views: []))
+        scheduler.fireNext()
+
+        model.receivePollUpdate(PollUpdate(revision: 3, views: [WorkspaceView(
+            id: "wc-1",
+            provider: "test",
+            source: "",
+            lastUsed: "",
+            state: "Running",
+            error: nil
+        )]))
+
+        XCTAssertFalse(model.opened.contains("wc-1"))
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
+    }
+
+    func testManualConnectClearsFailureAndRestoresRetryBudget() {
+        let scheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: scheduler
+        )
+
+        model.connect("wc-1")
+        for attempt in 0 ..< 3 {
+            model.panes["wc-1"]?.first?.onExit?(255)
+            if attempt < 2 { scheduler.fireNext() }
+        }
+        XCTAssertNotNil(model.connectionFailure("wc-1"))
+
+        model.connect("wc-1")
+        XCTAssertNil(model.connectionFailure("wc-1"))
+        model.panes["wc-1"]?.first?.onExit?(255)
+
+        XCTAssertEqual(scheduler.scheduled.map(\.delay), [0.5])
+        XCTAssertTrue(model.isConnecting("wc-1"))
+    }
+
+    func testEstablishedPrimaryExitDoesNotRetry() async {
+        let retryScheduler = ManualConnectionRetryScheduler()
+        let handoffScheduler = ManualHandoffTimeoutScheduler()
+        let model = AppModel(
+            runner: SuccessfulCommandRunner(),
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            handoffTimeoutScheduler: handoffScheduler,
+            connectionRetryScheduler: retryScheduler
+        )
+
+        model.connect("wc-1")
+        let pane = model.panes["wc-1"]!.first!
+        pane.onFirstOutput?()
+        for _ in 0 ..< 100 where !model.isTerminalVisible("wc-1") {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        pane.onExit?(255)
+
+        XCTAssertFalse(model.opened.contains("wc-1"))
+        XCTAssertTrue(retryScheduler.scheduled.isEmpty)
+        XCTAssertNil(model.connectionFailure("wc-1"))
+    }
+
+    func testTimedOutOutputFreePrimaryExitStillRetries() {
+        let retryScheduler = ManualConnectionRetryScheduler()
+        let handoffScheduler = ManualHandoffTimeoutScheduler()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            handoffTimeoutScheduler: handoffScheduler,
+            connectionRetryScheduler: retryScheduler
+        )
+
+        model.connect("wc-1")
+        let pane = model.panes["wc-1"]!.first!
+        handoffScheduler.fire()
+
+        XCTAssertTrue(model.isTerminalVisible("wc-1"))
+
+        pane.onExit?(255)
+
+        XCTAssertEqual(retryScheduler.scheduled.map(\.delay), [0.5])
+        XCTAssertTrue(model.isConnecting("wc-1"))
+        XCTAssertNil(model.connectionFailure("wc-1"))
+    }
+
+    func testTimedOutOutputFreePrimaryCannotOpenExtraTerminal() {
+        let handoffScheduler = ManualHandoffTimeoutScheduler()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            handoffTimeoutScheduler: handoffScheduler
+        )
+
+        model.connect("wc-1")
+        handoffScheduler.fire()
+
+        model.newTerminal("wc-1")
+
+        XCTAssertEqual(model.panes["wc-1"]?.count, 1)
+    }
+
+    func testTimedOutOutputFreePrimaryCannotReload() {
+        let handoffScheduler = ManualHandoffTimeoutScheduler()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            handoffTimeoutScheduler: handoffScheduler
+        )
+
+        model.connect("wc-1")
+        let primaryPaneID = model.panes["wc-1"]!.first!.id
+        handoffScheduler.fire()
+
+        model.reload("wc-1")
+
+        XCTAssertEqual(model.panes["wc-1"]?.first?.id, primaryPaneID)
+    }
+
+    func testExtraTerminalExitDoesNotRetryOrDisconnectPrimary() async {
+        let retryScheduler = ManualConnectionRetryScheduler()
+        let handoffScheduler = ManualHandoffTimeoutScheduler()
+        let model = AppModel(
+            runner: SuccessfulCommandRunner(),
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            handoffTimeoutScheduler: handoffScheduler,
+            connectionRetryScheduler: retryScheduler
+        )
+
+        model.connect("wc-1")
+        model.panes["wc-1"]?.first?.onFirstOutput?()
+        for _ in 0 ..< 100 where !model.isTerminalVisible("wc-1") {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        model.newTerminal("wc-1")
+        let extraPane = model.panes["wc-1"]![1]
+        extraPane.onExit?(255)
+
+        XCTAssertTrue(model.opened.contains("wc-1"))
+        XCTAssertEqual(model.panes["wc-1"]?.count, 1)
+        XCTAssertTrue(retryScheduler.scheduled.isEmpty)
     }
 
     func testElapsedMillisecondsUsesMonotonicNanoseconds() {
@@ -165,16 +670,15 @@ final class ConnectionTimingTests: XCTestCase {
         XCTAssertFalse(AppModel.shouldConfirmSSH(forShellIntegrationSuccess: false))
     }
 
-    func testHandoffMountsPrimaryBeforeBeginningIntegrationAndTimeout() {
+    func testHandoffMountsPrimaryBeforeSchedulingTimeout() {
         var events: [String] = []
 
         AppModel.startTerminalHandoff(
             mountPrimary: { events.append("mount") },
-            beginShellIntegration: { events.append("integration") },
             scheduleTimeout: { delay in events.append("timeout:\(Int(delay))") }
         )
 
-        XCTAssertEqual(events, ["mount", "integration", "timeout:10"])
+        XCTAssertEqual(events, ["mount", "timeout:10"])
     }
 
     func testFirstOutputThenSuccessfulIntegrationRestartsRemoteShell() {
@@ -257,10 +761,38 @@ final class ConnectionTimingTests: XCTestCase {
         )))
     }
 
-    func testRemoteShellRestartCommandResetsThenExecsInteractiveShell() {
-        XCTAssertEqual(
-            TerminalPaneModel.restartRemoteShellCommand,
-            "\u{3}reset; exec \"${SHELL:-/bin/sh}\" -i\r"
+    func testRemoteShellRestartPreservesResetAfterInterruptHandlerConsumesNextByte() async {
+        let pty = PTYSession()
+        let output = LockedOutputBuffer()
+        pty.onOutput = { output.append($0) }
+        defer { pty.terminate() }
+
+        pty.start(
+            path: "/bin/zsh",
+            args: ["-f", "-i"],
+            cols: 80,
+            rows: 24,
+            extraEnv: ["PS1": "DEVSPACE_READY> ", "SHELL": "/bin/sh"]
         )
+        let initialPromptAppeared = await waitUntil {
+            output.text.contains("DEVSPACE_READY> ")
+        }
+        XCTAssertTrue(initialPromptAppeared)
+        guard initialPromptAppeared else { return }
+
+        pty.write(Data("TRAPINT() { read -rk 1; }\r".utf8))
+        let trapInstalled = await waitUntil {
+            output.text.components(separatedBy: "DEVSPACE_READY> ").count >= 3
+        }
+        XCTAssertTrue(trapInstalled)
+        guard trapInstalled else { return }
+
+        pty.write(Data(TerminalPaneModel.restartRemoteShellCommand.utf8))
+        let restartedPromptAppeared = await waitUntil {
+            output.text.components(separatedBy: "DEVSPACE_READY> ").count >= 4
+        }
+
+        XCTAssertTrue(restartedPromptAppeared)
+        XCTAssertFalse(output.text.contains("command not found: eset"))
     }
 }

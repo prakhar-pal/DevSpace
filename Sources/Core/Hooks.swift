@@ -3,8 +3,8 @@ import Foundation
 // Port of src-tauri/src/hooks.rs — idempotently inject the DevSpace Claude Code
 // notification hooks into a pod's ~/.claude/settings.json via `devpod ssh`.
 // Dev builds may also write the ~/.devspace-notify helper. Pod id, event label,
-// and token are baked into the curl command; its port comes from the owning SSH
-// session so dev and production can share a pod without cross-routing events.
+// and token are baked into the curl command; its port is resolved from live
+// tunnels at invocation time, preferring production before development.
 public enum Hooks {
     // (settings key, optional matcher, literal event label sent to the desktop)
     static let hookEvents: [(key: String, matcher: String?, label: String)] = [
@@ -14,8 +14,9 @@ public enum Hooks {
     ]
 
     static func hookCommand(_ eventLabel: String, podID: String, token: String) -> String {
-        let port = SSH.sharedPodForwardFallback
-        return "port=\"${DEVSPACE_POD_FORWARD_PORT:-\(port)}\"; curl -s -m 2 -X POST "
+        return PodPortRouting.resolverShell
+            + "\n"
+            + "port=\"$(__devspace_resolve_port)\" || exit 0; curl -s -m 2 -X POST "
             + "-d '{\"pod_id\":\"\(podID)\",\"event\":\"\(eventLabel)\",\"token\":\"\(token)\"}' "
             + "http://localhost:$port/notify >/dev/null 2>&1 || true"
     }
@@ -58,13 +59,16 @@ public enum Hooks {
 
     /// The manual-trigger helper written to ~/.devspace-notify in the pod.
     static func notifyHelperScript(podID: String, token: String) -> String {
-        let port = SSH.sharedPodForwardFallback
         return """
         #!/usr/bin/env bash
-        # DevSpace manual notification trigger. Must run inside the DevSpace
-        # terminal — it uses the reverse SSH tunnel this session set up.
+        # DevSpace manual notification trigger. Run inside a DevSpace-connected
+        # pod; it selects an available reverse SSH tunnel when invoked.
+        \(PodPortRouting.resolverShell)
         event="${1:-Stop}"
-        port="${DEVSPACE_POD_FORWARD_PORT:-\(port)}"
+        port="$(__devspace_resolve_port)" || {
+          echo "devspace-notify: failed (is this the DevSpace terminal?)"
+          exit 0
+        }
         curl -s -m 2 -X POST -d "{\\"pod_id\\":\\"\(podID)\\",\\"event\\":\\"$event\\",\\"token\\":\\"\(token)\\"}" http://localhost:$port/notify && echo "devspace-notify: sent event=$event" || echo "devspace-notify: failed (is this the DevSpace terminal?)"
 
         """
