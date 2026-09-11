@@ -343,7 +343,3 @@ private struct TerminalTab: View {
         .onHover { hovering = $0 }
     }
 }
-
-#Preview {
-    ContentView(model: AppModel())
-}
