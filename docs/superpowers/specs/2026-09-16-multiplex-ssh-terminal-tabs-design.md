@@ -56,6 +56,14 @@ directory intact and reports a transport-start error rather than unlinking or
 attaching to an unknown socket. This cleans orphaned masters after a crash
 without disrupting a live application instance.
 
+Two live instances of the same bundle cannot own the same workspace's fixed
+reverse-forward port. When ownership metadata identifies a live same-build
+owner for that workspace, the later instance does not launch a master or
+consume retry budget. It shows a non-retryable status-card error directing the
+user to the instance that already owns the session. Development and production
+remain independent because their bundle channels and reverse-forward ports are
+different.
+
 Master readiness is established only when an `ssh -O check` against the
 instance's socket succeeds, not merely when the master process launches. The
 socket and metadata are removed after the controller has terminated its own
@@ -69,6 +77,11 @@ starting, ready, stopping, or exited. It launches an eager `ssh -N` master with
 `ControlMaster=yes`, `ControlPersist=no`, `ExitOnForwardFailure=yes`, and the
 master-only reverse forward. A process-termination handler reports every exit
 to `AppModel` on the main actor.
+
+The controller continuously drains the master's output and error pipes on a
+background queue. Standard output is discarded; standard error is retained as
+a bounded tail for connection diagnostics. No pipe may remain unread long
+enough to block the long-lived SSH process.
 
 While starting, the controller polls `ssh -O check` through its exact control
 path. A 15-second generation-bound readiness deadline terminates a master that
@@ -117,13 +130,28 @@ Clients do not fall back to direct SSH when the master is unavailable. They
 remain unavailable until the master is ready, preserving the invariant of one
 transport and one tunnel per workspace.
 
+### Client-channel failures
+
+Each visible terminal slot has its own client lifecycle, separate from the
+master lifecycle. A user-initiated close or clean client exit removes only that
+slot and leaves the master and sibling tabs intact. An unexpected nonzero exit
+while the master remains ready retries only that client slot after 0.5 and 1.5
+seconds; it never starts a direct SSH transport or master-wide recovery.
+
+After those retries are exhausted, the slot becomes a visible failed-tab panel
+with its error and Retry / Close actions. Retry creates a fresh client through
+the existing master. If the master exits at any point, its generation supersedes
+and cancels all client retries; master recovery restores the saved tab count
+and selected position as described above.
+
 ## Testing
 
 Core SSH tests cover master and client arguments, including master-only `-R`,
 control socket use, and forward-failure behavior. Transport-controller tests
 use injected process/check schedulers to cover readiness, the 15-second
-deadline, stale generation rejection, and safe orphan cleanup. App-model tests
-use an injected transport controller to cover:
+deadline, stale generation rejection, safe orphan cleanup, same-build live
+owner rejection, and bounded pipe draining. App-model tests use an injected
+transport controller to cover:
 
 - primary-tab close leaving another client and master alive;
 - final-tab close terminating the master and disconnecting;
@@ -132,7 +160,8 @@ use an injected transport controller to cover:
 - status failure consuming Fibonacci delays;
 - late master/status callbacks being ignored after disconnect, stop,
   recreation, or workspace removal; and
-- client connection failure not creating an independent direct SSH transport.
+- client-only failure retries, failed-tab presentation, and no independent
+  direct SSH transport.
 
 Integration coverage starts simultaneous development and production controllers
 for the same workspace and verifies distinct control paths and reverse tunnels.
