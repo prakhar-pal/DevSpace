@@ -122,13 +122,13 @@ public enum SSH {
 
     /// Checks that a specific multiplex master has created and is accepting
     /// requests on its control socket.
-    public static func controlCheckArgs(controlPath: String) -> [String] {
-        ["-S", controlPath, "-O", "check", "localhost"]
+    public static func controlCheckArgs(podID: String, controlPath: String) -> [String] {
+        ["-S", controlPath, "-O", "check", "\(podID).devpod"]
     }
 
     /// Requests orderly shutdown of a specific multiplex master.
-    public static func controlExitArgs(controlPath: String) -> [String] {
-        ["-S", controlPath, "-O", "exit", "localhost"]
+    public static func controlExitArgs(podID: String, controlPath: String) -> [String] {
+        ["-S", controlPath, "-O", "exit", "\(podID).devpod"]
     }
 
     private static func interactiveArgs(

@@ -145,6 +145,17 @@ final class SSHTests: XCTestCase {
         XCTAssertTrue(args.contains("ControlPath=/tmp/devspace/socket"))
         XCTAssertFalse(args.contains("-R"))
     }
+
+    func testControlOperationsTargetTheDevpodAlias() {
+        XCTAssertEqual(
+            SSH.controlCheckArgs(podID: "wc-1", controlPath: "/tmp/devspace/socket"),
+            ["-S", "/tmp/devspace/socket", "-O", "check", "wc-1.devpod"]
+        )
+        XCTAssertEqual(
+            SSH.controlExitArgs(podID: "wc-1", controlPath: "/tmp/devspace/socket"),
+            ["-S", "/tmp/devspace/socket", "-O", "exit", "wc-1.devpod"]
+        )
+    }
 }
 
 // The `zed ssh://…` remote-open path: workdir parsing from the devpod-managed
