@@ -30,10 +30,16 @@ private final class FirstOutputSignal: @unchecked Sendable {
 /// Wiring: terminal keystrokes -> PTY input; grid resize -> PTY winsize (and
 /// lazy PTY start on first layout); PTY output -> surface; PTY exit -> onExit.
 @MainActor
+struct TerminalClientFailure: Equatable {
+    let message: String
+    let isRetrying: Bool
+}
+
+@MainActor
 final class TerminalPaneModel: ObservableObject, Identifiable {
     static let restartRemoteShellCommand = "\u{3}\rreset; exec \"${SHELL:-/bin/sh}\" -i\r"
 
-    let id = UUID()
+    let id: UUID
     let state: TerminalViewState
     private let pty = PTYSession()
     private let firstOutputSignal = FirstOutputSignal()
@@ -44,6 +50,7 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
     private var startedAtNanoseconds: UInt64?
     private let command: String
     private let args: [String]
+    @Published private(set) var clientFailure: TerminalClientFailure?
 
     /// The spawn argv, exposed to the app test target so it can assert that a
     /// visible pane is a multiplex client rather than a reverse-tunnel owner.
@@ -57,7 +64,8 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
     /// to Ghostty.
     var onFirstOutput: (() -> Void)?
 
-    init(command: String, args: [String]) {
+    init(id: UUID = UUID(), command: String, args: [String]) {
+        self.id = id
         self.command = command
         self.args = args
         // Use the same terminal settings as the Ghostty app (font, theme,
@@ -103,6 +111,16 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
             }
         }
         state.configuration = TerminalSurfaceOptions(backend: .inMemory(session))
+    }
+
+    static func failedSlot(
+        id: UUID,
+        message: String,
+        isRetrying: Bool
+    ) -> TerminalPaneModel {
+        let pane = TerminalPaneModel(id: id, command: "ssh", args: [])
+        pane.clientFailure = TerminalClientFailure(message: message, isRetrying: isRetrying)
+        return pane
     }
 
     private func handleResize(_ viewport: InMemoryTerminalViewport) {

@@ -200,12 +200,22 @@ private struct MainPane: View {
             // background shells keep running and keep their scrollback.
             ZStack {
                 ForEach(panes) { pane in
-                    TerminalPaneView(
-                        model: pane,
-                        handleKeyEquivalent: { event in
-                            return model.handleTerminalKeyEquivalent(event)
+                    Group {
+                        if let failure = pane.clientFailure {
+                            TerminalFailurePane(
+                                failure: failure,
+                                onRetry: { model.retryClient(pid, paneID: pane.id) },
+                                onClose: { model.closeTerminal(pid, paneID: pane.id) }
+                            )
+                        } else {
+                            TerminalPaneView(
+                                model: pane,
+                                handleKeyEquivalent: { event in
+                                    return model.handleTerminalKeyEquivalent(event)
+                                }
+                            )
                         }
-                    )
+                    }
                         .opacity(pane.id == activeID ? 1 : 0)
                         .allowsHitTesting(pane.id == activeID)
                 }
@@ -286,6 +296,29 @@ private struct MainPane: View {
         .padding(.vertical, 8)
         .background(Color(white: 0.1))
         .overlay(Divider(), alignment: .bottom)
+    }
+}
+
+private struct TerminalFailurePane: View {
+    let failure: TerminalClientFailure
+    let onRetry: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: failure.isRetrying ? "arrow.triangle.2.circlepath" : "exclamationmark.triangle")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text(failure.message)
+                .foregroundStyle(.secondary)
+            if !failure.isRetrying {
+                HStack {
+                    Button("Retry", action: onRetry)
+                    Button("Close", action: onClose)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

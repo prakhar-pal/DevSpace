@@ -152,6 +152,11 @@ final class ConnectionTimingTests: XCTestCase {
             state = .exited
             onExit?(code)
         }
+
+        func failStart(_ error: SSHTransportSession.StartError) {
+            state = .exited
+            onStartError?(error)
+        }
     }
 
     private func waitUntil(_ condition: () -> Bool) async -> Bool {
@@ -230,6 +235,109 @@ final class ConnectionTimingTests: XCTestCase {
         XCTAssertEqual(model.panes["wc-1"]?.count, 2)
         guard let recoveredPanes = model.panes["wc-1"], recoveredPanes.count == 2 else { return }
         XCTAssertEqual(model.activePane["wc-1"], recoveredPanes[1].id)
+    }
+
+    func testClientFailureRetriesOnlyThatSlotAndKeepsMasterReady() async {
+        let transport = ManualSSHTransport()
+        let retryScheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            runner: SuccessfulCommandRunner(),
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1", provider: "test", source: "", lastUsed: "",
+                state: "Running", error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: retryScheduler,
+            sshProxyResolver: { _, completion in completion("devpod ssh --stdio wc-1") },
+            sshTransportFactory: { _, _ in transport }
+        )
+
+        model.connect("wc-1")
+        transport.succeedReady()
+        let initial = try! XCTUnwrap(model.panes["wc-1"]?.first)
+        initial.onFirstOutput?()
+        let established = await waitUntil { model.isTerminalVisible("wc-1") }
+        XCTAssertTrue(established)
+        model.newTerminal("wc-1")
+        let failed = try! XCTUnwrap(model.panes["wc-1"]?[1])
+
+        failed.onExit?(255)
+
+        XCTAssertEqual(retryScheduler.scheduled.map(\.delay), [0.5])
+        XCTAssertEqual(transport.stopCount, 0)
+        XCTAssertEqual(model.panes["wc-1"]?.count, 2)
+        retryScheduler.fireNext()
+        XCTAssertEqual(model.panes["wc-1"]?.count, 2)
+        guard let panes = model.panes["wc-1"], panes.count == 2 else { return }
+        XCTAssertEqual(panes[1].id, failed.id)
+    }
+
+    func testExhaustedClientFailureKeepsRetryableFailedTab() async {
+        let transport = ManualSSHTransport()
+        let retryScheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            runner: SuccessfulCommandRunner(),
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1", provider: "test", source: "", lastUsed: "",
+                state: "Running", error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: retryScheduler,
+            sshProxyResolver: { _, completion in completion("devpod ssh --stdio wc-1") },
+            sshTransportFactory: { _, _ in transport }
+        )
+
+        model.connect("wc-1")
+        transport.succeedReady()
+        let initial = try! XCTUnwrap(model.panes["wc-1"]?.first)
+        initial.onFirstOutput?()
+        let established = await waitUntil { model.isTerminalVisible("wc-1") }
+        XCTAssertTrue(established)
+        model.newTerminal("wc-1")
+
+        for delay in [0.5, 1.5] {
+            let client = try! XCTUnwrap(model.panes["wc-1"]?[1])
+            client.onExit?(255)
+            XCTAssertEqual(retryScheduler.scheduled.map(\.delay), [delay])
+            retryScheduler.fireNext()
+        }
+        let exhaustedClient = try! XCTUnwrap(model.panes["wc-1"]?[1])
+        exhaustedClient.onExit?(255)
+
+        let failedTab = try! XCTUnwrap(model.panes["wc-1"]?[1])
+        XCTAssertEqual(failedTab.clientFailure?.isRetrying, false)
+        XCTAssertEqual(transport.stopCount, 0)
+        XCTAssertTrue(retryScheduler.scheduled.isEmpty)
+    }
+
+    func testPreReadyMasterFailureUsesStartupRetryBudget() {
+        let firstTransport = ManualSSHTransport()
+        let retryTransport = ManualSSHTransport()
+        let retryScheduler = ManualConnectionRetryScheduler()
+        var index = 0
+        let transports = [firstTransport, retryTransport]
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1", provider: "test", source: "", lastUsed: "",
+                state: "Running", error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: retryScheduler,
+            sshProxyResolver: { _, completion in completion("devpod ssh --stdio wc-1") },
+            sshTransportFactory: { _, _ in
+                defer { index += 1 }
+                return transports[index]
+            }
+        )
+
+        model.connect("wc-1")
+        firstTransport.failStart(.exitedBeforeReady(255))
+
+        XCTAssertEqual(retryScheduler.scheduled.map(\.delay), [0.5])
+        XCTAssertTrue(model.opened.contains("wc-1"))
+        XCTAssertNil(model.connectionFailure("wc-1"))
+        retryScheduler.fireNext()
+        XCTAssertEqual(retryTransport.startCount, 1)
     }
 
     func testConnectWaitsForProxyResolutionBeforeMountingSSHPane() {
@@ -895,7 +1003,7 @@ final class ConnectionTimingTests: XCTestCase {
         XCTAssertEqual(model.panes["wc-1"]?.first?.id, primaryPaneID)
     }
 
-    func testExtraTerminalExitDoesNotRetryOrDisconnectPrimary() async {
+    func testExtraTerminalFailureRetriesWithoutDisconnectingWorkspace() async {
         let retryScheduler = ManualConnectionRetryScheduler()
         let handoffScheduler = ManualHandoffTimeoutScheduler()
         let model = AppModel(
@@ -923,8 +1031,8 @@ final class ConnectionTimingTests: XCTestCase {
         extraPane.onExit?(255)
 
         XCTAssertTrue(model.opened.contains("wc-1"))
-        XCTAssertEqual(model.panes["wc-1"]?.count, 1)
-        XCTAssertTrue(retryScheduler.scheduled.isEmpty)
+        XCTAssertEqual(model.panes["wc-1"]?.count, 2)
+        XCTAssertEqual(retryScheduler.scheduled.map(\.delay), [0.5])
     }
 
     func testPrimaryCleanExitDisconnectsDependentExtraTerminal() async {

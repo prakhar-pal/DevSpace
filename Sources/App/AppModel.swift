@@ -269,6 +269,12 @@ final class AppModel: ObservableObject {
     /// Retries consumed after an established primary SSH transport drops.
     /// Unlike startup retries, each attempt revalidates `devpod status`.
     private var sshDisruptionRetryCounts: [String: Int] = [:]
+    private struct SSHClientRetry {
+        let count: Int
+        let generation: UUID?
+    }
+    /// Per-client retries never start or stop the hidden workspace master.
+    private var sshClientRetries: [String: [UUID: SSHClientRetry]] = [:]
     /// Final startup failures stay visible on the status card until the user
     /// retries or the workspace lifecycle changes.
     @Published private var sshConnectionFailures: [String: String] = [:]
@@ -286,6 +292,7 @@ final class AppModel: ObservableObject {
     private static let maxCreationDiscoveryMisses = 3
     private static let sshStartupRetryDelays: [TimeInterval] = [0.5, 1.5]
     private static let sshDisruptionRetryDelays: [TimeInterval] = [3, 5, 8, 13, 21]
+    private static let sshClientRetryDelays: [TimeInterval] = [0.5, 1.5]
 
     enum TerminalHandoffAction: Equatable {
         case revealOriginal
@@ -1593,10 +1600,12 @@ final class AppModel: ObservableObject {
     ) {
         guard sshConnectionGenerations[id] == generation else { return }
         transports[id] = nil
-        invalidateSSHConnection(id)
-        opened.remove(id)
-        autoConnect.remove(id)
-        sshConnectionFailures[id] = "SSH transport failed (\(error))."
+        let exitCode: Int32
+        switch error {
+        case .exitedBeforeReady(let code): exitCode = code
+        case .launchFailed, .readinessTimedOut: exitCode = 255
+        }
+        retryStartupSSH(id, paneID: UUID(), exitCode: exitCode)
     }
 
     private func masterExited(_ id: String, exitCode: Int32, generation: UUID) {
@@ -1760,9 +1769,11 @@ final class AppModel: ObservableObject {
         _ id: String,
         controlPath: String,
         proxyCommand: String? = nil,
-        onStart: (() -> Void)? = nil
+        onStart: (() -> Void)? = nil,
+        paneID: UUID = UUID()
     ) -> TerminalPaneModel {
         let pane = TerminalPaneModel(
+            id: paneID,
             command: "ssh",
             args: SSH.clientArgs(podID: id, proxyCommand: proxyCommand, controlPath: controlPath)
         )
@@ -1794,11 +1805,86 @@ final class AppModel: ObservableObject {
             }
             return
         }
-        if list.count > 1 {
+        if exitCode != 0 {
+            retryClientSSH(id, paneID: paneID, exitCode: exitCode)
+        } else if list.count > 1 {
             removePane(id, paneID: paneID)
         } else {
             disconnect(id)
         }
+    }
+
+    private func retryClientSSH(_ id: String, paneID: UUID, exitCode: Int32) {
+        guard opened.contains(id),
+              let transport = transports[id], transport.state == .ready,
+              let list = panes[id], list.contains(where: { $0.id == paneID })
+        else { return }
+
+        let retryCount = sshClientRetries[id]?[paneID]?.count ?? 0
+        guard retryCount < Self.sshClientRetryDelays.count else {
+            replaceClientPane(
+                id,
+                paneID: paneID,
+                with: TerminalPaneModel.failedSlot(
+                    id: paneID,
+                    message: "SSH terminal failed (exit \(exitCode)).",
+                    isRetrying: false
+                )
+            )
+            sshClientRetries[id]?[paneID] = nil
+            return
+        }
+
+        let retry = SSHClientRetry(count: retryCount + 1, generation: UUID())
+        var retries = sshClientRetries[id] ?? [:]
+        retries[paneID] = retry
+        sshClientRetries[id] = retries
+        let delay = Self.sshClientRetryDelays[retryCount]
+        replaceClientPane(
+            id,
+            paneID: paneID,
+            with: TerminalPaneModel.failedSlot(
+                id: paneID,
+                message: "Reconnecting SSH terminal…",
+                isRetrying: true
+            )
+        )
+        Log.write("connect pod=\(id) phase=client-retry-scheduled attempt=\(retry.count) exit=\(exitCode)")
+        connectionRetryScheduler.schedule(after: delay) { [weak self] in
+            guard let self,
+                  self.opened.contains(id),
+                  self.transports[id] === transport,
+                  transport.state == .ready,
+                  self.sshClientRetries[id]?[paneID]?.generation == retry.generation,
+                  let current = self.panes[id],
+                  let index = current.firstIndex(where: { $0.id == paneID })
+            else { return }
+            let fresh = self.makeTerminal(id, controlPath: transport.controlPath, paneID: paneID)
+            fresh.onFirstOutput = { [weak self] in
+                self?.sshClientRetries[id]?[paneID] = nil
+            }
+            self.panes[id]?[index] = fresh
+            self.sshClientRetries[id]?[paneID] = SSHClientRetry(count: retry.count, generation: nil)
+        }
+    }
+
+    func retryClient(_ id: String, paneID: UUID) {
+        guard let transport = transports[id], transport.state == .ready,
+              panes[id]?.first(where: { $0.id == paneID })?.clientFailure?.isRetrying == false
+        else { return }
+        let fresh = makeTerminal(id, controlPath: transport.controlPath, paneID: paneID)
+        fresh.onFirstOutput = { [weak self] in
+            self?.sshClientRetries[id]?[paneID] = nil
+        }
+        replaceClientPane(id, paneID: paneID, with: fresh)
+        sshClientRetries[id]?[paneID] = nil
+    }
+
+    private func replaceClientPane(_ id: String, paneID: UUID, with replacement: TerminalPaneModel) {
+        guard let list = panes[id], let index = list.firstIndex(where: { $0.id == paneID }) else { return }
+        panes[id]?[index].onExit = nil
+        panes[id]?[index].terminate()
+        panes[id]?[index] = replacement
     }
 
     /// Tear down the pod's session and withdraw the auto-connect intent, so
@@ -1996,6 +2082,7 @@ final class AppModel: ObservableObject {
     }
 
     private func removePane(_ id: String, paneID: UUID) {
+        sshClientRetries[id]?[paneID] = nil
         guard var list = panes[id], let idx = list.firstIndex(where: { $0.id == paneID }) else { return }
         list.remove(at: idx)
         panes[id] = list
@@ -2008,6 +2095,7 @@ final class AppModel: ObservableObject {
         sshConnectionGenerations[id] = nil
         sshStartupPanes[id] = nil
         sshRecoverySnapshots[id] = nil
+        sshClientRetries[id] = nil
         transports[id]?.onReady = nil
         transports[id]?.onStartError = nil
         transports[id]?.onExit = nil
@@ -2022,6 +2110,7 @@ final class AppModel: ObservableObject {
 
     private func closePane(_ id: String) {
         cancelShellIntegrationHandoff(id)
+        sshClientRetries[id] = nil
         for pane in panes[id] ?? [] {
             pane.onExit = nil
             pane.terminate()
