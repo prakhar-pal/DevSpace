@@ -124,12 +124,112 @@ final class ConnectionTimingTests: XCTestCase {
         var completionCount: Int { completions.count }
     }
 
+    private final class ManualSSHTransport: SSHTransportControlling {
+        let controlPath = "/tmp/devspace-test/socket"
+        private(set) var state: SSHTransportSession.State = .idle
+        var onReady: (() -> Void)?
+        var onExit: ((Int32) -> Void)?
+        var onStartError: ((SSHTransportSession.StartError) -> Void)?
+        private(set) var startCount = 0
+        private(set) var stopCount = 0
+
+        func start() {
+            startCount += 1
+            state = .starting
+        }
+
+        func stop() {
+            stopCount += 1
+            state = .exited
+        }
+
+        func succeedReady() {
+            state = .ready
+            onReady?()
+        }
+
+        func exit(with code: Int32) {
+            state = .exited
+            onExit?(code)
+        }
+    }
+
     private func waitUntil(_ condition: () -> Bool) async -> Bool {
         for _ in 0 ..< 300 {
             if condition() { return true }
             try? await Task.sleep(for: .milliseconds(10))
         }
         return false
+    }
+
+    func testMasterReadinessCreatesInitialMultiplexClient() {
+        let transport = ManualSSHTransport()
+        let model = AppModel(
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1", provider: "test", source: "", lastUsed: "",
+                state: "Running", error: nil
+            )],
+            startsRuntimeServices: false,
+            sshProxyResolver: { _, completion in completion("devpod ssh --stdio wc-1") },
+            sshTransportFactory: { _, _ in transport }
+        )
+
+        model.connect("wc-1")
+
+        XCTAssertEqual(transport.startCount, 1)
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
+
+        transport.succeedReady()
+
+        let pane = try! XCTUnwrap(model.panes["wc-1"]?.first)
+        XCTAssertTrue(pane.commandArguments.contains("ControlMaster=no"))
+        XCTAssertFalse(pane.commandArguments.contains("-R"))
+    }
+
+    func testMasterExitRestoresTabCountAndSelectedIndexAfterFreshStatus() async {
+        let firstTransport = ManualSSHTransport()
+        let recoveredTransport = ManualSSHTransport()
+        let transports = [firstTransport, recoveredTransport]
+        var transportIndex = 0
+        let statusResolver = WorkspaceStatusResolver(response: .running)
+        let retryScheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            runner: SuccessfulCommandRunner(),
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1", provider: "test", source: "", lastUsed: "",
+                state: "Running", error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: retryScheduler,
+            sshProxyResolver: { _, completion in completion("devpod ssh --stdio wc-1") },
+            sshTransportFactory: { _, _ in
+                defer { transportIndex += 1 }
+                return transports[transportIndex]
+            },
+            workspaceStatusResolver: statusResolver.resolve
+        )
+
+        model.connect("wc-1")
+        firstTransport.succeedReady()
+        let firstPane = try! XCTUnwrap(model.panes["wc-1"]?.first)
+        firstPane.onFirstOutput?()
+        let established = await waitUntil { model.isTerminalVisible("wc-1") }
+        XCTAssertTrue(established)
+        model.newTerminal("wc-1")
+        let secondPane = try! XCTUnwrap(model.panes["wc-1"]?[1])
+        model.setActivePane("wc-1", paneID: secondPane.id)
+
+        firstTransport.exit(with: 255)
+        XCTAssertEqual(retryScheduler.scheduled.map(\.delay), [3])
+
+        retryScheduler.fireNext()
+        let checkedStatus = await waitUntil { statusResolver.statusCallCount == 1 }
+        XCTAssertTrue(checkedStatus)
+        recoveredTransport.succeedReady()
+
+        XCTAssertEqual(model.panes["wc-1"]?.count, 2)
+        guard let recoveredPanes = model.panes["wc-1"], recoveredPanes.count == 2 else { return }
+        XCTAssertEqual(model.activePane["wc-1"], recoveredPanes[1].id)
     }
 
     func testConnectWaitsForProxyResolutionBeforeMountingSSHPane() {

@@ -45,6 +45,10 @@ final class TerminalPaneModel: ObservableObject, Identifiable {
     private let command: String
     private let args: [String]
 
+    /// The spawn argv, exposed to the app test target so it can assert that a
+    /// visible pane is a multiplex client rather than a reverse-tunnel owner.
+    var commandArguments: [String] { args }
+
     /// Called (on the main actor) when the underlying process exits.
     var onExit: ((Int32) -> Void)?
     /// Called (on the main actor) immediately before the underlying PTY starts.

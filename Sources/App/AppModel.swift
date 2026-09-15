@@ -15,6 +15,11 @@ typealias WorkspaceStatusResolving = @MainActor (
     _ completion: @escaping @MainActor (Result<WorkspaceStatus, DevpodError>) -> Void
 ) -> Void
 
+typealias SSHTransportCreating = @MainActor (
+    _ podID: String,
+    _ proxyCommand: String?
+) -> SSHTransportControlling
+
 typealias PastedImageResolving = @MainActor () -> PastedImage?
 typealias ShortcutMonitorObserving = @MainActor (_ didDefer: Bool) -> Void
 
@@ -77,6 +82,25 @@ private func resolveNoSSHProxyCommand(
     completion: @escaping @MainActor (String?) -> Void
 ) {
     completion(nil)
+}
+
+private final class ImmediateSSHTransport: SSHTransportControlling {
+    let controlPath: String
+    private(set) var state: SSHTransportSession.State = .idle
+    var onReady: (() -> Void)?
+    var onExit: ((Int32) -> Void)?
+    var onStartError: ((SSHTransportSession.StartError) -> Void)?
+
+    init(podID: String) {
+        controlPath = "/tmp/devspace-test/\(podID).sock"
+    }
+
+    func start() {
+        state = .ready
+        onReady?()
+    }
+
+    func stop() { state = .exited }
 }
 
 @MainActor
@@ -192,6 +216,7 @@ final class AppModel: ObservableObject {
     private let handoffTimeoutScheduler: HandoffTimeoutScheduling
     private let connectionRetryScheduler: ConnectionRetryScheduling
     private let sshProxyResolver: SSHProxyResolving
+    private let sshTransportFactory: SSHTransportCreating
     private let workspaceStatusResolver: WorkspaceStatusResolving
     private let injectedShortcutActionExecutor: AppShortcutActionExecuting?
     private let pastedImageResolver: PastedImageResolving
@@ -223,6 +248,17 @@ final class AppModel: ObservableObject {
     /// The active primary SSH resolution attempt for each pod. A completion
     /// may mount only if it still owns this generation.
     private var sshConnectionGenerations: [String: UUID] = [:]
+    private struct SSHRecoverySnapshot {
+        let tabCount: Int
+        let activeIndex: Int
+    }
+    /// Saved only after an established hidden master unexpectedly exits. The
+    /// old PTYs cannot resume, so a ready replacement master receives fresh
+    /// clients matching this count and selected position.
+    private var sshRecoverySnapshots: [String: SSHRecoverySnapshot] = [:]
+    /// Hidden ControlMaster transports, one per opened workspace. Visible
+    /// terminal panes are clients of these sessions and never own `-R`.
+    private var transports: [String: SSHTransportControlling] = [:]
     /// Primary SSH panes that have not produced PTY output yet. This startup
     /// classification outlives the presentation handoff timeout so a late
     /// pre-ready failure can still use the connection retry path.
@@ -347,6 +383,7 @@ final class AppModel: ObservableObject {
         handoffTimeoutScheduler: HandoffTimeoutScheduling = MainQueueHandoffTimeoutScheduler(),
         connectionRetryScheduler: ConnectionRetryScheduling = MainQueueConnectionRetryScheduler(),
         sshProxyResolver: SSHProxyResolving? = nil,
+        sshTransportFactory: SSHTransportCreating? = nil,
         workspaceStatusResolver: WorkspaceStatusResolving? = nil,
         shortcutActionExecutor: AppShortcutActionExecuting? = nil,
         pastedImageResolver: PastedImageResolving? = nil,
@@ -364,6 +401,10 @@ final class AppModel: ObservableObject {
         self.connectionRetryScheduler = connectionRetryScheduler
         self.sshProxyResolver = sshProxyResolver
             ?? (startsRuntimeServices ? resolveSSHProxyCommand : resolveNoSSHProxyCommand)
+        self.sshTransportFactory = sshTransportFactory
+            ?? (startsRuntimeServices
+                ? { id, proxyCommand in SSHTransportSession(podID: id, proxyCommand: proxyCommand) }
+                : { id, _ in ImmediateSSHTransport(podID: id) })
         self.workspaceStatusResolver = workspaceStatusResolver
             ?? (startsRuntimeServices
                 ? { id, completion in resolveWorkspaceStatus(runner, podID: id, completion: completion) }
@@ -1391,6 +1432,10 @@ final class AppModel: ObservableObject {
     func reload(_ id: String) {
         guard validID(id) else { return }
         guard sshStartupPanes[id] == nil else { return }
+        guard let transport = transports[id], transport.state == .ready else {
+            disconnect(id)
+            return
+        }
         guard opened.contains(id), let list = panes[id], !list.isEmpty else {
             // No session (e.g. it already died): fall back to a full reopen —
             // an explicit user action, so the session intent is restored.
@@ -1404,22 +1449,21 @@ final class AppModel: ObservableObject {
         guard isTerminalVisible(id) else { return }
         let idx = list.firstIndex { $0.id == activePane[id] } ?? 0
         let oldPaneID = list[idx].id
-        sshProxyResolver(id) { [weak self] proxyCommand in
-            guard let self,
-                  self.opened.contains(id),
-                  !self.shuttingDown.contains(id),
-                  self.isTerminalVisible(id),
-                  let currentList = self.panes[id],
-                  let currentIndex = currentList.firstIndex(where: { $0.id == oldPaneID })
-            else { return }
-            let old = currentList[currentIndex]
-            self.cancelShellIntegrationHandoff(id)
-            old.onExit = nil // its exit must not run the tab-close/stop-pod path
-            old.terminate()
-            let fresh = self.makeTerminal(id, tunnel: currentIndex == 0, proxyCommand: proxyCommand)
-            self.panes[id]?[currentIndex] = fresh
-            self.activePane[id] = fresh.id
-        }
+        guard opened.contains(id),
+              !shuttingDown.contains(id),
+              isTerminalVisible(id),
+              let currentList = panes[id],
+              let currentIndex = currentList.firstIndex(where: { $0.id == oldPaneID }),
+              transports[id] === transport,
+              transport.state == .ready
+        else { return }
+        let old = currentList[currentIndex]
+        cancelShellIntegrationHandoff(id)
+        old.onExit = nil // its exit must not run the tab-close/stop-pod path
+        old.terminate()
+        let fresh = makeTerminal(id, controlPath: transport.controlPath)
+        panes[id]?[currentIndex] = fresh
+        activePane[id] = fresh.id
     }
 
     private func openSSHIfNeeded(_ id: String, startedAt: UInt64? = nil) {
@@ -1450,6 +1494,7 @@ final class AppModel: ObservableObject {
             self.openResolvedSSH(
                 id,
                 proxyCommand: proxyCommand,
+                generation: generation,
                 startedAt: attemptStartedAt
             )
         }
@@ -1458,29 +1503,78 @@ final class AppModel: ObservableObject {
     private func openResolvedSSH(
         _ id: String,
         proxyCommand: String?,
+        generation: UUID,
         startedAt attemptStartedAt: UInt64
     ) {
-        let pane = makeTerminal(
+        guard transports[id] == nil else { return }
+        let transport = sshTransportFactory(id, proxyCommand)
+        transports[id] = transport
+        transport.onReady = { [weak self, weak transport] in
+            guard let self, let transport else { return }
+            self.masterReady(
+                id,
+                proxyCommand: proxyCommand,
+                transport: transport,
+                generation: generation,
+                startedAt: attemptStartedAt
+            )
+        }
+        transport.onStartError = { [weak self] error in
+            self?.masterStartFailed(id, error: error, generation: generation)
+        }
+        transport.onExit = { [weak self] exitCode in
+            self?.masterExited(id, exitCode: exitCode, generation: generation)
+        }
+        transport.start()
+    }
+
+    private func masterReady(
+        _ id: String,
+        proxyCommand: String?,
+        transport: SSHTransportControlling,
+        generation: UUID,
+        startedAt attemptStartedAt: UInt64
+    ) {
+        guard opened.contains(id),
+              sshConnectionGenerations[id] == generation,
+              transports[id] === transport,
+              transport.state == .ready,
+              (panes[id] ?? []).isEmpty
+        else { return }
+        let initialPane = makeTerminal(
             id,
-            tunnel: true,
+            controlPath: transport.controlPath,
             proxyCommand: proxyCommand,
             onStart: {
                 Self.logConnection(id, phase: "ssh-pty-started", startedAt: attemptStartedAt)
             }
         )
-        pane.onFirstOutput = { [weak self, paneID = pane.id] in
+        initialPane.onFirstOutput = { [weak self, paneID = initialPane.id] in
             self?.primarySSHProducedOutput(id, paneID: paneID)
         }
-        sshStartupPanes[id] = pane.id
-        terminalHandoffs[id] = TerminalHandoffState(paneID: pane.id)
+        sshStartupPanes[id] = initialPane.id
+        terminalHandoffs[id] = TerminalHandoffState(paneID: initialPane.id)
+        let snapshot = sshRecoverySnapshots.removeValue(forKey: id)
+        let restoredPanes: [TerminalPaneModel]
+        if let snapshot {
+            restoredPanes = [initialPane] + (1 ..< snapshot.tabCount).map { _ in
+                makeTerminal(id, controlPath: transport.controlPath, proxyCommand: proxyCommand)
+            }
+        } else {
+            restoredPanes = [initialPane]
+        }
 
         Self.startTerminalHandoff(
             mountPrimary: {
-                self.setPanes(id, [pane])
+                self.setPanes(id, restoredPanes)
+                if let snapshot {
+                    let index = min(snapshot.activeIndex, restoredPanes.count - 1)
+                    self.activePane[id] = restoredPanes[index].id
+                }
                 Self.logConnection(id, phase: "ssh-pane-mounted", startedAt: attemptStartedAt)
             },
             scheduleTimeout: { delay in
-                self.handoffTimeoutScheduler.schedule(after: delay) { [weak self, paneID = pane.id] in
+                self.handoffTimeoutScheduler.schedule(after: delay) { [weak self, paneID = initialPane.id] in
                     self?.resolveShellIntegration(
                         id,
                         event: .timedOut(paneID: paneID),
@@ -1490,6 +1584,33 @@ final class AppModel: ObservableObject {
             },
             timeout: handoffTimeout
         )
+    }
+
+    private func masterStartFailed(
+        _ id: String,
+        error: SSHTransportSession.StartError,
+        generation: UUID
+    ) {
+        guard sshConnectionGenerations[id] == generation else { return }
+        transports[id] = nil
+        invalidateSSHConnection(id)
+        opened.remove(id)
+        autoConnect.remove(id)
+        sshConnectionFailures[id] = "SSH transport failed (\(error))."
+    }
+
+    private func masterExited(_ id: String, exitCode: Int32, generation: UUID) {
+        guard sshConnectionGenerations[id] == generation else { return }
+        let list = panes[id] ?? []
+        if !list.isEmpty {
+            let activeIndex = list.firstIndex { $0.id == activePane[id] } ?? 0
+            sshRecoverySnapshots[id] = SSHRecoverySnapshot(
+                tabCount: list.count,
+                activeIndex: activeIndex
+            )
+        }
+        transports[id] = nil
+        retryDisruptedSSH(id, exitCode: exitCode)
     }
 
     private func primarySSHProducedOutput(_ id: String, paneID: UUID) {
@@ -1584,16 +1705,10 @@ final class AppModel: ObservableObject {
     /// Open another shell to the same pod, as a new active tab.
     func newTerminal(_ id: String) {
         guard validID(id), sshStartupPanes[id] == nil, canMutateTerminal(id) else { return }
-        guard let primaryPaneID = panes[id]?.first?.id else { return }
-        sshProxyResolver(id) { [weak self] proxyCommand in
-            guard let self,
-                  self.canMutateTerminal(id),
-                  self.panes[id]?.first?.id == primaryPaneID
-            else { return }
-            let pane = self.makeTerminal(id, tunnel: false, proxyCommand: proxyCommand)
-            self.panes[id]?.append(pane)
-            self.activePane[id] = pane.id
-        }
+        guard let transport = transports[id], transport.state == .ready else { return }
+        let pane = makeTerminal(id, controlPath: transport.controlPath)
+        panes[id]?.append(pane)
+        activePane[id] = pane.id
     }
 
     /// Close one terminal tab. Closing the LAST tab disconnects from the pod
@@ -1643,13 +1758,13 @@ final class AppModel: ObservableObject {
 
     private func makeTerminal(
         _ id: String,
-        tunnel: Bool,
+        controlPath: String,
         proxyCommand: String? = nil,
         onStart: (() -> Void)? = nil
     ) -> TerminalPaneModel {
         let pane = TerminalPaneModel(
             command: "ssh",
-            args: SSH.args(podID: id, tunnel: tunnel, proxyCommand: proxyCommand)
+            args: SSH.clientArgs(podID: id, proxyCommand: proxyCommand, controlPath: controlPath)
         )
         pane.onExit = { [weak self] code in
             self?.paneExited(id, paneID: pane.id, exitCode: code)
@@ -1730,6 +1845,11 @@ final class AppModel: ObservableObject {
         cancelShellIntegrationHandoff(id)
         panes[id] = nil
         activePane[id] = nil
+        transports[id]?.onReady = nil
+        transports[id]?.onStartError = nil
+        transports[id]?.onExit = nil
+        transports[id]?.stop()
+        transports[id] = nil
 
         let retryCount = sshStartupRetryCounts[id, default: 0]
         guard retryCount < Self.sshStartupRetryDelays.count else {
@@ -1791,6 +1911,11 @@ final class AppModel: ObservableObject {
         panes[id] = nil
         activePane[id] = nil
         sshStartupPanes[id] = nil
+        transports[id]?.onReady = nil
+        transports[id]?.onStartError = nil
+        transports[id]?.onExit = nil
+        transports[id]?.stop()
+        transports[id] = nil
         scheduleDisruptionRecovery(id, exitCode: exitCode)
     }
 
@@ -1867,6 +1992,7 @@ final class AppModel: ObservableObject {
         sshStartupRetryCounts[id] = nil
         sshDisruptionRetryCounts[id] = nil
         sshConnectionFailures[id] = nil
+        sshRecoverySnapshots[id] = nil
     }
 
     private func removePane(_ id: String, paneID: UUID) {
@@ -1881,6 +2007,12 @@ final class AppModel: ObservableObject {
     private func invalidateSSHConnection(_ id: String) {
         sshConnectionGenerations[id] = nil
         sshStartupPanes[id] = nil
+        sshRecoverySnapshots[id] = nil
+        transports[id]?.onReady = nil
+        transports[id]?.onStartError = nil
+        transports[id]?.onExit = nil
+        transports[id]?.stop()
+        transports[id] = nil
     }
 
     private func setPanes(_ id: String, _ list: [TerminalPaneModel]) {

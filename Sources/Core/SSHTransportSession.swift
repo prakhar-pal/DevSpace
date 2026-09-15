@@ -13,6 +13,18 @@ public protocol SSHTransportScheduling: AnyObject {
     func schedule(after delay: TimeInterval, action: @escaping () -> Void)
 }
 
+/// The AppModel-facing lifecycle surface for a workspace's hidden SSH master.
+/// Tests use this protocol to drive ready/exit events without a real process.
+public protocol SSHTransportControlling: AnyObject {
+    var controlPath: String { get }
+    var state: SSHTransportSession.State { get }
+    var onReady: (() -> Void)? { get set }
+    var onExit: ((Int32) -> Void)? { get set }
+    var onStartError: ((SSHTransportSession.StartError) -> Void)? { get set }
+    func start()
+    func stop()
+}
+
 public final class MainQueueSSHTransportScheduler: SSHTransportScheduling {
     public init() {}
 
@@ -233,6 +245,8 @@ public final class SSHTransportSession {
         }
     }
 }
+
+extension SSHTransportSession: SSHTransportControlling {}
 
 private final class FoundationSSHTransportProcess: SSHTransportProcess {
     private let process = Process()
