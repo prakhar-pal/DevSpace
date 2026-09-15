@@ -29,9 +29,9 @@ An SSH transport interruption also destroys every terminal channel.
 ## Architecture
 
 Each connected workspace owns an app-managed, non-interactive SSH master. The
-master uses a private, per-workspace `ControlPath`, the validated DevPod
-ProxyCommand, the build-specific environment, and the sole reverse `-R`
-tunnel. It is not represented by a visible terminal tab.
+master uses the validated DevPod ProxyCommand, the build-specific environment,
+and the sole reverse `-R` tunnel. It is not represented by a visible terminal
+tab.
 
 Visible tabs are SSH multiplex clients connected with the same `ControlPath`.
 They create ordinary interactive session channels but do not declare `-R`.
@@ -39,12 +39,43 @@ The client arguments retain per-session terminal environment configuration.
 No tab is the transport owner, so any individual tab can close without
 affecting its siblings or reverse tunnel.
 
-The control socket is created in a private app-controlled temporary directory
-with a path short enough for OpenSSH's Unix-domain socket limit. The directory
-is owner-only. Master readiness is established only when an `ssh -O check`
-against that socket succeeds, not merely when the master process launches. The
-socket is removed when its transport ends or the workspace session is
-explicitly disconnected.
+### Control-socket ownership
+
+Every launched DevSpace process creates an owner-only control directory under a
+short, app-specific temporary root. Its path contains the bundle channel and a
+launch-unique identifier; the workspace socket name is a short hash of its ID.
+Consequently, production and development builds—and simultaneous instances of
+either build—can never attach to each other's master or reverse tunnel.
+
+The transport controller writes ownership metadata beside each socket: bundle
+identifier, process ID, process start time, workspace ID, and control path.
+At launch it examines only directories for its own bundle channel. It may send
+`ssh -O exit` and remove a directory only when the recorded owner is no longer
+the matching DevSpace process. If ownership cannot be proved, it leaves the
+directory intact and reports a transport-start error rather than unlinking or
+attaching to an unknown socket. This cleans orphaned masters after a crash
+without disrupting a live application instance.
+
+Master readiness is established only when an `ssh -O check` against the
+instance's socket succeeds, not merely when the master process launches. The
+socket and metadata are removed after the controller has terminated its own
+master or observed its exit.
+
+### Master controller
+
+A dedicated `SSHTransportSession` owns the master `Process`, its output/error
+pipes, the control-directory lease, a generation token, and one state:
+starting, ready, stopping, or exited. It launches an eager `ssh -N` master with
+`ControlMaster=yes`, `ControlPersist=no`, `ExitOnForwardFailure=yes`, and the
+master-only reverse forward. A process-termination handler reports every exit
+to `AppModel` on the main actor.
+
+While starting, the controller polls `ssh -O check` through its exact control
+path. A 15-second generation-bound readiness deadline terminates a master that
+has neither become ready nor exited. Deadline expiry and a pre-ready process
+exit both enter the existing initial startup retry/error policy. A post-ready
+exit enters disruption recovery. Late readiness, check, and termination events
+whose generation no longer matches are ignored.
 
 ## Session Lifecycle
 
@@ -75,11 +106,12 @@ terminate the transport, and reject late readiness or status callbacks.
 
 ## Error Handling
 
-Master readiness includes failure to create the control socket, authenticate,
-or bind the reverse forward. `ExitOnForwardFailure=yes` ensures a failed tunnel
-bind fails the master rather than leaving visible tabs falsely connected. These
-failures use the existing recovery path only after a previously established
-transport; an initial connection keeps its current startup retry behavior.
+Master readiness includes failure to create the control directory, authenticate,
+bind the reverse forward, or pass the readiness deadline.
+`ExitOnForwardFailure=yes` ensures a failed tunnel bind fails the master rather
+than leaving visible tabs falsely connected. These failures use the existing
+recovery path only after a previously established transport; an initial
+connection keeps its current startup retry behavior.
 
 Clients do not fall back to direct SSH when the master is unavailable. They
 remain unavailable until the master is ready, preserving the invariant of one
@@ -88,8 +120,10 @@ transport and one tunnel per workspace.
 ## Testing
 
 Core SSH tests cover master and client arguments, including master-only `-R`,
-control socket use, and forward-failure behavior. App-model tests use an
-injected transport controller to cover:
+control socket use, and forward-failure behavior. Transport-controller tests
+use injected process/check schedulers to cover readiness, the 15-second
+deadline, stale generation rejection, and safe orphan cleanup. App-model tests
+use an injected transport controller to cover:
 
 - primary-tab close leaving another client and master alive;
 - final-tab close terminating the master and disconnecting;
@@ -99,5 +133,10 @@ injected transport controller to cover:
 - late master/status callbacks being ignored after disconnect, stop,
   recreation, or workspace removal; and
 - client connection failure not creating an independent direct SSH transport.
+
+Integration coverage starts simultaneous development and production controllers
+for the same workspace and verifies distinct control paths and reverse tunnels.
+It also simulates an orphaned same-build controller and verifies that only a
+proven-dead owner is terminated and cleaned up.
 
 The full Swift test suite and a development bundle build validate the change.
