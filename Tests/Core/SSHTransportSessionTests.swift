@@ -6,6 +6,7 @@ final class SSHTransportSessionTests: XCTestCase {
     private final class ManualProcess: SSHTransportProcess {
         private var exit: ((Int32) -> Void)?
         private(set) var terminateCount = 0
+        var stderrTail = ""
 
         func setExitHandler(_ handler: @escaping (Int32) -> Void) {
             exit = handler
@@ -113,5 +114,17 @@ final class SSHTransportSessionTests: XCTestCase {
 
         XCTAssertEqual(readyCount, 0)
         XCTAssertNotEqual(session.state, .ready)
+    }
+
+    func testExitRetainsMasterDiagnosticTail() {
+        let harness = Harness()
+        harness.checks = [true]
+        harness.process.stderrTail = "remote port is already allocated"
+        let session = harness.makeSession()
+
+        session.start()
+        harness.process.exit(with: 255)
+
+        XCTAssertEqual(session.stderrTail, "remote port is already allocated")
     }
 }

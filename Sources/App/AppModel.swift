@@ -1603,7 +1603,14 @@ final class AppModel: ObservableObject {
         let exitCode: Int32
         switch error {
         case .exitedBeforeReady(let code): exitCode = code
-        case .launchFailed, .readinessTimedOut: exitCode = 255
+        case .launchFailed, .readinessTimedOut, .controlDirectoryUnavailable: exitCode = 255
+        case .workspaceAlreadyOwned:
+            invalidateSSHConnection(id)
+            cancelSSHRecovery(id)
+            opened.remove(id)
+            autoConnect.remove(id)
+            sshConnectionFailures[id] = "Another DevSpace instance already owns this workspace session."
+            return
         }
         retryStartupSSH(id, paneID: UUID(), exitCode: exitCode)
     }

@@ -4,6 +4,7 @@ import Foundation
 /// provide a deterministic implementation; the app uses the Foundation one
 /// below. The process invokes its supplied exit callback exactly once.
 public protocol SSHTransportProcess: AnyObject {
+    var stderrTail: String { get }
     func terminate()
 }
 
@@ -23,6 +24,108 @@ public protocol SSHTransportControlling: AnyObject {
     var onStartError: ((SSHTransportSession.StartError) -> Void)? { get set }
     func start()
     func stop()
+}
+
+/// Owns one short ControlMaster socket directory. The metadata allows a later
+/// instance to reject a live same-build owner and to remove only a proven-dead
+/// owner left behind after a crash.
+public final class SSHTransportControlLease {
+    public enum Error: Swift.Error, Equatable {
+        case workspaceAlreadyOwned
+        case directoryUnavailable
+    }
+
+    private struct Owner: Codable {
+        let bundleIdentifier: String
+        let processID: Int32
+        let processStartUptime: TimeInterval
+        let workspaceID: String
+        let controlPath: String
+    }
+
+    private let root: URL
+    private let bundleIdentifier: String
+    private let workspaceID: String
+    private let processID: Int32
+    private let isProcessAlive: (Int32) -> Bool
+    private let directory: URL
+    public let controlPath: String
+
+    public init(
+        root: URL,
+        bundleIdentifier: String,
+        workspaceID: String,
+        processID: Int32 = ProcessInfo.processInfo.processIdentifier,
+        isProcessAlive: @escaping (Int32) -> Bool = SSHTransportControlLease.processIsAlive
+    ) {
+        self.root = root
+        self.bundleIdentifier = bundleIdentifier
+        self.workspaceID = workspaceID
+        self.processID = processID
+        self.isProcessAlive = isProcessAlive
+        directory = root.appendingPathComponent(UUID().uuidString.prefix(8).lowercased(), isDirectory: true)
+        controlPath = directory.appendingPathComponent("master.sock").path
+    }
+
+    public func acquire() throws {
+        let fileManager = FileManager.default
+        do {
+            try fileManager.createDirectory(
+                at: root,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try cleanProvenDeadMatchingOwners(fileManager: fileManager)
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700]
+            )
+            let owner = Owner(
+                bundleIdentifier: bundleIdentifier,
+                processID: processID,
+                processStartUptime: ProcessInfo.processInfo.systemUptime,
+                workspaceID: workspaceID,
+                controlPath: controlPath
+            )
+            let ownerURL = directory.appendingPathComponent("owner.json")
+            try JSONEncoder().encode(owner).write(to: ownerURL, options: .atomic)
+        } catch let error as Error {
+            throw error
+        } catch {
+            try? fileManager.removeItem(at: directory)
+            throw Error.directoryUnavailable
+        }
+    }
+
+    public func release() {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func cleanProvenDeadMatchingOwners(fileManager: FileManager) throws {
+        let children = (try? fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        for child in children {
+            let ownerURL = child.appendingPathComponent("owner.json")
+            guard let data = try? Data(contentsOf: ownerURL),
+                  let owner = try? JSONDecoder().decode(Owner.self, from: data),
+                  owner.bundleIdentifier == bundleIdentifier,
+                  owner.workspaceID == workspaceID
+            else { continue }
+            if isProcessAlive(owner.processID) {
+                throw Error.workspaceAlreadyOwned
+            }
+            try? fileManager.removeItem(at: child)
+        }
+    }
+
+    public static func processIsAlive(_ pid: Int32) -> Bool {
+        guard pid > 0 else { return false }
+        return kill(pid, 0) == 0 || errno == EPERM
+    }
 }
 
 public final class MainQueueSSHTransportScheduler: SSHTransportScheduling {
@@ -49,6 +152,8 @@ public final class SSHTransportSession {
         case launchFailed
         case readinessTimedOut
         case exitedBeforeReady(Int32)
+        case workspaceAlreadyOwned
+        case controlDirectoryUnavailable
     }
 
     public typealias Launch = (
@@ -73,6 +178,7 @@ public final class SSHTransportSession {
     private let launch: Launch
     private let check: Check
     private let scheduler: SSHTransportScheduling
+    private let controlLease: SSHTransportControlLease?
     private var process: SSHTransportProcess?
     private var generation = UUID()
     private var didReportStartFailure = false
@@ -82,15 +188,28 @@ public final class SSHTransportSession {
         proxyCommand: String?,
         bundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) {
-        let path = Self.makeControlPath(podID: podID, bundleIdentifier: bundleIdentifier)
+        let channel: String
+        switch SSH.buildChannel(bundleIdentifier: bundleIdentifier) {
+        case .production: channel = "prod"
+        case .development: channel = "dev"
+        }
+        let bundle = bundleIdentifier ?? "com.prakharp.devspace"
+        let lease = SSHTransportControlLease(
+            root: URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("devspace-ssh", isDirectory: true)
+                .appendingPathComponent(channel, isDirectory: true),
+            bundleIdentifier: bundle,
+            workspaceID: podID
+        )
         self.init(
             podID: podID,
             proxyCommand: proxyCommand,
             bundleIdentifier: bundleIdentifier,
-            controlPath: path,
+            controlPath: lease.controlPath,
             launch: Self.launchFoundationProcess,
             check: Self.runFoundationCheck,
-            scheduler: MainQueueSSHTransportScheduler()
+            scheduler: MainQueueSSHTransportScheduler(),
+            controlLease: lease
         )
     }
 
@@ -101,7 +220,8 @@ public final class SSHTransportSession {
         controlPath: String,
         launch: @escaping Launch,
         check: @escaping Check,
-        scheduler: SSHTransportScheduling
+        scheduler: SSHTransportScheduling,
+        controlLease: SSHTransportControlLease? = nil
     ) {
         self.podID = podID
         self.proxyCommand = proxyCommand
@@ -110,6 +230,7 @@ public final class SSHTransportSession {
         self.launch = launch
         self.check = check
         self.scheduler = scheduler
+        self.controlLease = controlLease
     }
 
     public func start() {
@@ -118,6 +239,23 @@ public final class SSHTransportSession {
         generation = newGeneration
         didReportStartFailure = false
         state = .starting
+
+        if let controlLease {
+            do {
+                try controlLease.acquire()
+            } catch let error as SSHTransportControlLease.Error {
+                switch error {
+                case .workspaceAlreadyOwned:
+                    reportStartFailure(.workspaceAlreadyOwned, generation: newGeneration)
+                case .directoryUnavailable:
+                    reportStartFailure(.controlDirectoryUnavailable, generation: newGeneration)
+                }
+                return
+            } catch {
+                reportStartFailure(.controlDirectoryUnavailable, generation: newGeneration)
+                return
+            }
+        }
 
         do {
             process = try launch(
@@ -147,6 +285,7 @@ public final class SSHTransportSession {
         process?.terminate()
         process = nil
         state = .exited
+        controlLease?.release()
     }
 
     private func runReadinessCheck(generation expectedGeneration: UUID) {
@@ -169,8 +308,10 @@ public final class SSHTransportSession {
 
     private func readinessDeadlineReached(generation expectedGeneration: UUID) {
         guard generation == expectedGeneration, state == .starting else { return }
+        stderrTail = process?.stderrTail ?? stderrTail
         process?.terminate()
         process = nil
+        controlLease?.release()
         reportStartFailure(.readinessTimedOut, generation: expectedGeneration)
     }
 
@@ -178,7 +319,9 @@ public final class SSHTransportSession {
         guard generation == expectedGeneration,
               state == .starting || state == .ready
         else { return }
+        stderrTail = process?.stderrTail ?? stderrTail
         process = nil
+        controlLease?.release()
         if state == .starting {
             reportStartFailure(.exitedBeforeReady(exitCode), generation: expectedGeneration)
         } else {
@@ -191,30 +334,8 @@ public final class SSHTransportSession {
         guard generation == expectedGeneration, !didReportStartFailure else { return }
         didReportStartFailure = true
         state = .exited
+        controlLease?.release()
         onStartError?(error)
-    }
-
-    private static func makeControlPath(podID: String, bundleIdentifier: String?) -> String {
-        let channel: String
-        switch SSH.buildChannel(bundleIdentifier: bundleIdentifier) {
-        case .production: channel = "prod"
-        case .development: channel = "dev"
-        }
-        let digest = String(podID.hashValue, radix: 16).replacingOccurrences(of: "-", with: "n")
-        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("devspace-ssh", isDirectory: true)
-            .appendingPathComponent(channel, isDirectory: true)
-            .appendingPathComponent(UUID().uuidString.prefix(8).lowercased(), isDirectory: true)
-        do {
-            try FileManager.default.createDirectory(
-                at: directory,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-        } catch {
-            Log.write("ssh-transport: unable to create control directory: \(error)")
-        }
-        return directory.appendingPathComponent("\(digest.prefix(12)).sock").path
     }
 
     private static func launchFoundationProcess(
@@ -253,6 +374,7 @@ private final class FoundationSSHTransportProcess: SSHTransportProcess {
     private let stdout = Pipe()
     private let stderr = Pipe()
     private var stderrBuffer = Data()
+    private let stderrLock = NSLock()
     private let maximumStderrBytes = 8 * 1024
 
     init(arguments: [String], onExit: @escaping (Int32) -> Void) throws {
@@ -281,7 +403,15 @@ private final class FoundationSSHTransportProcess: SSHTransportProcess {
         if process.isRunning { process.terminate() }
     }
 
+    var stderrTail: String {
+        stderrLock.lock()
+        defer { stderrLock.unlock() }
+        return String(decoding: stderrBuffer, as: UTF8.self)
+    }
+
     private func appendStderr(_ data: Data) {
+        stderrLock.lock()
+        defer { stderrLock.unlock() }
         stderrBuffer.append(data)
         if stderrBuffer.count > maximumStderrBytes {
             stderrBuffer.removeFirst(stderrBuffer.count - maximumStderrBytes)
