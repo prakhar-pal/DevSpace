@@ -23,7 +23,7 @@ final class ShellIntegrationTests: XCTestCase {
         XCTAssertTrue(script.contains("base64 -d >>")) // append, never overwrite
     }
 
-    func testInjectScriptPayloadRoundTripsOSC7AndDideHelper() throws {
+    func testInjectScriptPayloadRoundTripsOSC7AndDedCompatibilityHelper() throws {
         let decoded = try injectedPayload(
             from: ShellIntegration.injectScript(podID: "wc-1", token: "sekret-token")
         )
@@ -32,7 +32,9 @@ final class ShellIntegrationTests: XCTestCase {
         XCTAssertTrue(decoded.contains(ShellIntegration.endMarker))
         XCTAssertTrue(decoded.contains("__devspace_osc7()"))
         XCTAssertTrue(decoded.contains("PROMPT_COMMAND"))
+        XCTAssertTrue(decoded.contains("ded()"))
         XCTAssertTrue(decoded.contains("dide()"))
+        XCTAssertTrue(decoded.contains("dide is deprecated; use ded instead"))
         XCTAssertTrue(decoded.contains("if [ \"$#\" -gt 1 ]"))
         XCTAssertTrue(decoded.contains("cd -- \"$target\""))
         XCTAssertTrue(decoded.contains("pwd -P"))
@@ -45,7 +47,7 @@ final class ShellIntegrationTests: XCTestCase {
         XCTAssertTrue(decoded.contains("http://localhost:$port/dide"))
     }
 
-    func testDideHelperPostsCanonicalJSONForDefaultAbsoluteAndRelativeTargetsInBashAndZsh() throws {
+    func testDedHelperPostsCanonicalJSONForDefaultAbsoluteAndRelativeTargetsInBashAndZsh() throws {
         let harness = try DideHarness(
             snippet: injectedPayload(
                 from: ShellIntegration.injectScript(podID: "wc-1", token: "sekret-token")
@@ -61,7 +63,7 @@ final class ShellIntegrationTests: XCTestCase {
             )
             XCTAssertEqual(defaultResult.status, 0, "\(shell.name) default stderr: \(defaultResult.stderr)")
             XCTAssertTrue(
-                defaultResult.stdout.contains("dide: opening \(harness.canonicalPath(for: harness.cwdReal))"),
+                defaultResult.stdout.contains("ded: opening \(harness.canonicalPath(for: harness.cwdReal))"),
                 "\(shell.name) default stdout: \(defaultResult.stdout)"
             )
             XCTAssertEqual(try defaultResult.decodedPath(), harness.canonicalPath(for: harness.cwdReal))
@@ -102,7 +104,7 @@ final class ShellIntegrationTests: XCTestCase {
         }
     }
 
-    func testDideHelperRejectsTooManyArgsEmptyTargetAndNonDirectoryTargetInBashAndZsh() throws {
+    func testDedHelperRejectsTooManyArgsEmptyTargetAndNonDirectoryTargetInBashAndZsh() throws {
         let harness = try DideHarness(
             snippet: injectedPayload(
                 from: ShellIntegration.injectScript(podID: "wc-1", token: "sekret-token")
@@ -117,7 +119,7 @@ final class ShellIntegrationTests: XCTestCase {
                 currentDirectory: harness.cwdReal
             )
             XCTAssertEqual(tooManyArgs.status, 64, "\(shell.name) stderr: \(tooManyArgs.stderr)")
-            XCTAssertTrue(tooManyArgs.stderr.contains("usage: dide [path]"), "\(shell.name) stderr: \(tooManyArgs.stderr)")
+            XCTAssertTrue(tooManyArgs.stderr.contains("usage: ded [path]"), "\(shell.name) stderr: \(tooManyArgs.stderr)")
             XCTAssertNil(tooManyArgs.payload, "\(shell.name) should not emit JSON for too many args")
 
             let emptyTarget = try harness.run(
@@ -126,7 +128,7 @@ final class ShellIntegrationTests: XCTestCase {
                 currentDirectory: harness.cwdReal
             )
             XCTAssertNotEqual(emptyTarget.status, 0, "\(shell.name) empty target unexpectedly succeeded")
-            XCTAssertTrue(emptyTarget.stderr.contains("dide: path must not be empty"), "\(shell.name) stderr: \(emptyTarget.stderr)")
+            XCTAssertTrue(emptyTarget.stderr.contains("ded: path must not be empty"), "\(shell.name) stderr: \(emptyTarget.stderr)")
             XCTAssertNil(emptyTarget.payload, "\(shell.name) should not emit JSON for an empty target")
 
             let nonDirectory = try harness.run(
@@ -135,12 +137,12 @@ final class ShellIntegrationTests: XCTestCase {
                 currentDirectory: harness.cwdReal
             )
             XCTAssertNotEqual(nonDirectory.status, 0, "\(shell.name) non-directory unexpectedly succeeded")
-            XCTAssertTrue(nonDirectory.stderr.contains("dide: could not resolve path"), "\(shell.name) stderr: \(nonDirectory.stderr)")
+            XCTAssertTrue(nonDirectory.stderr.contains("ded: could not resolve path"), "\(shell.name) stderr: \(nonDirectory.stderr)")
             XCTAssertNil(nonDirectory.payload, "\(shell.name) should not emit JSON for a file target")
         }
     }
 
-    func testDideHelperFailsWhenBase64EncodingFailsInBashAndZsh() throws {
+    func testDedHelperFailsWhenBase64EncodingFailsInBashAndZsh() throws {
         let harness = try DideHarness(
             snippet: injectedPayload(
                 from: ShellIntegration.injectScript(podID: "wc-1", token: "sekret-token")
@@ -156,12 +158,12 @@ final class ShellIntegrationTests: XCTestCase {
                 failBase64: true
             )
             XCTAssertNotEqual(result.status, 0, "\(shell.name) base64 failure unexpectedly succeeded")
-            XCTAssertTrue(result.stderr.contains("dide: could not encode path"), "\(shell.name) stderr: \(result.stderr)")
+            XCTAssertTrue(result.stderr.contains("ded: could not encode path"), "\(shell.name) stderr: \(result.stderr)")
             XCTAssertNil(result.payload, "\(shell.name) should not emit JSON when base64 fails")
         }
     }
 
-    func testDideHelperRoutesThroughALiveTunnelInBashAndZsh() throws {
+    func testDedHelperRoutesThroughALiveTunnelInBashAndZsh() throws {
         let harness = try DideHarness(
             snippet: injectedPayload(
                 from: ShellIntegration.injectScript(podID: "wc-1", token: "sekret-token")
@@ -202,7 +204,7 @@ final class ShellIntegrationTests: XCTestCase {
             )
             XCTAssertNotEqual(missing.status, 0, "\(shell.name) missing tunnel unexpectedly succeeded")
             XCTAssertTrue(
-                missing.stderr.contains("dide: no DevSpace connection available"),
+                missing.stderr.contains("ded: no DevSpace connection available"),
                 "\(shell.name) missing stderr: \(missing.stderr)"
             )
             XCTAssertNil(missing.payload, "\(shell.name) should not POST without a live tunnel")
@@ -236,12 +238,75 @@ final class ShellIntegrationTests: XCTestCase {
         }
     }
 
+    func testDideWarnsEveryTimeAndForwardsToDedInBashAndZsh() throws {
+        let harness = try DideHarness(
+            snippet: injectedPayload(
+                from: ShellIntegration.injectScript(podID: "wc-1", token: "sekret-token")
+            )
+        )
+        defer { harness.cleanup() }
+
+        for shell in try shellSpecs() {
+            let first = try harness.run(
+                shell: shell,
+                command: "dide",
+                arguments: [harness.absoluteTargetSymlink.path],
+                currentDirectory: harness.cwdReal
+            )
+            let repeated = try harness.runTwice(shell: shell, command: "dide", currentDirectory: harness.cwdReal)
+            XCTAssertEqual(first.status, 0, "\(shell.name) stderr: \(first.stderr)")
+            XCTAssertEqual(first.stderr, "dide is deprecated; use ded instead\n")
+            XCTAssertEqual(
+                repeated.stderr,
+                "dide is deprecated; use ded instead\ndide is deprecated; use ded instead\n"
+            )
+            XCTAssertTrue(first.stdout.contains("ded: opening"))
+            XCTAssertEqual(try first.decodedPath(), harness.canonicalPath(for: harness.absoluteTargetReal))
+
+            let failed = try harness.run(
+                shell: shell,
+                command: "dide",
+                arguments: ["one", "two"],
+                currentDirectory: harness.cwdReal
+            )
+            XCTAssertEqual(failed.status, 64)
+            XCTAssertEqual(
+                failed.stderr,
+                "dide is deprecated; use ded instead\nusage: ded [path]\n"
+            )
+        }
+    }
+
+    func testDedAndDideReportRequestFailuresInBashAndZsh() throws {
+        let harness = try DideHarness(
+            snippet: injectedPayload(
+                from: ShellIntegration.injectScript(podID: "wc-1", token: "sekret-token")
+            )
+        )
+        defer { harness.cleanup() }
+
+        for shell in try shellSpecs() {
+            let ded = try harness.run(
+                shell: shell, arguments: [], currentDirectory: harness.cwdReal, failCurl: true
+            )
+            XCTAssertEqual(ded.status, 1)
+            XCTAssertEqual(ded.stderr, "ded: request failed\n")
+
+            let dide = try harness.run(
+                shell: shell, command: "dide", arguments: [], currentDirectory: harness.cwdReal, failCurl: true
+            )
+            XCTAssertEqual(dide.status, ded.status)
+            XCTAssertEqual(dide.stderr, "dide is deprecated; use ded instead\nded: request failed\n")
+        }
+    }
+
     func testInjectScriptWithoutTokenOmitsDideHelper() throws {
         let decoded = try injectedPayload(
             from: ShellIntegration.injectScript(podID: "wc-1", token: "")
         )
 
         XCTAssertTrue(decoded.contains(ShellIntegration.snippet))
+        XCTAssertFalse(decoded.contains("ded()"))
         XCTAssertFalse(decoded.contains("dide()"))
         XCTAssertFalse(decoded.contains("/dide"))
         XCTAssertFalse(decoded.contains("\"token\":"))
@@ -399,6 +464,9 @@ private final class DideHarness {
                 *) exit 7 ;;
               esac
             fi
+            if [ "${DIDE_TEST_CURL_FAIL_POST:-0}" = "1" ]; then
+              exit 7
+            fi
             args_file=$DIDE_TEST_CURL_ARGS_FILE
             payload_file=$DIDE_TEST_PAYLOAD_FILE
             : > "$args_file"
@@ -431,9 +499,11 @@ private final class DideHarness {
 
     func run(
         shell: ShellSpec,
+        command: String = "ded",
         arguments: [String],
         currentDirectory: URL,
         failBase64: Bool = false,
+        failCurl: Bool = false,
         productionPodForwardPort: String? = nil,
         developmentPodForwardPort: String? = nil,
         livePorts: [UInt16] = [PodPortRouting.productionPort, PodPortRouting.developmentPort]
@@ -443,7 +513,7 @@ private final class DideHarness {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: shell.path)
         process.currentDirectoryURL = currentDirectory
-        process.arguments = ["-c", ". \"$SNIPPET\"; dide \"$@\"", "dide-test"] + arguments
+        process.arguments = ["-c", ". \"$SNIPPET\"; \"$0\" \"$@\"", command] + arguments
         process.environment = [
             "HOME": root.path,
             "PATH": "\(binDir.path):/usr/bin:/bin:/usr/sbin:/sbin",
@@ -451,6 +521,7 @@ private final class DideHarness {
             "DIDE_TEST_PAYLOAD_FILE": payloadFile.path,
             "DIDE_TEST_CURL_ARGS_FILE": argsFile.path,
             "DIDE_TEST_BASE64_FAIL": failBase64 ? "1" : "0",
+            "DIDE_TEST_CURL_FAIL_POST": failCurl ? "1" : "0",
             "DEVSPACE_PROD_POD_FORWARD_PORT": productionPodForwardPort ?? "",
             "DEVSPACE_DEV_POD_FORWARD_PORT": developmentPodForwardPort ?? "",
             "DIDE_TEST_LIVE_PORTS": livePorts.map(String.init).joined(separator: ","),
@@ -483,6 +554,41 @@ private final class DideHarness {
                 .split(separator: "\n", omittingEmptySubsequences: false)
                 .map(String.init)
                 .filter { !$0.isEmpty }
+        )
+    }
+
+    func runTwice(shell: ShellSpec, command: String, currentDirectory: URL) throws -> DideRunResult {
+        let payloadFile = root.appendingPathComponent("payload-\(UUID().uuidString).json")
+        let argsFile = root.appendingPathComponent("curl-args-\(UUID().uuidString).txt")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: shell.path)
+        process.currentDirectoryURL = currentDirectory
+        process.arguments = ["-c", ". \"$SNIPPET\"; \"$0\"; \"$0\"", command]
+        process.environment = [
+            "HOME": root.path,
+            "PATH": "\(binDir.path):/usr/bin:/bin:/usr/sbin:/sbin",
+            "SNIPPET": snippetFile.path,
+            "DIDE_TEST_PAYLOAD_FILE": payloadFile.path,
+            "DIDE_TEST_CURL_ARGS_FILE": argsFile.path,
+            "DIDE_TEST_BASE64_FAIL": "0",
+            "DIDE_TEST_CURL_FAIL_POST": "0",
+            "DEVSPACE_PROD_POD_FORWARD_PORT": "",
+            "DEVSPACE_DEV_POD_FORWARD_PORT": "",
+            "DIDE_TEST_LIVE_PORTS": [PodPortRouting.productionPort, PodPortRouting.developmentPort]
+                .map(String.init).joined(separator: ","),
+        ]
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        try process.run()
+        process.waitUntilExit()
+        return DideRunResult(
+            status: process.terminationStatus,
+            stdout: String(decoding: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self),
+            stderr: String(decoding: stderrPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self),
+            payload: try? String(contentsOf: payloadFile, encoding: .utf8),
+            curlArguments: []
         )
     }
 

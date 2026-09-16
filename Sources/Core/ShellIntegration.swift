@@ -57,19 +57,19 @@ public enum ShellIntegration {
 
         return String(snippet.dropLast(suffix.count))
             + "\n"
-            + dideFunction(podID: podID, token: token)
+            + dedFunction(podID: podID, token: token)
             + suffix
     }
 
-    private static func dideFunction(podID: String, token: String) -> String {
+    private static func dedFunction(podID: String, token: String) -> String {
         let shellPodID = shellDoubleQuoted(podID)
         let shellToken = shellDoubleQuoted(token)
         return """
         \(PodPortRouting.resolverShell)
         # Open a pod folder in Zed through the authenticated /dide listener.
-        dide() {
+        ded() {
           if [ "$#" -gt 1 ]; then
-            printf 'usage: dide [path]\\n' >&2
+            printf 'usage: ded [path]\\n' >&2
             return 64
           fi
           local target
@@ -79,36 +79,40 @@ public enum ShellIntegration {
             target="$1"
           fi
           if [ -z "$target" ]; then
-            printf 'dide: path must not be empty\\n' >&2
+            printf 'ded: path must not be empty\\n' >&2
             return 1
           fi
           local resolved
           resolved="$(cd -- "$target" 2>/dev/null && pwd -P)" || {
-            printf 'dide: could not resolve path: %s\\n' "$target" >&2
+            printf 'ded: could not resolve path: %s\\n' "$target" >&2
             return 1
           }
           local encoded_path
           encoded_path="$(printf '%s' "$resolved" | base64)" || {
-            printf 'dide: could not encode path\\n' >&2
+            printf 'ded: could not encode path\\n' >&2
             return 1
           }
           local path_b64
           path_b64="$(printf '%s' "$encoded_path" | tr -d '\\n')" || {
-            printf 'dide: could not encode path\\n' >&2
+            printf 'ded: could not encode path\\n' >&2
             return 1
           }
           local payload
           payload="{\\"pod_id\\":\\"\(shellPodID)\\",\\"path_b64\\":\\"$path_b64\\",\\"token\\":\\"\(shellToken)\\"}"
           local port
           port="$(__devspace_resolve_port)" || {
-            printf 'dide: no DevSpace connection available\\n' >&2
+            printf 'ded: no DevSpace connection available\\n' >&2
             return 1
           }
           curl -fsS --max-time 2 -X POST -H 'Content-Type: application/json' -d "$payload" "http://localhost:$port/dide" >/dev/null || {
-            printf 'dide: request failed\\n' >&2
+            printf 'ded: request failed\\n' >&2
             return 1
           }
-          printf 'dide: opening %s\\n' "$resolved"
+          printf 'ded: opening %s\\n' "$resolved"
+        }
+        dide() {
+          printf 'dide is deprecated; use ded instead\\n' >&2
+          ded "$@"
         }
         """
     }
