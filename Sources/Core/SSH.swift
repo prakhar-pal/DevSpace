@@ -61,6 +61,95 @@ public enum SSH {
         proxyCommand: String? = nil,
         bundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) -> [String] {
+        var args = interactiveArgs(
+            podID: podID,
+            proxyCommand: proxyCommand,
+            bundleIdentifier: bundleIdentifier
+        )
+        if tunnel {
+            let ports = ports(bundleIdentifier: bundleIdentifier)
+            args.insert(contentsOf: ["-R", "\(ports.podForwardPort):localhost:\(ports.listenerPort)"], at: args.count - 1)
+        }
+        return args
+    }
+
+    /// A non-interactive master connection. It is the sole owner of the
+    /// workspace's reverse notification tunnel; terminal tabs join through
+    /// `controlPath` instead of binding another remote port.
+    public static func masterArgs(
+        podID: String,
+        proxyCommand: String?,
+        controlPath: String,
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier
+    ) -> [String] {
+        let ports = ports(bundleIdentifier: bundleIdentifier)
+        var args = connectionArgs(
+            podID: podID,
+            proxyCommand: proxyCommand,
+            bundleIdentifier: bundleIdentifier
+        )
+        args.insert(contentsOf: [
+            "-N",
+            "-o", "ControlMaster=yes",
+            "-o", "ControlPersist=no",
+            "-o", "ControlPath=\(controlPath)",
+            "-o", "ExitOnForwardFailure=yes",
+            "-R", "\(ports.podForwardPort):localhost:\(ports.listenerPort)",
+        ], at: args.count - 1)
+        return args
+    }
+
+    /// An interactive terminal client attached to an already-ready master.
+    /// No client receives a reverse forward of its own.
+    public static func clientArgs(
+        podID: String,
+        proxyCommand: String?,
+        controlPath: String,
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier
+    ) -> [String] {
+        var args = interactiveArgs(
+            podID: podID,
+            proxyCommand: proxyCommand,
+            bundleIdentifier: bundleIdentifier
+        )
+        args.insert(contentsOf: [
+            "-o", "ControlMaster=no",
+            "-o", "ControlPersist=no",
+            "-o", "ControlPath=\(controlPath)",
+        ], at: args.count - 1)
+        return args
+    }
+
+    /// Checks that a specific multiplex master has created and is accepting
+    /// requests on its control socket.
+    public static func controlCheckArgs(podID: String, controlPath: String) -> [String] {
+        ["-S", controlPath, "-O", "check", "\(podID).devpod"]
+    }
+
+    /// Requests orderly shutdown of a specific multiplex master.
+    public static func controlExitArgs(podID: String, controlPath: String) -> [String] {
+        ["-S", controlPath, "-O", "exit", "\(podID).devpod"]
+    }
+
+    private static func interactiveArgs(
+        podID: String,
+        proxyCommand: String?,
+        bundleIdentifier: String?
+    ) -> [String] {
+        var args = connectionArgs(
+            podID: podID,
+            proxyCommand: proxyCommand,
+            bundleIdentifier: bundleIdentifier
+        )
+        args.insert("-tt", at: args.count - 1)
+        return args
+    }
+
+    private static func connectionArgs(
+        podID: String,
+        proxyCommand: String?,
+        bundleIdentifier: String?
+    ) -> [String] {
         let ports = ports(bundleIdentifier: bundleIdentifier)
         let podForwardEnvironment: String
         switch buildChannel(bundleIdentifier: bundleIdentifier) {
@@ -70,7 +159,6 @@ public enum SSH {
             podForwardEnvironment = "\(PodPortRouting.developmentEnvironmentVariable)=\(ports.podForwardPort)"
         }
         var args = [
-            "-tt",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "LogLevel=ERROR",
@@ -81,9 +169,6 @@ public enum SSH {
             // the tunnel owned by this particular app session.
             "-o", "SetEnv=\(podForwardEnvironment)",
         ]
-        if tunnel {
-            args += ["-R", "\(ports.podForwardPort):localhost:\(ports.listenerPort)"]
-        }
         if let proxyCommand {
             args += ["-o", "ProxyCommand=\(proxyCommand) --start-services=false"]
         }

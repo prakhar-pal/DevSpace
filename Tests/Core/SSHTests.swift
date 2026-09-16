@@ -114,6 +114,48 @@ final class SSHTests: XCTestCase {
         XCTAssertTrue(args.contains("ProxyCommand=devpod ssh --stdio wc-1 --start-services=false"))
         XCTAssertFalse(args.contains("-R"))
     }
+
+    func testMasterOwnsReverseTunnelAndControlSocket() {
+        let args = SSH.masterArgs(
+            podID: "wc-1",
+            proxyCommand: "devpod ssh --stdio wc-1",
+            controlPath: "/tmp/devspace/socket",
+            bundleIdentifier: "com.prakharp.devspace"
+        )
+
+        XCTAssertTrue(args.contains("-N"))
+        XCTAssertTrue(args.contains("ControlMaster=yes"))
+        XCTAssertTrue(args.contains("ControlPersist=no"))
+        XCTAssertTrue(args.contains("ExitOnForwardFailure=yes"))
+        XCTAssertTrue(args.contains("ControlPath=/tmp/devspace/socket"))
+        XCTAssertTrue(args.contains("8765:localhost:17865"))
+        XCTAssertTrue(args.contains("-R"))
+    }
+
+    func testClientUsesExistingControlSocketWithoutReverseTunnel() {
+        let args = SSH.clientArgs(
+            podID: "wc-1",
+            proxyCommand: "devpod ssh --stdio wc-1",
+            controlPath: "/tmp/devspace/socket"
+        )
+
+        XCTAssertTrue(args.contains("-tt"))
+        XCTAssertTrue(args.contains("ControlMaster=no"))
+        XCTAssertTrue(args.contains("ControlPersist=no"))
+        XCTAssertTrue(args.contains("ControlPath=/tmp/devspace/socket"))
+        XCTAssertFalse(args.contains("-R"))
+    }
+
+    func testControlOperationsTargetTheDevpodAlias() {
+        XCTAssertEqual(
+            SSH.controlCheckArgs(podID: "wc-1", controlPath: "/tmp/devspace/socket"),
+            ["-S", "/tmp/devspace/socket", "-O", "check", "wc-1.devpod"]
+        )
+        XCTAssertEqual(
+            SSH.controlExitArgs(podID: "wc-1", controlPath: "/tmp/devspace/socket"),
+            ["-S", "/tmp/devspace/socket", "-O", "exit", "wc-1.devpod"]
+        )
+    }
 }
 
 // The `zed ssh://…` remote-open path: workdir parsing from the devpod-managed
