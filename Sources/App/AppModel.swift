@@ -8,6 +8,13 @@ typealias SSHProxyResolving = @MainActor (
     _ completion: @escaping @MainActor (String?) -> Void
 ) -> Void
 
+/// Fetches a definitive DevPod workspace status before disruption recovery
+/// opens another SSH transport.
+typealias WorkspaceStatusResolving = @MainActor (
+    _ podID: String,
+    _ completion: @escaping @MainActor (Result<WorkspaceStatus, DevpodError>) -> Void
+) -> Void
+
 typealias PastedImageResolving = @MainActor () -> PastedImage?
 typealias ShortcutMonitorObserving = @MainActor (_ didDefer: Bool) -> Void
 
@@ -70,6 +77,33 @@ private func resolveNoSSHProxyCommand(
     completion: @escaping @MainActor (String?) -> Void
 ) {
     completion(nil)
+}
+
+@MainActor
+private func resolveWorkspaceStatus(
+    _ runner: CommandRunning,
+    podID: String,
+    completion: @escaping @MainActor (Result<WorkspaceStatus, DevpodError>) -> Void
+) {
+    DispatchQueue.global(qos: .userInitiated).async {
+        let result: Result<WorkspaceStatus, DevpodError>
+        do {
+            result = .success(try Devpod.status(runner, id: podID))
+        } catch let error as DevpodError {
+            result = .failure(error)
+        } catch {
+            result = .failure(DevpodError("\(error)"))
+        }
+        Task { @MainActor in completion(result) }
+    }
+}
+
+@MainActor
+private func resolveAssumedRunningWorkspaceStatus(
+    _ podID: String,
+    completion: @escaping @MainActor (Result<WorkspaceStatus, DevpodError>) -> Void
+) {
+    completion(.success(WorkspaceStatus(id: podID, state: "Running")))
 }
 
 /// Top-level UI state (the Swift analog of App.tsx): sidebar layout + the
@@ -158,6 +192,7 @@ final class AppModel: ObservableObject {
     private let handoffTimeoutScheduler: HandoffTimeoutScheduling
     private let connectionRetryScheduler: ConnectionRetryScheduling
     private let sshProxyResolver: SSHProxyResolving
+    private let workspaceStatusResolver: WorkspaceStatusResolving
     private let injectedShortcutActionExecutor: AppShortcutActionExecuting?
     private let pastedImageResolver: PastedImageResolving
     private let shortcutMonitorObserver: ShortcutMonitorObserving?
@@ -195,6 +230,9 @@ final class AppModel: ObservableObject {
     /// Number of automatic retries consumed by the current user-visible
     /// connection attempt. A manual Connect starts a fresh budget.
     private var sshStartupRetryCounts: [String: Int] = [:]
+    /// Retries consumed after an established primary SSH transport drops.
+    /// Unlike startup retries, each attempt revalidates `devpod status`.
+    private var sshDisruptionRetryCounts: [String: Int] = [:]
     /// Final startup failures stay visible on the status card until the user
     /// retries or the workspace lifecycle changes.
     @Published private var sshConnectionFailures: [String: String] = [:]
@@ -211,6 +249,7 @@ final class AppModel: ObservableObject {
     private var lastAppliedPollRevision: UInt64 = 0
     private static let maxCreationDiscoveryMisses = 3
     private static let sshStartupRetryDelays: [TimeInterval] = [0.5, 1.5]
+    private static let sshDisruptionRetryDelays: [TimeInterval] = [3, 5, 8, 13, 21]
 
     enum TerminalHandoffAction: Equatable {
         case revealOriginal
@@ -308,6 +347,7 @@ final class AppModel: ObservableObject {
         handoffTimeoutScheduler: HandoffTimeoutScheduling = MainQueueHandoffTimeoutScheduler(),
         connectionRetryScheduler: ConnectionRetryScheduling = MainQueueConnectionRetryScheduler(),
         sshProxyResolver: SSHProxyResolving? = nil,
+        workspaceStatusResolver: WorkspaceStatusResolving? = nil,
         shortcutActionExecutor: AppShortcutActionExecuting? = nil,
         pastedImageResolver: PastedImageResolving? = nil,
         shortcutMonitorObserver: ShortcutMonitorObserving? = nil,
@@ -324,6 +364,10 @@ final class AppModel: ObservableObject {
         self.connectionRetryScheduler = connectionRetryScheduler
         self.sshProxyResolver = sshProxyResolver
             ?? (startsRuntimeServices ? resolveSSHProxyCommand : resolveNoSSHProxyCommand)
+        self.workspaceStatusResolver = workspaceStatusResolver
+            ?? (startsRuntimeServices
+                ? { id, completion in resolveWorkspaceStatus(runner, podID: id, completion: completion) }
+                : resolveAssumedRunningWorkspaceStatus)
         injectedShortcutActionExecutor = shortcutActionExecutor
         self.pastedImageResolver = pastedImageResolver ?? { AppModel.pastedImage() }
         self.shortcutMonitorObserver = shortcutMonitorObserver
@@ -546,6 +590,7 @@ final class AppModel: ObservableObject {
         let removedSessionIDs = opened
             .union(autoConnect)
             .union(sshStartupRetryCounts.keys)
+            .union(sshDisruptionRetryCounts.keys)
             .union(sshConnectionFailures.keys)
             .subtracting(liveIDs)
         for id in removedSessionIDs {
@@ -1456,6 +1501,7 @@ final class AppModel: ObservableObject {
         if sshStartupPanes[id] == paneID {
             sshStartupPanes[id] = nil
             sshStartupRetryCounts[id] = nil
+            sshDisruptionRetryCounts[id] = nil
             sshConnectionFailures[id] = nil
         }
         pane.onFirstOutput = nil
@@ -1613,21 +1659,26 @@ final class AppModel: ObservableObject {
     }
 
     /// An SSH terminal ended (user typed `exit`, or the connection died).
-    /// Extra tabs just close; the last one DISCONNECTS: the pod is left in
-    /// whatever state it's in and its status card takes the pane's place.
+    /// The primary owns the reverse-notification tunnel, so ending it closes
+    /// the whole session; extra tabs merely close themselves. The pod is left
+    /// in whatever state it's in and its status card takes the pane's place.
     /// (It used to stop the pod — but a shell exit isn't a stop request, and
     /// when the connection died because the pod stopped externally, running
     /// `devpod stop`/reconnect machinery could wake the pod right back up.)
     private func paneExited(_ id: String, paneID: UUID, exitCode: Int32) {
         guard let list = panes[id], list.contains(where: { $0.id == paneID }) else { return }
-        if list.count == 1,
-           sshStartupPanes[id] == paneID,
-           exitCode != 0
-        {
-            retryStartupSSH(id, paneID: paneID, exitCode: exitCode)
+        if list.first?.id == paneID {
+            if exitCode != 0 {
+                if sshStartupPanes[id] == paneID, sshDisruptionRetryCounts[id] == nil {
+                    retryStartupSSH(id, paneID: paneID, exitCode: exitCode)
+                } else {
+                    retryDisruptedSSH(id, exitCode: exitCode)
+                }
+            } else {
+                disconnect(id)
+            }
             return
         }
-        if list.first?.id == paneID { cancelShellIntegrationHandoff(id) }
         if list.count > 1 {
             removePane(id, paneID: paneID)
         } else {
@@ -1719,8 +1770,102 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Recover an established primary transport that died unexpectedly. All
+    /// terminal tabs are withdrawn because additional tabs depend on the
+    /// primary's reverse-notification tunnel. Each later SSH attempt is gated
+    /// by a fresh `devpod status` call so a workspace that auto-stopped is not
+    /// accidentally woken by `ssh <id>.devpod`.
+    private func retryDisruptedSSH(_ id: String, exitCode: Int32) {
+        guard opened.contains(id), autoConnect.contains(id),
+              !starting.contains(id), !shuttingDown.contains(id), !recreating.contains(id)
+        else {
+            disconnect(id)
+            return
+        }
+
+        cancelShellIntegrationHandoff(id)
+        for pane in panes[id] ?? [] {
+            pane.onExit = nil
+            pane.terminate()
+        }
+        panes[id] = nil
+        activePane[id] = nil
+        sshStartupPanes[id] = nil
+        scheduleDisruptionRecovery(id, exitCode: exitCode)
+    }
+
+    private func scheduleDisruptionRecovery(_ id: String, exitCode: Int32) {
+        guard opened.contains(id), autoConnect.contains(id),
+              !starting.contains(id), !shuttingDown.contains(id), !recreating.contains(id),
+              (panes[id] ?? []).isEmpty
+        else { return }
+
+        let retryCount = sshDisruptionRetryCounts[id, default: 0]
+        guard retryCount < Self.sshDisruptionRetryDelays.count else {
+            invalidateSSHConnection(id)
+            opened.remove(id)
+            autoConnect.remove(id)
+            sshDisruptionRetryCounts[id] = nil
+            let message = "SSH connection failed after disruption (exit \(exitCode))."
+            sshConnectionFailures[id] = message
+            Log.write("connect pod=\(id) phase=disruption-failed exit=\(exitCode)")
+            return
+        }
+
+        let delay = Self.sshDisruptionRetryDelays[retryCount]
+        sshDisruptionRetryCounts[id] = retryCount + 1
+        let recoveryGeneration = UUID()
+        sshConnectionGenerations[id] = recoveryGeneration
+        Log.write("connect pod=\(id) phase=disruption-retry-scheduled attempt=\(retryCount + 1) exit=\(exitCode)")
+        connectionRetryScheduler.schedule(after: delay) { [weak self] in
+            guard let self,
+                  self.sshConnectionGenerations[id] == recoveryGeneration,
+                  self.opened.contains(id),
+                  self.autoConnect.contains(id),
+                  !self.starting.contains(id),
+                  !self.shuttingDown.contains(id),
+                  !self.recreating.contains(id),
+                  (self.panes[id] ?? []).isEmpty
+            else { return }
+            self.workspaceStatusResolver(id) { [weak self] result in
+                self?.resolveDisruptionStatus(
+                    id,
+                    result: result,
+                    generation: recoveryGeneration,
+                    exitCode: exitCode
+                )
+            }
+        }
+    }
+
+    private func resolveDisruptionStatus(
+        _ id: String,
+        result: Result<WorkspaceStatus, DevpodError>,
+        generation: UUID,
+        exitCode: Int32
+    ) {
+        guard sshConnectionGenerations[id] == generation,
+              opened.contains(id), autoConnect.contains(id),
+              !starting.contains(id), !shuttingDown.contains(id), !recreating.contains(id),
+              (panes[id] ?? []).isEmpty
+        else { return }
+
+        switch result {
+        case .success(let status) where status.state == "Running":
+            beginSSHAttempt(id, startedAt: DispatchTime.now().uptimeNanoseconds)
+        case .success:
+            invalidateSSHConnection(id)
+            cancelSSHRecovery(id)
+            opened.remove(id)
+            autoConnect.remove(id)
+        case .failure:
+            scheduleDisruptionRecovery(id, exitCode: exitCode)
+        }
+    }
+
     private func cancelSSHRecovery(_ id: String) {
         sshStartupRetryCounts[id] = nil
+        sshDisruptionRetryCounts[id] = nil
         sshConnectionFailures[id] = nil
     }
 

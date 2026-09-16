@@ -25,6 +25,61 @@ final class ConnectionTimingTests: XCTestCase {
         func run(_: [String]) throws -> String { "" }
     }
 
+    private final class WorkspaceStatusResolver {
+        enum Response {
+            case running
+            case stopped
+            case failure
+        }
+
+        private let response: Response
+        private let lock = NSLock()
+        private var statusCalls = 0
+
+        init(response: Response) {
+            self.response = response
+        }
+
+        func resolve(_ podID: String, completion: @escaping (Result<WorkspaceStatus, DevpodError>) -> Void) {
+            XCTAssertEqual(podID, "wc-1")
+            lock.lock()
+            statusCalls += 1
+            lock.unlock()
+
+            let result: Result<WorkspaceStatus, DevpodError>
+            switch response {
+            case .running:
+                result = .success(WorkspaceStatus(id: podID, state: "Running"))
+            case .stopped:
+                result = .success(WorkspaceStatus(id: podID, state: "Stopped"))
+            case .failure:
+                result = .failure(DevpodError("status unavailable"))
+            }
+            completion(result)
+        }
+
+        var statusCallCount: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return statusCalls
+        }
+    }
+
+    private final class DeferredWorkspaceStatusResolver {
+        private var completions: [(Result<WorkspaceStatus, DevpodError>) -> Void] = []
+
+        func resolve(_ podID: String, completion: @escaping (Result<WorkspaceStatus, DevpodError>) -> Void) {
+            XCTAssertEqual(podID, "wc-1")
+            completions.append(completion)
+        }
+
+        func complete(at index: Int, with result: Result<WorkspaceStatus, DevpodError>) {
+            completions[index](result)
+        }
+
+        var requestCount: Int { completions.count }
+    }
+
     private final class ManualConnectionRetryScheduler: AppModel.ConnectionRetryScheduling {
         private(set) var scheduled: [(delay: TimeInterval, action: () -> Void)] = []
 
@@ -432,7 +487,8 @@ final class ConnectionTimingTests: XCTestCase {
         XCTAssertTrue(model.isConnecting("wc-1"))
     }
 
-    func testEstablishedPrimaryExitDoesNotRetry() async {
+    func testEstablishedPrimaryExitChecksRunningStatusBeforeReconnect() async {
+        let statusResolver = WorkspaceStatusResolver(response: .running)
         let retryScheduler = ManualConnectionRetryScheduler()
         let handoffScheduler = ManualHandoffTimeoutScheduler()
         let model = AppModel(
@@ -447,7 +503,8 @@ final class ConnectionTimingTests: XCTestCase {
             )],
             startsRuntimeServices: false,
             handoffTimeoutScheduler: handoffScheduler,
-            connectionRetryScheduler: retryScheduler
+            connectionRetryScheduler: retryScheduler,
+            workspaceStatusResolver: statusResolver.resolve
         )
 
         model.connect("wc-1")
@@ -458,9 +515,207 @@ final class ConnectionTimingTests: XCTestCase {
         }
         pane.onExit?(255)
 
+        XCTAssertEqual(retryScheduler.scheduled.map(\.delay), [3])
+        XCTAssertTrue(model.opened.contains("wc-1"))
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
+        XCTAssertNil(model.connectionFailure("wc-1"))
+
+        retryScheduler.fireNext()
+        let reconnected = await waitUntil {
+            statusResolver.statusCallCount == 1 && model.panes["wc-1"]?.count == 1
+        }
+        XCTAssertTrue(reconnected)
+    }
+
+    func testRecoveredSSHExitBeforeOutputRemainsStatusGated() async {
+        let statusResolver = WorkspaceStatusResolver(response: .running)
+        let retryScheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            runner: SuccessfulCommandRunner(),
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: retryScheduler,
+            workspaceStatusResolver: statusResolver.resolve
+        )
+
+        model.connect("wc-1")
+        let establishedPane = model.panes["wc-1"]!.first!
+        establishedPane.onFirstOutput?()
+        let established = await waitUntil { model.isTerminalVisible("wc-1") }
+        XCTAssertTrue(established)
+        guard established else { return }
+
+        establishedPane.onExit?(255)
+        retryScheduler.fireNext()
+        let recovered = await waitUntil {
+            statusResolver.statusCallCount == 1 && model.panes["wc-1"]?.count == 1
+        }
+        XCTAssertTrue(recovered)
+        guard recovered, let recoveredPane = model.panes["wc-1"]?.first else { return }
+
+        recoveredPane.onExit?(255)
+
+        XCTAssertEqual(retryScheduler.scheduled.map(\.delay), [5])
+        retryScheduler.fireNext()
+        let secondStatusCheck = await waitUntil { statusResolver.statusCallCount == 2 }
+        XCTAssertTrue(secondStatusCheck)
+    }
+
+    func testEstablishedPrimaryExitDoesNotReconnectWhenFreshStatusIsStopped() async {
+        let statusResolver = WorkspaceStatusResolver(response: .stopped)
+        let retryScheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            runner: SuccessfulCommandRunner(),
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: retryScheduler,
+            workspaceStatusResolver: statusResolver.resolve
+        )
+
+        model.connect("wc-1")
+        let pane = model.panes["wc-1"]!.first!
+        pane.onFirstOutput?()
+        let established = await waitUntil { model.isTerminalVisible("wc-1") }
+        XCTAssertTrue(established)
+        guard established else { return }
+
+        pane.onExit?(255)
+        retryScheduler.fireNext()
+        let statusChecked = await waitUntil { statusResolver.statusCallCount == 1 }
+
+        XCTAssertTrue(statusChecked)
+        XCTAssertFalse(model.opened.contains("wc-1"))
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
+    }
+
+    func testDisruptionStatusFailureUsesFibonacciRetryDelays() async {
+        let statusResolver = WorkspaceStatusResolver(response: .failure)
+        let retryScheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            runner: SuccessfulCommandRunner(),
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: retryScheduler,
+            workspaceStatusResolver: statusResolver.resolve
+        )
+
+        model.connect("wc-1")
+        let pane = model.panes["wc-1"]!.first!
+        pane.onFirstOutput?()
+        let established = await waitUntil { model.isTerminalVisible("wc-1") }
+        XCTAssertTrue(established)
+        guard established else { return }
+
+        pane.onExit?(255)
+        let delays: [TimeInterval] = [3, 5, 8, 13, 21]
+        for (index, delay) in delays.enumerated() {
+            XCTAssertEqual(retryScheduler.scheduled.map(\.delay), [delay])
+            retryScheduler.fireNext()
+
+            let statusChecked = await waitUntil { statusResolver.statusCallCount == index + 1 }
+            XCTAssertTrue(statusChecked)
+        }
+
         XCTAssertFalse(model.opened.contains("wc-1"))
         XCTAssertTrue(retryScheduler.scheduled.isEmpty)
-        XCTAssertNil(model.connectionFailure("wc-1"))
+        XCTAssertEqual(
+            model.connectionFailure("wc-1"),
+            "SSH connection failed after disruption (exit 255)."
+        )
+    }
+
+    func testStaleDisruptionStatusCannotReconnectAfterDisconnect() async {
+        let statusResolver = DeferredWorkspaceStatusResolver()
+        let retryScheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            runner: SuccessfulCommandRunner(),
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: retryScheduler,
+            workspaceStatusResolver: statusResolver.resolve
+        )
+
+        model.connect("wc-1")
+        let pane = model.panes["wc-1"]!.first!
+        pane.onFirstOutput?()
+        let established = await waitUntil { model.isTerminalVisible("wc-1") }
+        XCTAssertTrue(established)
+        guard established else { return }
+
+        pane.onExit?(255)
+        retryScheduler.fireNext()
+        XCTAssertEqual(statusResolver.requestCount, 1)
+
+        model.disconnect("wc-1")
+        statusResolver.complete(at: 0, with: .success(WorkspaceStatus(id: "wc-1", state: "Running")))
+
+        XCTAssertFalse(model.opened.contains("wc-1"))
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
+    }
+
+    func testStaleDisruptionStatusCannotReconnectWhileStopping() async {
+        let statusResolver = DeferredWorkspaceStatusResolver()
+        let retryScheduler = ManualConnectionRetryScheduler()
+        let model = AppModel(
+            runner: SuccessfulCommandRunner(),
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false,
+            connectionRetryScheduler: retryScheduler,
+            workspaceStatusResolver: statusResolver.resolve
+        )
+
+        model.connect("wc-1")
+        let pane = model.panes["wc-1"]!.first!
+        pane.onFirstOutput?()
+        let established = await waitUntil { model.isTerminalVisible("wc-1") }
+        XCTAssertTrue(established)
+        guard established else { return }
+
+        pane.onExit?(255)
+        retryScheduler.fireNext()
+        XCTAssertEqual(statusResolver.requestCount, 1)
+
+        model.stop("wc-1")
+        statusResolver.complete(at: 0, with: .success(WorkspaceStatus(id: "wc-1", state: "Running")))
+
+        XCTAssertFalse(model.opened.contains("wc-1"))
+        XCTAssertTrue(model.shuttingDown.contains("wc-1"))
+        XCTAssertEqual(model.panes["wc-1"]?.count, 1)
     }
 
     func testTimedOutOutputFreePrimaryExitStillRetries() {
@@ -570,6 +825,36 @@ final class ConnectionTimingTests: XCTestCase {
         XCTAssertTrue(model.opened.contains("wc-1"))
         XCTAssertEqual(model.panes["wc-1"]?.count, 1)
         XCTAssertTrue(retryScheduler.scheduled.isEmpty)
+    }
+
+    func testPrimaryCleanExitDisconnectsDependentExtraTerminal() async {
+        let model = AppModel(
+            runner: SuccessfulCommandRunner(),
+            initialWorkspaces: [WorkspaceView(
+                id: "wc-1",
+                provider: "test",
+                source: "",
+                lastUsed: "",
+                state: "Running",
+                error: nil
+            )],
+            startsRuntimeServices: false
+        )
+
+        model.connect("wc-1")
+        let primary = model.panes["wc-1"]!.first!
+        primary.onFirstOutput?()
+        let established = await waitUntil { model.isTerminalVisible("wc-1") }
+        XCTAssertTrue(established)
+        guard established else { return }
+
+        model.newTerminal("wc-1")
+        XCTAssertEqual(model.panes["wc-1"]?.count, 2)
+
+        primary.onExit?(0)
+
+        XCTAssertFalse(model.opened.contains("wc-1"))
+        XCTAssertTrue(model.panes["wc-1"]?.isEmpty ?? true)
     }
 
     func testElapsedMillisecondsUsesMonotonicNanoseconds() {
