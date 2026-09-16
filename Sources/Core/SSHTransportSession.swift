@@ -87,6 +87,7 @@ public final class SSHTransportControlLease {
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
+            try validateRoot()
             for _ in 0 ..< 2 {
                 do {
                     try publishOwnerClaim(fileManager: fileManager)
@@ -130,6 +131,21 @@ public final class SSHTransportControlLease {
         let fileManager = FileManager.default
         guard ownsClaim(fileManager: fileManager) else { return }
         try? fileManager.removeItem(at: claimURL)
+    }
+
+    /// The short root lives directly under `/tmp`, where another local user
+    /// could pre-create a predictable path. Refuse non-directories, symlinks,
+    /// roots owned by another user, and group/world-accessible roots before
+    /// publishing any lease metadata beneath them.
+    private func validateRoot() throws {
+        var info = stat()
+        guard lstat(root.path, &info) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR),
+              info.st_uid == geteuid(),
+              (info.st_mode & mode_t(0o077)) == 0
+        else {
+            throw Error.directoryUnavailable
+        }
     }
 
     private func ownsClaim(fileManager: FileManager) -> Bool {
@@ -309,9 +325,14 @@ public final class SSHTransportSession {
         }
         let bundle = bundleIdentifier ?? "com.prakharp.devspace"
         let lease = SSHTransportControlLease(
-            root: URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("devspace-ssh", isDirectory: true)
-                .appendingPathComponent(channel, isDirectory: true),
+            // OpenSSH appends a random suffix while it binds the ControlMaster
+            // listener. The per-user macOS temporary directory is too deep for
+            // that suffix to fit in a Unix-domain socket path. Scope the short
+            // `/tmp` root to this effective user and build channel. Keeping it
+            // one directory below sticky `/tmp` lets the lease validate every
+            // ancestor it relies on before publishing session metadata.
+            root: URL(fileURLWithPath: "/tmp")
+                .appendingPathComponent("devspace-ssh-\(geteuid())-\(channel)", isDirectory: true),
             bundleIdentifier: bundle,
             workspaceID: podID
         )

@@ -1,4 +1,5 @@
 import XCTest
+import Darwin
 @testable import DevSpaceCore
 
 @MainActor
@@ -129,5 +130,30 @@ final class SSHTransportSessionTests: XCTestCase {
         harness.process.exit(with: 255)
 
         XCTAssertEqual(session.stderrTail, "remote port is already allocated")
+    }
+
+    func testDefaultMasterControlPathLeavesRoomForOpenSSHTemporarySocketSuffix() {
+        let session = SSHTransportSession(
+            podID: "wc-8",
+            proxyCommand: nil,
+            bundleIdentifier: "com.prakharp.devspace.dev"
+        )
+
+        // OpenSSH appends a dot plus 16 random characters while binding the
+        // ControlMaster listener. macOS allows a 104-byte Unix socket path,
+        // including its NUL terminator.
+        XCTAssertLessThan(session.controlPath.utf8.count + 17, 104)
+    }
+
+    func testDefaultMasterControlPathUsesAnEffectiveUserScopedRoot() {
+        let session = SSHTransportSession(
+            podID: "wc-8",
+            proxyCommand: nil,
+            bundleIdentifier: "com.prakharp.devspace.dev"
+        )
+
+        XCTAssertTrue(
+            session.controlPath.hasPrefix("/tmp/devspace-ssh-\(geteuid())-dev/")
+        )
     }
 }

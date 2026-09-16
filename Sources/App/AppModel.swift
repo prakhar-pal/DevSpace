@@ -1599,6 +1599,19 @@ final class AppModel: ObservableObject {
         generation: UUID
     ) {
         guard sshConnectionGenerations[id] == generation else { return }
+        let transport = transports[id]
+        let transportType = transport.map { String(describing: type(of: $0)) } ?? "none"
+        let diagnostic: String
+        if let transport = transport as? SSHTransportSession {
+            let stderr = transport.stderrTail
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            diagnostic = stderr.isEmpty ? "none" : stderr
+        } else {
+            diagnostic = "unavailable"
+        }
+        Log.write(
+            "connect pod=\(id) phase=master-start-error error=\(error) transport=\(transportType) stderr=\(diagnostic)"
+        )
         transports[id] = nil
         let exitCode: Int32
         switch error {
