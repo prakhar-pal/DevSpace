@@ -96,9 +96,12 @@ final class SSHTransportSessionTests: XCTestCase {
 
         harness.scheduler.fireLast()
 
-        XCTAssertEqual(failure, .readinessTimedOut)
+        XCTAssertNil(failure)
         XCTAssertEqual(harness.process.terminateCount, 1)
+        XCTAssertEqual(session.state, .stopping)
+        harness.process.exit(with: 15)
         XCTAssertEqual(session.state, .exited)
+        XCTAssertEqual(failure, .readinessTimedOut)
     }
 
     func testLateCheckAfterStopCannotMakeTransportReady() {

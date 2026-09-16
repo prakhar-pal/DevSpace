@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// The small surface a hidden SSH master needs from its backing process. Tests
@@ -38,9 +39,10 @@ public final class SSHTransportControlLease {
     private struct Owner: Codable {
         let bundleIdentifier: String
         let processID: Int32
-        let processStartUptime: TimeInterval
+        let processIdentity: String?
         let workspaceID: String
         let controlPath: String
+        let leaseID: UUID
     }
 
     private let root: URL
@@ -48,7 +50,11 @@ public final class SSHTransportControlLease {
     private let workspaceID: String
     private let processID: Int32
     private let isProcessAlive: (Int32) -> Bool
+    private let processIdentity: (Int32) -> String?
+    private let requestControlExit: (String, String) -> Void
     private let directory: URL
+    private let claimURL: URL
+    private let leaseID = UUID()
     public let controlPath: String
 
     public init(
@@ -56,14 +62,20 @@ public final class SSHTransportControlLease {
         bundleIdentifier: String,
         workspaceID: String,
         processID: Int32 = ProcessInfo.processInfo.processIdentifier,
-        isProcessAlive: @escaping (Int32) -> Bool = SSHTransportControlLease.processIsAlive
+        isProcessAlive: @escaping (Int32) -> Bool = SSHTransportControlLease.processIsAlive,
+        processIdentity: @escaping (Int32) -> String? = SSHTransportControlLease.processIdentity,
+        requestControlExit: ((String, String) -> Void)? = nil
     ) {
         self.root = root
         self.bundleIdentifier = bundleIdentifier
         self.workspaceID = workspaceID
         self.processID = processID
         self.isProcessAlive = isProcessAlive
-        directory = root.appendingPathComponent(UUID().uuidString.prefix(8).lowercased(), isDirectory: true)
+        self.processIdentity = processIdentity
+        self.requestControlExit = requestControlExit ?? Self.sendControlExit
+        let key = Self.workspaceKey(workspaceID)
+        directory = root.appendingPathComponent(key, isDirectory: true)
+        claimURL = root.appendingPathComponent("\(key).owner.json")
         controlPath = directory.appendingPathComponent("master.sock").path
     }
 
@@ -75,56 +87,157 @@ public final class SSHTransportControlLease {
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
-            try cleanProvenDeadMatchingOwners(fileManager: fileManager)
-            try fileManager.createDirectory(
-                at: directory,
-                withIntermediateDirectories: false,
-                attributes: [.posixPermissions: 0o700]
-            )
-            let owner = Owner(
-                bundleIdentifier: bundleIdentifier,
-                processID: processID,
-                processStartUptime: ProcessInfo.processInfo.systemUptime,
-                workspaceID: workspaceID,
-                controlPath: controlPath
-            )
-            let ownerURL = directory.appendingPathComponent("owner.json")
-            try JSONEncoder().encode(owner).write(to: ownerURL, options: .atomic)
+            for _ in 0 ..< 2 {
+                do {
+                    try publishOwnerClaim(fileManager: fileManager)
+                    do {
+                        try fileManager.createDirectory(
+                            at: directory,
+                            withIntermediateDirectories: false,
+                            attributes: [.posixPermissions: 0o700]
+                        )
+                    } catch {
+                        // The directory may predate this claim (for example
+                        // a legacy or corrupt socket). We only own the claim
+                        // just published, never that pre-existing directory.
+                        releaseClaim()
+                        throw Error.directoryUnavailable
+                    }
+                    return
+                } catch {
+                    guard fileManager.fileExists(atPath: claimURL.path) else {
+                        throw Error.directoryUnavailable
+                    }
+                    try reclaimProvenDeadOwner(fileManager: fileManager)
+                }
+            }
+            throw Error.directoryUnavailable
         } catch let error as Error {
             throw error
         } catch {
-            try? fileManager.removeItem(at: directory)
             throw Error.directoryUnavailable
         }
     }
 
     public func release() {
-        try? FileManager.default.removeItem(at: directory)
+        let fileManager = FileManager.default
+        guard ownsClaim(fileManager: fileManager) else { return }
+        try? fileManager.removeItem(at: directory)
+        releaseClaim()
     }
 
-    private func cleanProvenDeadMatchingOwners(fileManager: FileManager) throws {
-        let children = (try? fileManager.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        )) ?? []
-        for child in children {
-            let ownerURL = child.appendingPathComponent("owner.json")
-            guard let data = try? Data(contentsOf: ownerURL),
-                  let owner = try? JSONDecoder().decode(Owner.self, from: data),
-                  owner.bundleIdentifier == bundleIdentifier,
-                  owner.workspaceID == workspaceID
-            else { continue }
-            if isProcessAlive(owner.processID) {
-                throw Error.workspaceAlreadyOwned
-            }
-            try? fileManager.removeItem(at: child)
+    private func releaseClaim() {
+        let fileManager = FileManager.default
+        guard ownsClaim(fileManager: fileManager) else { return }
+        try? fileManager.removeItem(at: claimURL)
+    }
+
+    private func ownsClaim(fileManager: FileManager) -> Bool {
+        guard let data = try? Data(contentsOf: claimURL),
+              let owner = try? JSONDecoder().decode(Owner.self, from: data)
+        else { return false }
+        return owner.leaseID == leaseID
+            && owner.processID == processID
+            && owner.workspaceID == workspaceID
+            && owner.bundleIdentifier == bundleIdentifier
+    }
+
+    private func publishOwnerClaim(fileManager: FileManager) throws {
+        let owner = Owner(
+            bundleIdentifier: bundleIdentifier,
+            processID: processID,
+            processIdentity: processIdentity(processID),
+            workspaceID: workspaceID,
+            controlPath: controlPath,
+            leaseID: leaseID
+        )
+        let temporary = root.appendingPathComponent(".\(UUID().uuidString).owner")
+        defer { try? fileManager.removeItem(at: temporary) }
+        try JSONEncoder().encode(owner).write(to: temporary, options: .atomic)
+        guard link(temporary.path, claimURL.path) == 0 else {
+            throw Error.directoryUnavailable
         }
+    }
+
+    private func reclaimProvenDeadOwner(fileManager: FileManager) throws {
+        guard let data = try? Data(contentsOf: claimURL),
+              let owner = try? JSONDecoder().decode(Owner.self, from: data),
+              owner.bundleIdentifier == bundleIdentifier,
+              owner.workspaceID == workspaceID,
+              owner.controlPath == controlPath
+        else {
+            // A partially-created or unrecognised claim is deliberately left
+            // alone. Removing it could kill or hijack someone else's socket.
+            throw Error.directoryUnavailable
+        }
+
+        if isProcessAlive(owner.processID) {
+            guard let recordedIdentity = owner.processIdentity,
+                  recordedIdentity == processIdentity(owner.processID)
+            else {
+                // PID reuse (or an unverifiable process) is not evidence that
+                // it is our previous DevSpace process.
+                throw Error.directoryUnavailable
+            }
+            throw Error.workspaceAlreadyOwned
+        }
+
+        // The app process is dead, but an orphaned ssh master could still own
+        // the socket. Ask that exact control path to exit before removal, then
+        // prove the recorded owner remains dead.
+        requestControlExit(owner.workspaceID, owner.controlPath)
+        guard !isProcessAlive(owner.processID) else {
+            throw Error.directoryUnavailable
+        }
+        if fileManager.fileExists(atPath: directory.path) {
+            try fileManager.removeItem(at: directory)
+        }
+        try fileManager.removeItem(at: claimURL)
+    }
+
+    private static func workspaceKey(_ workspaceID: String) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in workspaceID.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
     }
 
     public static func processIsAlive(_ pid: Int32) -> Bool {
         guard pid > 0 else { return false }
         return kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    /// The BSD process start time distinguishes a reused PID from the process
+    /// that wrote the lease. Returning nil makes ownership conservative.
+    public static func processIdentity(_ pid: Int32) -> String? {
+        guard pid > 0 else { return nil }
+        var info = proc_bsdinfo()
+        let bytes = proc_pidinfo(
+            pid,
+            PROC_PIDTBSDINFO,
+            0,
+            &info,
+            Int32(MemoryLayout<proc_bsdinfo>.size)
+        )
+        guard bytes == Int32(MemoryLayout<proc_bsdinfo>.size) else { return nil }
+        return "\(info.pbi_start_tvsec).\(info.pbi_start_tvusec)"
+    }
+
+    private static func sendControlExit(workspaceID: String, controlPath: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = SSH.controlExitArgs(podID: workspaceID, controlPath: controlPath)
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            // The lease is still safe to remove because its owning app PID was
+            // independently proven dead; a stale or absent socket is normal.
+        }
     }
 }
 
@@ -182,6 +295,7 @@ public final class SSHTransportSession {
     private var process: SSHTransportProcess?
     private var generation = UUID()
     private var didReportStartFailure = false
+    private var pendingStartFailure: (error: StartError, generation: UUID)?
 
     public convenience init(
         podID: String,
@@ -238,6 +352,7 @@ public final class SSHTransportSession {
         let newGeneration = UUID()
         generation = newGeneration
         didReportStartFailure = false
+        pendingStartFailure = nil
         state = .starting
 
         if let controlLease {
@@ -282,10 +397,17 @@ public final class SSHTransportSession {
         guard state == .starting || state == .ready else { return }
         generation = UUID()
         state = .stopping
+        Self.requestFoundationControlExit(
+            SSH.controlExitArgs(podID: podID, controlPath: controlPath)
+        )
         process?.terminate()
-        process = nil
-        state = .exited
-        controlLease?.release()
+        // The lease remains until the process's exit callback. Releasing it
+        // here would let a new app start a second master while this one still
+        // owns the control socket and remote reverse forward.
+        if process == nil {
+            state = .exited
+            controlLease?.release()
+        }
     }
 
     private func runReadinessCheck(generation expectedGeneration: UUID) {
@@ -309,13 +431,23 @@ public final class SSHTransportSession {
     private func readinessDeadlineReached(generation expectedGeneration: UUID) {
         guard generation == expectedGeneration, state == .starting else { return }
         stderrTail = process?.stderrTail ?? stderrTail
+        state = .stopping
+        // Do not start AppModel recovery yet. The current master may still
+        // own its lease/socket briefly after terminate(), so a successor
+        // would incorrectly diagnose itself as another DevSpace instance.
+        pendingStartFailure = (.readinessTimedOut, expectedGeneration)
         process?.terminate()
-        process = nil
-        controlLease?.release()
-        reportStartFailure(.readinessTimedOut, generation: expectedGeneration)
+        if process == nil {
+            completeStoppingProcess(generation: expectedGeneration)
+        }
     }
 
     private func processExited(_ exitCode: Int32, generation expectedGeneration: UUID) {
+        if state == .stopping {
+            stderrTail = process?.stderrTail ?? stderrTail
+            completeStoppingProcess(generation: expectedGeneration)
+            return
+        }
         guard generation == expectedGeneration,
               state == .starting || state == .ready
         else { return }
@@ -330,11 +462,28 @@ public final class SSHTransportSession {
         }
     }
 
-    private func reportStartFailure(_ error: StartError, generation expectedGeneration: UUID) {
-        guard generation == expectedGeneration, !didReportStartFailure else { return }
-        didReportStartFailure = true
+    private func completeStoppingProcess(generation expectedGeneration: UUID) {
+        process = nil
         state = .exited
         controlLease?.release()
+        guard let pending = pendingStartFailure,
+              pending.generation == expectedGeneration
+        else { return }
+        pendingStartFailure = nil
+        reportStartFailure(pending.error, generation: expectedGeneration)
+    }
+
+    private func reportStartFailure(
+        _ error: StartError,
+        generation expectedGeneration: UUID,
+        retainingLeaseUntilExit: Bool = false
+    ) {
+        guard generation == expectedGeneration, !didReportStartFailure else { return }
+        didReportStartFailure = true
+        if !retainingLeaseUntilExit {
+            state = .exited
+            if process == nil { controlLease?.release() }
+        }
         onStartError?(error)
     }
 
@@ -363,6 +512,17 @@ public final class SSHTransportSession {
             } catch {
                 DispatchQueue.main.async { completion(false) }
             }
+        }
+    }
+
+    private static func requestFoundationControlExit(_ arguments: [String]) {
+        DispatchQueue.global(qos: .utility).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            process.arguments = arguments
+            process.standardOutput = Pipe()
+            process.standardError = Pipe()
+            try? process.run()
         }
     }
 }

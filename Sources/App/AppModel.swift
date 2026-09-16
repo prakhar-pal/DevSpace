@@ -1612,6 +1612,15 @@ final class AppModel: ObservableObject {
             sshConnectionFailures[id] = "Another DevSpace instance already owns this workspace session."
             return
         }
+        // A replacement master belongs to an already-established session. Its
+        // failure must stay on the disruption path: each attempt is preceded
+        // by a fresh status lookup and uses the Fibonacci recovery budget.
+        // Do not turn it into an initial-connect retry merely because this
+        // particular master never reached readiness.
+        if sshRecoverySnapshots[id] != nil || sshDisruptionRetryCounts[id] != nil {
+            scheduleDisruptionRecovery(id, exitCode: exitCode)
+            return
+        }
         retryStartupSSH(id, paneID: UUID(), exitCode: exitCode)
     }
 
@@ -1791,27 +1800,11 @@ final class AppModel: ObservableObject {
         return pane
     }
 
-    /// An SSH terminal ended (user typed `exit`, or the connection died).
-    /// The primary owns the reverse-notification tunnel, so ending it closes
-    /// the whole session; extra tabs merely close themselves. The pod is left
-    /// in whatever state it's in and its status card takes the pane's place.
-    /// (It used to stop the pod — but a shell exit isn't a stop request, and
-    /// when the connection died because the pod stopped externally, running
-    /// `devpod stop`/reconnect machinery could wake the pod right back up.)
+    /// A visible SSH client ended (user typed `exit`, or its connection died).
+    /// Visible panes are all multiplex clients. Only the hidden transport
+    /// owns the reverse tunnel, and only its exit starts disruption recovery.
     private func paneExited(_ id: String, paneID: UUID, exitCode: Int32) {
         guard let list = panes[id], list.contains(where: { $0.id == paneID }) else { return }
-        if list.first?.id == paneID {
-            if exitCode != 0 {
-                if sshStartupPanes[id] == paneID, sshDisruptionRetryCounts[id] == nil {
-                    retryStartupSSH(id, paneID: paneID, exitCode: exitCode)
-                } else {
-                    retryDisruptedSSH(id, exitCode: exitCode)
-                }
-            } else {
-                disconnect(id)
-            }
-            return
-        }
         if exitCode != 0 {
             retryClientSSH(id, paneID: paneID, exitCode: exitCode)
         } else if list.count > 1 {
@@ -1829,6 +1822,14 @@ final class AppModel: ObservableObject {
 
         let retryCount = sshClientRetries[id]?[paneID]?.count ?? 0
         guard retryCount < Self.sshClientRetryDelays.count else {
+            // The first client can fail before it has produced output. Once
+            // its retry budget is exhausted, it is a normal failed tab rather
+            // than an in-progress connection: reveal Retry/Close instead of
+            // leaving the old shell-integration handoff over it forever.
+            if sshStartupPanes[id] == paneID {
+                sshStartupPanes[id] = nil
+                cancelShellIntegrationHandoff(id)
+            }
             replaceClientPane(
                 id,
                 paneID: paneID,
@@ -1867,9 +1868,7 @@ final class AppModel: ObservableObject {
                   let index = current.firstIndex(where: { $0.id == paneID })
             else { return }
             let fresh = self.makeTerminal(id, controlPath: transport.controlPath, paneID: paneID)
-            fresh.onFirstOutput = { [weak self] in
-                self?.sshClientRetries[id]?[paneID] = nil
-            }
+            self.configureClientFirstOutput(fresh, id: id, paneID: paneID)
             self.panes[id]?[index] = fresh
             self.sshClientRetries[id]?[paneID] = SSHClientRetry(count: retry.count, generation: nil)
         }
@@ -1880,9 +1879,7 @@ final class AppModel: ObservableObject {
               panes[id]?.first(where: { $0.id == paneID })?.clientFailure?.isRetrying == false
         else { return }
         let fresh = makeTerminal(id, controlPath: transport.controlPath, paneID: paneID)
-        fresh.onFirstOutput = { [weak self] in
-            self?.sshClientRetries[id]?[paneID] = nil
-        }
+        configureClientFirstOutput(fresh, id: id, paneID: paneID)
         replaceClientPane(id, paneID: paneID, with: fresh)
         sshClientRetries[id]?[paneID] = nil
     }
@@ -1892,6 +1889,20 @@ final class AppModel: ObservableObject {
         panes[id]?[index].onExit = nil
         panes[id]?[index].terminate()
         panes[id]?[index] = replacement
+    }
+
+    /// A replacement of the first client may still be in the original
+    /// shell-integration handoff. Preserve that ownership semantics while
+    /// clearing its per-client retry state; otherwise an output-free first
+    /// client could leave the session permanently "starting".
+    private func configureClientFirstOutput(_ pane: TerminalPaneModel, id: String, paneID: UUID) {
+        pane.onFirstOutput = { [weak self] in
+            guard let self else { return }
+            self.sshClientRetries[id]?[paneID] = nil
+            if self.sshStartupPanes[id] == paneID {
+                self.primarySSHProducedOutput(id, paneID: paneID)
+            }
+        }
     }
 
     /// Tear down the pod's session and withdraw the auto-connect intent, so
