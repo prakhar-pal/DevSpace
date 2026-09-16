@@ -1444,44 +1444,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Reconnect the active SSH terminal without restarting the pod (or the
-    /// other terminals). Replaced in place so the tab keeps its position; the
-    /// primary tab keeps the reverse notify tunnel.
+    /// Reconnect a workspace by replacing its hidden SSH master. The existing
+    /// terminals depend on that master and are withdrawn; `connect` starts a
+    /// new primary terminal only after the prior master releases its lease.
     func reload(_ id: String) {
-        guard validID(id) else { return }
-        guard sshStartupPanes[id] == nil else { return }
-        guard let transport = transports[id], transport.state == .ready else {
-            disconnect(id)
-            return
-        }
-        guard opened.contains(id), let list = panes[id], !list.isEmpty else {
-            // No session (e.g. it already died): fall back to a full reopen —
-            // an explicit user action, so the session intent is restored.
-            closePane(id)
-            opened.remove(id)
-            invalidateSSHConnection(id)
-            autoConnect.insert(id)
-            openSSHIfNeeded(id)
-            return
-        }
+        guard validID(id), byID[id]?.state == "Running" else { return }
         guard isTerminalVisible(id) else { return }
-        let idx = list.firstIndex { $0.id == activePane[id] } ?? 0
-        let oldPaneID = list[idx].id
-        guard opened.contains(id),
-              !shuttingDown.contains(id),
-              isTerminalVisible(id),
-              let currentList = panes[id],
-              let currentIndex = currentList.firstIndex(where: { $0.id == oldPaneID }),
-              transports[id] === transport,
-              transport.state == .ready
-        else { return }
-        let old = currentList[currentIndex]
-        cancelShellIntegrationHandoff(id)
-        old.onExit = nil // its exit must not run the tab-close/stop-pod path
-        old.terminate()
-        let fresh = makeTerminal(id, controlPath: transport.controlPath)
-        panes[id]?[currentIndex] = fresh
-        activePane[id] = fresh.id
+        disconnect(id)
+        connect(id)
     }
 
     private func openSSHIfNeeded(_ id: String, startedAt: UInt64? = nil) {
