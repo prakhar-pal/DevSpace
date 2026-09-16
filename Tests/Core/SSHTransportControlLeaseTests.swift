@@ -119,4 +119,28 @@ final class SSHTransportControlLeaseTests: XCTestCase {
         }
         XCTAssertTrue(FileManager.default.fileExists(atPath: legacyDirectory.path))
     }
+
+    func testRejectsSymlinkedLeaseRoot() throws {
+        let parent = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("devspace-lease-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let trustedTarget = parent.appendingPathComponent("trusted-target", isDirectory: true)
+        let root = parent.appendingPathComponent("lease-root", isDirectory: true)
+        try FileManager.default.createDirectory(at: trustedTarget, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: root, withDestinationURL: trustedTarget)
+
+        let lease = SSHTransportControlLease(
+            root: root,
+            bundleIdentifier: "com.prakharp.devspace",
+            workspaceID: "wc-1",
+            processID: 111,
+            isProcessAlive: { _ in false },
+            processIdentity: { _ in nil },
+            requestControlExit: { _, _ in }
+        )
+
+        XCTAssertThrowsError(try lease.acquire()) { error in
+            XCTAssertEqual(error as? SSHTransportControlLease.Error, .directoryUnavailable)
+        }
+    }
 }
