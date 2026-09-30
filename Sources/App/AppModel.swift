@@ -89,6 +89,7 @@ private final class ImmediateSSHTransport: SSHTransportControlling {
     private(set) var state: SSHTransportSession.State = .idle
     var onReady: (() -> Void)?
     var onExit: ((Int32) -> Void)?
+    var onStopped: (() -> Void)?
     var onStartError: ((SSHTransportSession.StartError) -> Void)?
 
     init(podID: String) {
@@ -100,7 +101,10 @@ private final class ImmediateSSHTransport: SSHTransportControlling {
         onReady?()
     }
 
-    func stop() { state = .exited }
+    func stop() {
+        state = .exited
+        onStopped?()
+    }
 }
 
 @MainActor
@@ -259,6 +263,13 @@ final class AppModel: ObservableObject {
     /// Hidden ControlMaster transports, one per opened workspace. Visible
     /// terminal panes are clients of these sessions and never own `-R`.
     private var transports: [String: SSHTransportControlling] = [:]
+    /// Masters which received a stop request but still own their control
+    /// socket and lease. Retaining them until their exit callback runs keeps a
+    /// rapid Disconnect → Connect from racing its own previous session.
+    private var stoppingTransports: [String: SSHTransportControlling] = [:]
+    /// A manual Connect received while its prior master is stopping. The
+    /// attempt begins after the previous master releases its lease.
+    private var pendingSSHReconnectStartTimes: [String: UInt64] = [:]
     /// Primary SSH panes that have not produced PTY output yet. This startup
     /// classification outlives the presentation handoff timeout so a late
     /// pre-ready failure can still use the connection retry path.
@@ -1433,48 +1444,22 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Reconnect the active SSH terminal without restarting the pod (or the
-    /// other terminals). Replaced in place so the tab keeps its position; the
-    /// primary tab keeps the reverse notify tunnel.
+    /// Reconnect a workspace by replacing its hidden SSH master. The existing
+    /// terminals depend on that master and are withdrawn; `connect` starts a
+    /// new primary terminal only after the prior master releases its lease.
     func reload(_ id: String) {
-        guard validID(id) else { return }
-        guard sshStartupPanes[id] == nil else { return }
-        guard let transport = transports[id], transport.state == .ready else {
-            disconnect(id)
-            return
-        }
-        guard opened.contains(id), let list = panes[id], !list.isEmpty else {
-            // No session (e.g. it already died): fall back to a full reopen —
-            // an explicit user action, so the session intent is restored.
-            closePane(id)
-            opened.remove(id)
-            invalidateSSHConnection(id)
-            autoConnect.insert(id)
-            openSSHIfNeeded(id)
-            return
-        }
+        guard validID(id), byID[id]?.state == "Running" else { return }
         guard isTerminalVisible(id) else { return }
-        let idx = list.firstIndex { $0.id == activePane[id] } ?? 0
-        let oldPaneID = list[idx].id
-        guard opened.contains(id),
-              !shuttingDown.contains(id),
-              isTerminalVisible(id),
-              let currentList = panes[id],
-              let currentIndex = currentList.firstIndex(where: { $0.id == oldPaneID }),
-              transports[id] === transport,
-              transport.state == .ready
-        else { return }
-        let old = currentList[currentIndex]
-        cancelShellIntegrationHandoff(id)
-        old.onExit = nil // its exit must not run the tab-close/stop-pod path
-        old.terminate()
-        let fresh = makeTerminal(id, controlPath: transport.controlPath)
-        panes[id]?[currentIndex] = fresh
-        activePane[id] = fresh.id
+        disconnect(id)
+        connect(id)
     }
 
     private func openSSHIfNeeded(_ id: String, startedAt: UInt64? = nil) {
         guard validID(id) else { return }
+        if stoppingTransports[id] != nil {
+            pendingSSHReconnectStartTimes[id] = startedAt ?? DispatchTime.now().uptimeNanoseconds
+            return
+        }
         guard !opened.contains(id), !starting.contains(id), !shuttingDown.contains(id),
               !recreating.contains(id)
         else { return }
@@ -2127,11 +2112,33 @@ final class AppModel: ObservableObject {
         sshStartupPanes[id] = nil
         sshRecoverySnapshots[id] = nil
         sshClientRetries[id] = nil
-        transports[id]?.onReady = nil
-        transports[id]?.onStartError = nil
-        transports[id]?.onExit = nil
-        transports[id]?.stop()
-        transports[id] = nil
+        pendingSSHReconnectStartTimes[id] = nil
+        stopSSHTransport(id)
+    }
+
+    private func stopSSHTransport(_ id: String) {
+        guard let transport = transports.removeValue(forKey: id) else { return }
+        transport.onReady = nil
+        transport.onStartError = nil
+        transport.onExit = nil
+        transport.onStopped = { [weak self, weak transport] in
+            guard let self,
+                  let transport,
+                  self.stoppingTransports[id] === transport
+            else { return }
+            self.stoppingTransports[id] = nil
+            self.resumePendingSSHReconnect(id)
+        }
+        stoppingTransports[id] = transport
+        transport.stop()
+    }
+
+    private func resumePendingSSHReconnect(_ id: String) {
+        guard let startedAt = pendingSSHReconnectStartTimes.removeValue(forKey: id),
+              autoConnect.contains(id),
+              byID[id]?.state == "Running"
+        else { return }
+        openSSHIfNeeded(id, startedAt: startedAt)
     }
 
     private func setPanes(_ id: String, _ list: [TerminalPaneModel]) {

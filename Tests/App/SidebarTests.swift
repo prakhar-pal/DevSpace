@@ -186,7 +186,7 @@ final class SidebarTests: XCTestCase {
         XCTAssertEqual(model.panes[id]?.count, 2)
         let activeBeforeReload = model.activePane[id]
         model.reload(id)
-        XCTAssertEqual(model.panes[id]?.count, 2)
+        XCTAssertEqual(model.panes[id]?.count, 1)
         XCTAssertNotEqual(model.activePane[id], activeBeforeReload)
     }
 

@@ -22,6 +22,7 @@ public protocol SSHTransportControlling: AnyObject {
     var state: SSHTransportSession.State { get }
     var onReady: (() -> Void)? { get set }
     var onExit: ((Int32) -> Void)? { get set }
+    var onStopped: (() -> Void)? { get set }
     var onStartError: ((SSHTransportSession.StartError) -> Void)? { get set }
     func start()
     func stop()
@@ -299,6 +300,7 @@ public final class SSHTransportSession {
     public private(set) var stderrTail = ""
     public var onReady: (() -> Void)?
     public var onExit: ((Int32) -> Void)?
+    public var onStopped: (() -> Void)?
     public var onStartError: ((StartError) -> Void)?
 
     private let podID: String
@@ -416,7 +418,8 @@ public final class SSHTransportSession {
 
     public func stop() {
         guard state == .starting || state == .ready else { return }
-        generation = UUID()
+        let stoppingGeneration = UUID()
+        generation = stoppingGeneration
         state = .stopping
         Self.requestFoundationControlExit(
             SSH.controlExitArgs(podID: podID, controlPath: controlPath)
@@ -426,8 +429,7 @@ public final class SSHTransportSession {
         // here would let a new app start a second master while this one still
         // owns the control socket and remote reverse forward.
         if process == nil {
-            state = .exited
-            controlLease?.release()
+            completeStoppingProcess(generation: stoppingGeneration)
         }
     }
 
@@ -487,6 +489,7 @@ public final class SSHTransportSession {
         process = nil
         state = .exited
         controlLease?.release()
+        onStopped?()
         guard let pending = pendingStartFailure,
               pending.generation == expectedGeneration
         else { return }

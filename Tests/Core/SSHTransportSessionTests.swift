@@ -120,6 +120,27 @@ final class SSHTransportSessionTests: XCTestCase {
         XCTAssertNotEqual(session.state, .ready)
     }
 
+    func testStopNotifiesOnlyAfterTheMasterExits() {
+        let harness = Harness()
+        harness.checks = [true]
+        let session = harness.makeSession()
+        var stoppedCount = 0
+        session.onStopped = { stoppedCount += 1 }
+
+        session.start()
+        XCTAssertEqual(session.state, .ready)
+
+        session.stop()
+
+        XCTAssertEqual(session.state, .stopping)
+        XCTAssertEqual(stoppedCount, 0)
+
+        harness.process.exit(with: 0)
+
+        XCTAssertEqual(session.state, .exited)
+        XCTAssertEqual(stoppedCount, 1)
+    }
+
     func testExitRetainsMasterDiagnosticTail() {
         let harness = Harness()
         harness.checks = [true]
