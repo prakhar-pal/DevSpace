@@ -1,5 +1,31 @@
 # dev-space
 
+## v0.8.0 - 2026-09-30
+
+### Features
+- feat: deprecate dide helper (3739ee4)
+- feat: recover failed multiplex ssh clients (fff8745)
+- feat: recover multiplexed terminal transports (fb5b51c)
+- feat: manage multiplexed ssh transports (cf7b5b3)
+- feat: add multiplexed ssh arguments (101a302)
+
+### Fixes
+- fix: restart ssh master on reload (4ba385c)
+- fix: defer reconnect until ssh master exits (36ac19b)
+- fix: shorten multiplex ssh control socket path (f3ead97)
+- fix: harden multiplexed ssh recovery (b04e4f1)
+- fix: isolate multiplexed ssh transport owners (6f0a64e)
+- fix: recover disrupted ssh sessions (9b280f0)
+
+### Other
+- docs: specify ded helper deprecation (81dc06f)
+- docs: plan multiplexed ssh terminals (e2f91f1)
+- docs: complete multiplex transport design (e51bc82)
+- docs: harden multiplex transport design (b99b347)
+- docs: specify multiplexed ssh terminal tabs (2d7d3b8)
+- chore: remove content view preview (3b7c323)
+
+
 ## v0.7.1 - 2026-09-04
 
 ### Fixes
