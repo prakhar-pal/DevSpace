@@ -1,0 +1,48 @@
+--- a/src/apprt/gtk/class/application.zig
++++ b/src/apprt/gtk/class/application.zig
+@@ -1393,12 +1393,30 @@
+             .init("open-config", actionOpenConfig, null),
+             .init("present-surface", actionPresentSurface, t_variant_type),
+             .init("devspace-select-workspace", actionSelectWorkspace, workspace_type),
++            .init("devspace-reload-workspace", actionReloadWorkspace, null),
+             .init("quit", actionQuit, null),
+             .init("reload-config", actionReloadConfig, null),
+         };
+ 
+         ext.actions.add(Self, self, &actions);
++        const reload_accels = [_:null]?[*:0]const u8{"<Control><Shift>r"};
++        self.as(gtk.Application).setAccelsForAction("app.devspace-reload-workspace", &reload_accels);
++    }
++
++    fn actionReloadWorkspace(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
++        const active = self.as(gtk.Application).getActiveWindow();
++        var current: ?*glib.List = self.as(gtk.Application).getWindows();
++        while (current) |node| : (current = node.f_next) {
++            const object: *gobject.Object = @ptrCast(@alignCast(node.f_data orelse continue));
++            const window = gobject.ext.cast(Window, object) orelse continue;
++            if (active) |target| {
++                if (window.as(gtk.Window) != target) continue;
++            }
++            const surface = window.getActiveSurface() orelse return;
++            surface.reloadDevSpaceWorkspace();
++            return;
++        }
+     }
+ 
+     /// Setup our global shortcuts.
+     fn startupGlobalShortcuts(self: *Self) void {
+--- a/src/apprt/gtk/class/surface.zig
++++ b/src/apprt/gtk/class/surface.zig
+@@ -1732,6 +1732,12 @@
+         }
+     }
+ 
++    pub fn reloadDevSpaceWorkspace(self: *Self) void {
++        const binding = self.private().devspace_terminal orelse return;
++        if (binding.exited) return;
++        binding.client.reloadWorkspace(binding.workspace) catch {};
++    }
++
+     pub fn bindDevSpaceTerminal(self: *Self, client: *devspace.Client, effect: devspace.TerminalEffect) !void {
+         const binding = try devspace.TerminalBinding.create(client, effect);
+         const priv = self.private();

@@ -1,5 +1,9 @@
-import Darwin
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 
 /// The small surface a hidden SSH master needs from its backing process. Tests
 /// provide a deterministic implementation; the app uses the Foundation one
@@ -19,6 +23,7 @@ public protocol SSHTransportScheduling: AnyObject {
 /// Tests use this protocol to drive ready/exit events without a real process.
 public protocol SSHTransportControlling: AnyObject {
     var controlPath: String { get }
+    var proxyCommand: String? { get }
     var state: SSHTransportSession.State { get }
     var onReady: (() -> Void)? { get set }
     var onExit: ((Int32) -> Void)? { get set }
@@ -26,6 +31,10 @@ public protocol SSHTransportControlling: AnyObject {
     var onStartError: ((SSHTransportSession.StartError) -> Void)? { get set }
     func start()
     func stop()
+}
+
+public extension SSHTransportControlling {
+    var proxyCommand: String? { nil }
 }
 
 /// Owns one short ControlMaster socket directory. The metadata allows a later
@@ -226,10 +235,11 @@ public final class SSHTransportControlLease {
         return kill(pid, 0) == 0 || errno == EPERM
     }
 
-    /// The BSD process start time distinguishes a reused PID from the process
+    /// The OS process start time distinguishes a reused PID from the process
     /// that wrote the lease. Returning nil makes ownership conservative.
     public static func processIdentity(_ pid: Int32) -> String? {
         guard pid > 0 else { return nil }
+#if canImport(Darwin)
         var info = proc_bsdinfo()
         let bytes = proc_pidinfo(
             pid,
@@ -240,6 +250,15 @@ public final class SSHTransportControlLease {
         )
         guard bytes == Int32(MemoryLayout<proc_bsdinfo>.size) else { return nil }
         return "\(info.pbi_start_tvsec).\(info.pbi_start_tvusec)"
+#else
+        guard let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
+              let closingParen = stat.lastIndex(of: ")")
+        else { return nil }
+        // Fields after the process name begin at field 3; starttime is field 22.
+        let fields = stat[stat.index(after: closingParen)...].split(separator: " ")
+        guard fields.count > 19 else { return nil }
+        return String(fields[19])
+#endif
     }
 
     private static func sendControlExit(workspaceID: String, controlPath: String) {
@@ -249,7 +268,7 @@ public final class SSHTransportControlLease {
         process.standardOutput = Pipe()
         process.standardError = Pipe()
         do {
-            try process.run()
+            try runDesktopProcess(process)
             process.waitUntilExit()
         } catch {
             // The lease is still safe to remove because its owning app PID was
@@ -294,6 +313,7 @@ public final class SSHTransportSession {
         _ arguments: [String],
         _ completion: @escaping (Bool) -> Void
     ) -> Void
+    public typealias Prepare = (_ completion: @escaping (String?) -> Void) -> SSHTransportProcess
 
     public let controlPath: String
     public private(set) var state: State = .idle
@@ -304,12 +324,15 @@ public final class SSHTransportSession {
     public var onStartError: ((StartError) -> Void)?
 
     private let podID: String
-    private let proxyCommand: String?
+    public private(set) var proxyCommand: String?
     private let bundleIdentifier: String?
     private let launch: Launch
     private let check: Check
     private let scheduler: SSHTransportScheduling
     private let controlLease: SSHTransportControlLease?
+    private let prepare: Prepare?
+    private var preparation: SSHTransportProcess?
+    private var preparationGeneration: UUID?
     private var process: SSHTransportProcess?
     private var generation = UUID()
     private var didReportStartFailure = false
@@ -318,7 +341,8 @@ public final class SSHTransportSession {
     public convenience init(
         podID: String,
         proxyCommand: String?,
-        bundleIdentifier: String? = Bundle.main.bundleIdentifier
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier,
+        resolveConfiguration: Bool = false
     ) {
         let channel: String
         switch SSH.buildChannel(bundleIdentifier: bundleIdentifier) {
@@ -346,7 +370,10 @@ public final class SSHTransportSession {
             launch: Self.launchFoundationProcess,
             check: Self.runFoundationCheck,
             scheduler: MainQueueSSHTransportScheduler(),
-            controlLease: lease
+            controlLease: lease,
+            prepare: resolveConfiguration ? { completion in
+                FoundationSSHConfigProcess(podID: podID, completion: completion)
+            } : nil
         )
     }
 
@@ -358,7 +385,8 @@ public final class SSHTransportSession {
         launch: @escaping Launch,
         check: @escaping Check,
         scheduler: SSHTransportScheduling,
-        controlLease: SSHTransportControlLease? = nil
+        controlLease: SSHTransportControlLease? = nil,
+        prepare: Prepare? = nil
     ) {
         self.podID = podID
         self.proxyCommand = proxyCommand
@@ -368,6 +396,7 @@ public final class SSHTransportSession {
         self.check = check
         self.scheduler = scheduler
         self.controlLease = controlLease
+        self.prepare = prepare
     }
 
     public func start() {
@@ -395,6 +424,29 @@ public final class SSHTransportSession {
             }
         }
 
+        if let prepare {
+            preparationGeneration = newGeneration
+            preparation = prepare { [weak self] proxy in
+                guard let self, self.preparationGeneration == newGeneration, self.preparation != nil else { return }
+                self.preparation = nil
+                self.preparationGeneration = nil
+                if self.state == .stopping {
+                    self.completeStoppingProcess(generation: self.generation)
+                    return
+                }
+                guard self.generation == newGeneration, self.state == .starting else { return }
+                self.proxyCommand = proxy
+                self.launchMaster(generation: newGeneration)
+            }
+            scheduler.schedule(after: 15) { [weak self] in
+                self?.readinessDeadlineReached(generation: newGeneration)
+            }
+            return
+        }
+        launchMaster(generation: newGeneration)
+    }
+
+    private func launchMaster(generation newGeneration: UUID) {
         do {
             process = try launch(
                 SSH.masterArgs(
@@ -421,6 +473,10 @@ public final class SSHTransportSession {
         let stoppingGeneration = UUID()
         generation = stoppingGeneration
         state = .stopping
+        if let preparation {
+            preparation.terminate()
+            return
+        }
         Self.requestFoundationControlExit(
             SSH.controlExitArgs(podID: podID, controlPath: controlPath)
         )
@@ -459,6 +515,10 @@ public final class SSHTransportSession {
         // own its lease/socket briefly after terminate(), so a successor
         // would incorrectly diagnose itself as another DevSpace instance.
         pendingStartFailure = (.readinessTimedOut, expectedGeneration)
+        if let preparation {
+            preparation.terminate()
+            return
+        }
         process?.terminate()
         if process == nil {
             completeStoppingProcess(generation: expectedGeneration)
@@ -529,7 +589,7 @@ public final class SSHTransportSession {
             process.standardOutput = Pipe()
             process.standardError = Pipe()
             do {
-                try process.run()
+                try runDesktopProcess(process)
                 process.waitUntilExit()
                 let succeeded = process.terminationStatus == 0
                 DispatchQueue.main.async { completion(succeeded) }
@@ -546,12 +606,24 @@ public final class SSHTransportSession {
             process.arguments = arguments
             process.standardOutput = Pipe()
             process.standardError = Pipe()
-            try? process.run()
+            try? runDesktopProcess(process)
         }
     }
 }
 
 extension SSHTransportSession: SSHTransportControlling {}
+
+private final class FoundationSSHConfigProcess: SSHTransportProcess {
+    private let runner = DesktopCommandRunner(executable: "/usr/bin/ssh", superviseSSH: true)
+    var stderrTail: String { "" }
+    init(podID: String, completion: @escaping (String?) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let proxy = SSH.resolveDevpodProxyCommand(podID: podID, runner: self.runner)
+            DispatchQueue.main.async { completion(proxy) }
+        }
+    }
+    func terminate() { runner.cancel() }
+}
 
 private final class FoundationSSHTransportProcess: SSHTransportProcess {
     private let process = Process()
@@ -564,6 +636,7 @@ private final class FoundationSSHTransportProcess: SSHTransportProcess {
     init(arguments: [String], onExit: @escaping (Int32) -> Void) throws {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         process.arguments = arguments
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = stdout
         process.standardError = stderr
         stdout.fileHandleForReading.readabilityHandler = { handle in
@@ -578,7 +651,7 @@ private final class FoundationSSHTransportProcess: SSHTransportProcess {
             self.stderr.fileHandleForReading.readabilityHandler = nil
             DispatchQueue.main.async { onExit(process.terminationStatus) }
         }
-        try process.run()
+        try runDesktopSSHMaster(process)
     }
 
     func terminate() {

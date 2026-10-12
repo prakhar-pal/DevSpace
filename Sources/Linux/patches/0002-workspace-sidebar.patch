@@ -1,0 +1,25 @@
+diff --git a/src/apprt/gtk/class/window.zig b/src/apprt/gtk/class/window.zig
+--- a/src/apprt/gtk/class/window.zig
++++ b/src/apprt/gtk/class/window.zig
+@@ -278,6 +278,21 @@ pub const Window = extern struct {
+             .application = app,
+         });
+ 
++        // Keep Ghostty's terminal/tab hierarchy intact inside our workspace layout.
++        const content = win.as(adw.ApplicationWindow).getContent().?;
++        _ = content.ref();
++        win.as(adw.ApplicationWindow).setContent(null);
++        const layout = gtk.Box.new(.horizontal, 0);
++        const sidebar = gtk.Box.new(.vertical, 12);
++        sidebar.as(gtk.Widget).setName("devspace-sidebar");
++        sidebar.as(gtk.Widget).setSizeRequest(220, -1);
++        sidebar.append(gtk.Label.new("Workspaces").as(gtk.Widget));
++        layout.append(sidebar.as(gtk.Widget));
++        content.setHexpand(1);
++        layout.append(content);
++        content.unref();
++        win.as(adw.ApplicationWindow).setContent(layout.as(gtk.Widget));
++
+         if (overrides.title) |title| {
+             // If the overrides have a title set, we set that immediately
+             // so that any applications inspecting the window states see an

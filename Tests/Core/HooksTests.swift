@@ -4,6 +4,58 @@ import XCTest
 
 // Mirrors hooks.rs tests.
 final class HooksTests: XCTestCase {
+    private final class LocalShellRunner: CommandRunning, @unchecked Sendable {
+        let runner: DesktopCommandRunner
+        init(directory: URL, environment: [String: String] = [:]) {
+            runner = DesktopCommandRunner(executable: "/bin/sh", environment: environment.merging(["CLAUDE_CONFIG_DIR": directory.path]) { _, value in value })
+        }
+        func run(_ args: [String]) throws -> String { try runner.run(["-c", args[2]]) }
+    }
+
+    func testFailedSettingsDecodeLeavesOriginalFileUntouched() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("claude-atomic-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = directory.appendingPathComponent("settings.json")
+        let original = "{\"permissions\":{\"allow\":[\"Bash(git:*)\"]}}"
+        try original.write(to: settings, atomically: true, encoding: .utf8)
+        let decoder = directory.appendingPathComponent("base64")
+        try "#!/bin/sh\nprintf broken\nexit 1\n".write(to: decoder, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: decoder.path)
+        let environment = ["PATH": directory.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")]
+        XCTAssertThrowsError(try Hooks.inject(LocalShellRunner(directory: directory, environment: environment), podID: "pod", token: "tok", installManualHelper: false))
+        XCTAssertEqual(try String(contentsOf: settings, encoding: .utf8), original)
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: directory.path).contains { $0.hasPrefix(".devspace-settings-") })
+    }
+
+    func testInstalledSettingsArePrivate() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("claude-private-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Hooks.inject(LocalShellRunner(directory: directory), podID: "pod", token: "tok", installManualHelper: false)
+        let attributes = try FileManager.default.attributesOfItem(atPath: directory.appendingPathComponent("settings.json").path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
+    func testUnreadableButWritableSettingsAreNotReplacedWithEmptySettings() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("claude-settings-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = directory.appendingPathComponent("settings.json")
+        let original = "{\"permissions\":{\"allow\":[\"Bash(git:*)\"]}}"
+        try original.write(to: settings, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o200], ofItemAtPath: settings.path)
+        XCTAssertThrowsError(try Hooks.inject(LocalShellRunner(directory: directory), podID: "pod", token: "tok", installManualHelper: false))
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: settings.path)
+        XCTAssertEqual(try String(contentsOf: settings, encoding: .utf8), original)
+    }
+    func testMalformedExistingSettingsAreNeverOverwritten() throws {
+        for settings in ["{not-json", "[]", "null", ""] {
+            let runner = RecordingRunner(responses: [settings])
+            XCTAssertThrowsError(try Hooks.inject(runner, podID: "wc-1", token: "tok", installManualHelper: true))
+            XCTAssertEqual(runner.calls.count, 1, "invalid existing settings must not reach the write command")
+        }
+    }
     private final class RecordingRunner: CommandRunning, @unchecked Sendable {
         private let responses: [String]
         var calls: [[String]] = []
@@ -33,7 +85,7 @@ final class HooksTests: XCTestCase {
         let read = try XCTUnwrap(runner.calls.first)
         XCTAssertEqual(read, [
             "ssh", "--command",
-            "cat \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\" 2>/dev/null || echo '{}'",
+            "if [ -e \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\" ]; then cat \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\"; else printf '{}'; fi",
             "--start-services=false", "--", "wc-1",
         ])
         let write = try XCTUnwrap(runner.calls.dropFirst().first)
@@ -45,7 +97,7 @@ final class HooksTests: XCTestCase {
     private func settingsPayload(from write: [String]) throws -> [String: Any] {
         let command = try XCTUnwrap(write.dropFirst(2).first)
         let prefix = "&& echo "
-        let suffix = " | base64 -d > \"$CLAUDE_DIR/settings.json\""
+        let suffix = " | base64 -d > \"$settings_tmp\""
         let payloadStart = try XCTUnwrap(command.range(of: prefix)?.upperBound)
         let payloadEnd = try XCTUnwrap(command.range(of: suffix, range: payloadStart..<command.endIndex)?.lowerBound)
         let encoded = String(command[payloadStart..<payloadEnd])
@@ -72,6 +124,26 @@ final class HooksTests: XCTestCase {
         ]
         let merged = Hooks.mergeSettings(existing, podID: "wc-1", token: "tok")
         XCTAssertEqual(eventArray(merged, "Notification")?.count, 2)
+    }
+
+    func testPreservesOtherToolsNotificationHooksContainingPodID() throws {
+        let command = "curl -d '{\"pod_id\":\"pod\"}' https://other-tool.example/notify"
+        let existing: [String: Any] = ["hooks": ["Stop": [["hooks": [["type": "command", "command": command]]]]]]
+        let entries = try XCTUnwrap(eventArray(Hooks.mergeSettings(existing, podID: "pod", token: "tok"), "Stop") as? [[String: Any]])
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertEqual((entries.first?["hooks"] as? [[String: String]])?.first?["command"], command)
+    }
+
+    func testReinjectionPreservesUnrelatedCommandsWithinAManagedHookEntry() throws {
+        let old = Hooks.hookCommand("Stop", podID: "pod", token: "old")
+        let existing: [String: Any] = ["hooks": ["Stop": [["matcher": "custom", "hooks": [
+            ["type": "command", "command": old], ["type": "command", "command": "echo keep-me"],
+        ]]]]]
+        let merged = Hooks.mergeSettings(existing, podID: "pod", token: "new")
+        let entries = try XCTUnwrap(eventArray(merged, "Stop") as? [[String: Any]])
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertEqual(entries.first?["matcher"] as? String, "custom")
+        XCTAssertEqual((entries.first?["hooks"] as? [[String: String]])?.first?["command"], "echo keep-me")
     }
 
     func testReinjectingReplacesOldTokenNotAccumulates() {
@@ -108,7 +180,7 @@ final class HooksTests: XCTestCase {
         XCTAssertEqual(Array(write.prefix(2)), ["ssh", "--command"])
         XCTAssertTrue(write[2].contains("settings.json"))
         XCTAssertTrue(write[2].contains("~/.devspace-notify"))
-        XCTAssertTrue(write[2].contains("chmod +x ~/.devspace-notify"))
+        XCTAssertTrue(write[2].contains("chmod 700 \"$helper_tmp\""))
     }
 
     func testInjectWithoutManualHelperWritesSettingsOnly() throws {
@@ -118,7 +190,7 @@ final class HooksTests: XCTestCase {
 
         let write = try assertSettingsReadThenWrite(runner)
         XCTAssertEqual(Array(write.prefix(2)), ["ssh", "--command"])
-        XCTAssertTrue(write[2].contains("base64 -d > \"$CLAUDE_DIR/settings.json\""))
+        XCTAssertTrue(write[2].contains("base64 -d > \"$settings_tmp\""))
         XCTAssertFalse(write[2].contains("~/.devspace-notify"))
         XCTAssertFalse(write[2].contains("chmod +x"))
     }

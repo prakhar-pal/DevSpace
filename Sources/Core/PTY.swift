@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(Darwin)
 import Darwin
+#else
+import Glibc
+#endif
 import CPTY
 
 /// A pseudo-terminal session: forks a child process attached to a PTY, streams
@@ -19,8 +23,12 @@ public final class PTYSession: @unchecked Sendable {
     private var masterFD: Int32 = -1
     private var childPID: pid_t = -1
     private var readSource: DispatchSourceRead?
+    #if os(Linux)
+    private var exitSource: DispatchSourceTimer?
+    #endif
     private var lifecycle: Lifecycle = .idle
     private var reapStarted = false
+    private var reapInProgress = false
 
     /// Called with raw bytes read from the PTY (on a background queue).
     public var onOutput: ((Data) -> Void)?
@@ -66,7 +74,7 @@ public final class PTYSession: @unchecked Sendable {
         }
         if pid == 0 {
             // CHILD
-            _ = execve(argv[0], &argv, &envp)
+            _ = execve(argv[0]!, &argv, &envp)
             _exit(127)
         }
 
@@ -76,6 +84,7 @@ public final class PTYSession: @unchecked Sendable {
         childPID = pid
         lock.unlock()
         startReading()
+        startExitWatcher()
     }
 
     public func write(_ data: Data) {
@@ -85,7 +94,11 @@ public final class PTYSession: @unchecked Sendable {
             guard let base = raw.baseAddress else { return }
             var off = 0
             while off < raw.count {
+                #if canImport(Darwin)
                 let n = Darwin.write(fd, base + off, raw.count - off)
+                #else
+                let n = Glibc.write(fd, base + off, raw.count - off)
+                #endif
                 if n <= 0 { break }
                 off += n
             }
@@ -143,23 +156,73 @@ public final class PTYSession: @unchecked Sendable {
         src.resume()
     }
 
-    private func reap() {
+    private func startExitWatcher() {
+        #if os(Linux)
+        let source = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        source.schedule(deadline: .now(), repeating: .milliseconds(50))
+        source.setEventHandler { [weak self] in self?.reapIfExited() }
         lock.lock()
-        guard !reapStarted else {
+        exitSource = source
+        lock.unlock()
+        source.resume()
+        #endif
+    }
+
+    private func reapIfExited() {
+        lock.lock()
+        guard !reapStarted, !reapInProgress, childPID > 0 else {
             lock.unlock()
             return
         }
-        reapStarted = true
+        let pid = childPID
+        reapInProgress = true
+        lock.unlock()
+
+        var status: Int32 = 0
+        let result = waitpid(pid, &status, WNOHANG)
+        if result == pid {
+            finishReap(pid: pid, status: status)
+        } else {
+            lock.lock()
+            reapInProgress = false
+            lock.unlock()
+        }
+    }
+
+    private func reap() {
+        lock.lock()
+        guard !reapStarted, !reapInProgress else {
+            lock.unlock()
+            return
+        }
+        reapInProgress = true
         let pid = childPID
         lock.unlock()
 
         guard pid > 0 else { return }
         var status: Int32 = 0
         while waitpid(pid, &status, 0) < 0, errno == EINTR {}
+        finishReap(pid: pid, status: status)
+    }
+
+    private func finishReap(pid: pid_t, status: Int32) {
         lock.lock()
+        guard !reapStarted else {
+            lock.unlock()
+            return
+        }
+        reapStarted = true
+        reapInProgress = false
         childPID = -1
         lifecycle = .terminated
+        #if os(Linux)
+        let source = exitSource
+        exitSource = nil
+        #endif
         lock.unlock()
+        #if os(Linux)
+        source?.cancel()
+        #endif
         // Decode wait status into a conventional exit code.
         let code: Int32 = (status & 0x7F) == 0
             ? (status >> 8) & 0xFF

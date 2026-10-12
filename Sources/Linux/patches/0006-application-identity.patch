@@ -1,0 +1,82 @@
+--- a/src/apprt/gtk/App.zig
++++ b/src/apprt/gtk/App.zig
+@@ -3,6 +3,7 @@
+ const App = @This();
+ 
+ const std = @import("std");
++const devspace = @import("../../devspace_backend_client.zig");
+ const builtin = @import("builtin");
+ const Allocator = std.mem.Allocator;
+ const apprt = @import("../../apprt.zig");
+@@ -22,16 +23,15 @@
+ pub const must_draw_from_app_thread = true;
+ 
+ /// GTK application ID
+-pub const application_id = switch (builtin.mode) {
+-    .Debug, .ReleaseSafe => "com.mitchellh.ghostty-debug",
+-    .ReleaseFast, .ReleaseSmall => "com.mitchellh.ghostty",
+-};
++pub fn applicationId() [:0]const u8 {
++    return devspace.applicationIdentifier(std.posix.getenv("DEVSPACE_BUILD_CHANNEL") orelse "production");
++}
+ 
+ /// GTK object path
+-pub const object_path = switch (builtin.mode) {
+-    .Debug, .ReleaseSafe => "/com/mitchellh/ghostty_debug",
+-    .ReleaseFast, .ReleaseSmall => "/com/mitchellh/ghostty",
+-};
++pub fn objectPath() [:0]const u8 {
++    return if (std.mem.eql(u8, applicationId(), "com.prakharp.devspace.dev"))
++        "/com/prakharp/devspace/dev" else "/com/prakharp/devspace";
++}
+ 
+ /// The GObject Application instance
+ app: *Application,
+--- a/src/apprt/gtk/ipc/DBus.zig
++++ b/src/apprt/gtk/ipc/DBus.zig
+@@ -47,7 +47,7 @@
+ 
+             break :result .{ class, object_path };
+         },
+-        .detect => .{ ApprtApp.application_id, ApprtApp.object_path },
++        .detect => .{ ApprtApp.applicationId(), ApprtApp.objectPath() },
+     };
+     errdefer {
+         switch (target) {
+--- a/src/apprt/gtk/class/application.zig
++++ b/src/apprt/gtk/class/application.zig
+@@ -315,20 +315,9 @@
+             break :app_flags flags;
+         };
+ 
+-        // Our app ID determines uniqueness and maps to our desktop file.
+-        // We append "-debug" to the ID if we're in debug mode so that we
+-        // can develop Ghostty in Ghostty.
+-        const app_id: [:0]const u8 = app_id: {
+-            if (config.class) |class| {
+-                if (gio.Application.idIsValid(class) != 0) {
+-                    break :app_id class;
+-                } else {
+-                    log.warn("invalid 'class' in config, ignoring", .{});
+-                }
+-            }
+-
+-            break :app_id ApprtApp.application_id;
+-        };
++        // Match the backend channel and desktop entry. A terminal config class
++        // must not merge DevSpace development and production identities.
++        const app_id = ApprtApp.applicationId();
+ 
+         const display: *gdk.Display = gdk.Display.getDefault() orelse {
+             // I'm unsure of any scenario where this happens. Because we don't
+--- a/src/apprt/gtk/class/window.zig
++++ b/src/apprt/gtk/class/window.zig
+@@ -343,7 +343,7 @@
+ 
+         // Set our window icon. We can't set this in the blueprint file
+         // because its dependent on the build config.
+-        self.as(gtk.Window).setIconName(build_config.bundle_id);
++        self.as(gtk.Window).setIconName(@import("../App.zig").applicationId());
+ 
+         // Initialize our actions
+         self.initActionMap();

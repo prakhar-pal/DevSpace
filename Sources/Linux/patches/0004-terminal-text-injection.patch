@@ -1,0 +1,31 @@
+diff --git a/src/Surface.zig b/src/Surface.zig
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -828,6 +828,11 @@ pub fn close(self: *Surface) void {
+     self.rt_surface.close(self.needsConfirmQuit());
+ }
+ 
++/// Insert text supplied by the host application into this terminal.
++pub fn injectText(self: *Surface, text: []const u8) !void {
++    try self.completeClipboardPaste(text, true);
++}
++
+ /// Returns a mailbox that can be used to send messages to this surface.
+ inline fn surfaceMailbox(self: *Surface) Mailbox {
+     return .{
+diff --git a/src/apprt/gtk/class/surface.zig b/src/apprt/gtk/class/surface.zig
+--- a/src/apprt/gtk/class/surface.zig
++++ b/src/apprt/gtk/class/surface.zig
+@@ -1715,6 +1715,12 @@ pub const Surface = extern struct {
+         _ = priv.gl_area.as(gtk.Widget).grabFocus();
+     }
+ 
++    /// Insert host-supplied text through Ghostty's normal paste encoder.
++    pub fn injectText(self: *Self, text: []const u8) !void {
++        const core_surface = self.core() orelse return error.SurfaceNotReady;
++        try core_surface.injectText(text);
++    }
++
+     pub fn sendDesktopNotification(self: *Self, title: [:0]const u8, body: [:0]const u8) void {
+         const app = Application.default();
+         const priv: *Private = self.private();

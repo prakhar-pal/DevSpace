@@ -1,0 +1,234 @@
+import XCTest
+@testable import DevSpaceCore
+
+private final class ControlledMaster: SSHTransportControlling {
+    let controlPath = "/tmp/devspace-controller-test/socket"
+    var proxyCommand: String?
+    var state: SSHTransportSession.State = .idle
+    var onReady: (() -> Void)?
+    var onExit: ((Int32) -> Void)?
+    var onStopped: (() -> Void)?
+    var onStartError: ((SSHTransportSession.StartError) -> Void)?
+    func start() { state = .starting }
+    func stop() { state = .stopping }
+    func ready() { state = .ready; onReady?() }
+    func stopped() { state = .exited; onStopped?() }
+}
+
+private final class TimeoutMasterProcess: SSHTransportProcess {
+    var stderrTail = ""
+    var terminated = false
+    func terminate() { terminated = true }
+}
+
+private final class TimeoutMasterScheduler: SSHTransportScheduling {
+    var deadline: (() -> Void)?
+    func schedule(after delay: TimeInterval, action: @escaping () -> Void) {
+        if delay == 15 { deadline = action }
+    }
+}
+
+final class WorkspaceTerminalControllerTests: XCTestCase {
+    func testImageCompletionCannotInjectIntoReloadedOrClosedPane() throws {
+        let master = ControlledMaster()
+        var effects: [WorkspaceTerminalEffect] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) })
+        try controller.connect("pod")
+        master.ready()
+        let launch = try XCTUnwrap(effects.first)
+        let pane = try XCTUnwrap(launch.paneID)
+        XCTAssertNil(controller.imageTarget(workspace: "pod", generation: launch.generation, pane: pane), "image paste must wait for real terminal output")
+        XCTAssertTrue(controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_output"))
+        XCTAssertEqual(controller.imageTarget(workspace: "pod", generation: launch.generation, pane: pane), master.controlPath)
+        XCTAssertTrue(controller.injectText(workspace: "pod", generation: launch.generation, pane: pane, text: "Image pasted: /tmp/image.png "))
+        XCTAssertEqual(effects.last?.kind, "terminal_inject")
+        XCTAssertEqual(effects.last?.paneID, pane)
+        XCTAssertEqual(effects.last?.message, "Image pasted: /tmp/image.png ")
+        controller.disconnect("pod")
+        let count = effects.count
+        XCTAssertNil(controller.imageTarget(workspace: "pod", generation: launch.generation, pane: pane))
+        XCTAssertFalse(controller.injectText(workspace: "pod", generation: launch.generation, pane: pane, text: "stale image"))
+        XCTAssertEqual(effects.count, count)
+    }
+    func testFirstOutputStartsIntegrationOnceAndDisconnectCancelsItsGeneration() throws {
+        let master = ControlledMaster()
+        var effects: [WorkspaceTerminalEffect] = []
+        var started: [UUID] = [], cancelled: [UUID] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) })
+        controller.onFirstOutput = { workspace, generation in
+            XCTAssertEqual(workspace, "pod")
+            started.append(generation)
+            return true
+        }
+        controller.onDisconnect = { _, generation in cancelled.append(generation) }
+        try controller.connect("pod")
+        master.ready()
+        let launch = try XCTUnwrap(effects.first)
+        let pane = try XCTUnwrap(launch.paneID)
+        XCTAssertTrue(started.isEmpty, "integration must not delay terminal creation")
+        XCTAssertTrue(controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_output"))
+        XCTAssertTrue(controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_output"))
+        XCTAssertEqual(started, [launch.generation])
+        controller.disconnect("pod")
+        XCTAssertEqual(cancelled, [launch.generation])
+        XCTAssertFalse(controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_output"))
+        XCTAssertEqual(started.count, 1)
+    }
+    func testReloadRetriesIntegrationAfterCancelledPreviousJobCompletes() throws {
+        let master = ControlledMaster()
+        var effects: [WorkspaceTerminalEffect] = []
+        var busy = false
+        var attempts: [UUID] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) })
+        controller.onFirstOutput = { _, generation in attempts.append(generation); return !busy }
+        try controller.connect("pod")
+        master.ready()
+        let first = try XCTUnwrap(effects.last)
+        XCTAssertTrue(controller.report(workspace: "pod", generation: first.generation, pane: try XCTUnwrap(first.paneID), kind: "terminal_output"))
+        busy = true
+        try controller.reconnect("pod")
+        master.stopped()
+        master.ready()
+        let replacement = try XCTUnwrap(effects.last)
+        XCTAssertNotEqual(first.generation, replacement.generation)
+        XCTAssertTrue(controller.report(workspace: "pod", generation: replacement.generation, pane: try XCTUnwrap(replacement.paneID), kind: "terminal_output"))
+        busy = false
+        controller.retryIntegration("pod")
+        controller.retryIntegration("pod")
+        XCTAssertEqual(attempts, [first.generation, replacement.generation, replacement.generation])
+        XCTAssertFalse(controller.report(workspace: "pod", generation: first.generation, pane: try XCTUnwrap(first.paneID), kind: "terminal_output"))
+    }
+    func testLifecyclePrerequisiteWaitsForMasterAndRejectsLateReady() throws {
+        let master = ControlledMaster()
+        var released = 0
+        var effects: [WorkspaceTerminalEffect] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) })
+        try controller.connect("pod")
+        master.ready()
+        controller.disconnect("pod") { released += 1 }
+        XCTAssertEqual(master.state, .stopping)
+        XCTAssertEqual(released, 0, "workspace operation started before master cleanup")
+        master.onReady?()
+        XCTAssertEqual(effects.filter { $0.kind == "terminal_launch" }.count, 1)
+        master.stopped()
+        XCTAssertEqual(released, 1)
+        XCTAssertFalse(controller.hasOwnedTransports)
+        controller.disconnect("pod") { released += 1 }
+        XCTAssertEqual(released, 2, "idle workspace prerequisite did not complete")
+    }
+    func testTerminalClientsReuseTheMastersNoServiceRestartProxy() throws {
+        let master = ControlledMaster()
+        master.proxyCommand = "devpod ssh --stdio pod"
+        var effects: [WorkspaceTerminalEffect] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) })
+        try controller.connect("pod")
+        master.ready()
+        XCTAssertTrue(effects[0].arguments.contains("ProxyCommand=devpod ssh --stdio pod --start-services=false"))
+    }
+    func testCloseEffectsObserveAlreadyRemovedPaneState() throws {
+        let master = ControlledMaster()
+        var controller: WorkspaceTerminalController!
+        var closedPanes: [TerminalPaneDescriptor]?
+        controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effect in
+                if effect.kind == "terminal_close" { closedPanes = controller.panes }
+            })
+        try controller.connect("pod")
+        master.ready()
+        XCTAssertEqual(controller.panes.count, 1)
+        controller.disconnect("pod")
+        XCTAssertEqual(closedPanes, [], "close effects must publish the post-close snapshot")
+    }
+
+    func testFrontendLaunchFailureReportsErrorAndReleasesLastShell() throws {
+        let master = ControlledMaster()
+        var effects: [WorkspaceTerminalEffect] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) })
+        try controller.connect("pod")
+        master.ready()
+        let launch = effects[0]
+        XCTAssertTrue(controller.report(workspace: "pod", generation: launch.generation,
+            pane: try XCTUnwrap(launch.paneID), kind: "terminal_launch_failed"))
+        XCTAssertEqual(effects.last?.kind, "terminal_error")
+        XCTAssertFalse(effects.last?.message?.isEmpty ?? true)
+        XCTAssertTrue(controller.panes.isEmpty)
+        XCTAssertEqual(master.state, .stopping)
+    }
+
+    func testReadinessTimeoutIsReportedAfterRealTransportStops() throws {
+        let process = TimeoutMasterProcess()
+        let scheduler = TimeoutMasterScheduler()
+        var processExited: ((Int32) -> Void)?
+        let session = SSHTransportSession(podID: "pod", proxyCommand: nil,
+            controlPath: "/tmp/devspace-timeout-test/socket",
+            launch: { _, onExit in processExited = onExit; return process },
+            check: { _, completion in completion(false) }, scheduler: scheduler)
+        var effects: [WorkspaceTerminalEffect] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in session }, emit: { effects.append($0) })
+        try controller.connect("pod")
+        scheduler.deadline?()
+        XCTAssertTrue(process.terminated)
+        XCTAssertTrue(effects.isEmpty)
+        processExited?(0)
+        XCTAssertEqual(effects.map(\.kind), ["terminal_error"])
+        XCTAssertTrue(effects.first?.message?.contains("readinessTimedOut") == true)
+        XCTAssertFalse(controller.hasOwnedTransports)
+    }
+
+    func testReadyMasterEmitsClientLaunchWithoutAnotherTunnel() throws {
+        let master = ControlledMaster()
+        var effects: [WorkspaceTerminalEffect] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) })
+        try controller.connect("pod")
+        XCTAssertTrue(effects.isEmpty)
+        master.ready()
+        XCTAssertEqual(effects.count, 1)
+        XCTAssertEqual(effects[0].kind, "terminal_launch")
+        XCTAssertEqual(effects[0].workspaceID, "pod")
+        XCTAssertEqual(effects[0].executable, "/usr/bin/ssh")
+        XCTAssertTrue(effects[0].arguments.contains("ControlMaster=no"))
+        XCTAssertFalse(effects[0].arguments.contains("-R"))
+    }
+
+    func testReconnectWaitsForOldMasterExitAndRejectsOldReadyCallback() throws {
+        let first = ControlledMaster(), second = ControlledMaster()
+        var transports: [ControlledMaster] = [first, second]
+        var effects: [WorkspaceTerminalEffect] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in transports.removeFirst() }, emit: { effects.append($0) })
+        try controller.connect("pod")
+        first.ready()
+        let original = effects[0]
+        try controller.reconnect("pod")
+        XCTAssertEqual(first.state, .stopping)
+        XCTAssertEqual(second.state, .idle)
+        first.onReady?()
+        XCTAssertEqual(effects.filter { $0.kind == "terminal_launch" }.count, 1)
+        first.stopped()
+        XCTAssertEqual(second.state, .starting)
+        second.ready()
+        XCTAssertNotEqual(effects.last?.generation, original.generation)
+        XCTAssertNotEqual(effects.last?.paneID, original.paneID)
+    }
+
+    func testShutdownCannotReconnectFromDelayedCallbacks() throws {
+        let master = ControlledMaster()
+        var effects: [WorkspaceTerminalEffect] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) })
+        try controller.connect("pod")
+        controller.shutdown()
+        master.onReady?()
+        master.stopped()
+        XCTAssertFalse(effects.contains { $0.kind == "terminal_launch" })
+        XCTAssertThrowsError(try controller.connect("pod"))
+    }
+}

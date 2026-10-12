@@ -1,0 +1,71 @@
+--- a/src/apprt/gtk/class/window.zig
++++ b/src/apprt/gtk/class/window.zig
+@@ -414,7 +414,7 @@
+         _ = self.newTabPage(parent_, .tab, .none);
+     }
+ 
+-    fn devspaceTerminalEffect(_: *anyopaque, context: ?*anyopaque, effect: devspace.TerminalEffect) !void {
++    fn devspaceTerminalEffect(client_pointer: *anyopaque, context: ?*anyopaque, effect: devspace.TerminalEffect) !void {
+         const self: *Self = @ptrCast(@alignCast(context.?));
+         if (!std.mem.eql(u8, effect.kind, "terminal_launch")) return;
+         const executable = effect.executable orelse return error.MissingTerminalExecutable;
+@@ -430,6 +430,8 @@
+             .command = .{ .direct = argv },
+             .title = try alloc.dupeZ(u8, effect.workspaceID),
+         });
++        const client: *devspace.Client = @ptrCast(@alignCast(client_pointer));
++        try (self.getActiveSurface() orelse return error.MissingTerminalSurface).bindDevSpaceTerminal(client, effect);
+     }
+ 
+     pub fn newTabForWindow(
+--- a/src/apprt/gtk/class/surface.zig
++++ b/src/apprt/gtk/class/surface.zig
+@@ -1,4 +1,5 @@
+ const std = @import("std");
++const devspace = @import("../../../devspace_backend_client.zig");
+ const assert = @import("../../../quirks.zig").inlineAssert;
+ const Allocator = std.mem.Allocator;
+ const adw = @import("adw");
+@@ -625,6 +626,7 @@
+         // able to initialize the surface early so we should aim for that,
+         // eventually.
+         core_surface: ?*CoreSurface = null,
++        devspace_terminal: ?*devspace.TerminalBinding = null,
+ 
+         /// Cached metrics for libghostty callbacks
+         size: apprt.SurfaceSize,
+@@ -1721,6 +1723,14 @@
+         try core_surface.injectText(text);
+     }
+ 
++    pub fn bindDevSpaceTerminal(self: *Self, client: *devspace.Client, effect: devspace.TerminalEffect) !void {
++        const binding = try devspace.TerminalBinding.create(client, effect);
++        const priv = self.private();
++        if (priv.devspace_terminal) |previous| previous.destroy();
++        priv.devspace_terminal = binding;
++        if (priv.pwd) |pwd| binding.report("terminal_directory", pwd);
++    }
++
+     pub fn sendDesktopNotification(self: *Self, title: [:0]const u8, body: [:0]const u8) void {
+         const app = Application.default();
+         const priv: *Private = self.private();
+@@ -1893,6 +1903,10 @@
+     fn finalize(self: *Self) callconv(.c) void {
+         const alloc = Application.default().allocator();
+         const priv = self.private();
++        if (priv.devspace_terminal) |binding| {
++            binding.destroy();
++            priv.devspace_terminal = null;
++        }
+         if (priv.core_surface) |v| {
+             // Remove ourselves from the list of known surfaces in the app.
+             // We do this before deinit in case a callback triggers
+@@ -2016,6 +2030,9 @@
+         if (priv.pwd) |v| glib.free(@ptrCast(@constCast(v)));
+         priv.pwd = null;
+         if (pwd) |v| priv.pwd = glib.ext.dupeZ(u8, v);
++        if (priv.devspace_terminal) |binding| {
++            if (priv.pwd) |directory| binding.report("terminal_directory", directory);
++        }
+         self.as(gobject.Object).notifyByPspec(properties.pwd.impl.param_spec);
+     }

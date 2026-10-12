@@ -1,0 +1,39 @@
+diff --git a/build.zig b/build.zig
+index f9d861b..b6bd840 100644
+--- a/build.zig
++++ b/build.zig
+@@ -25,6 +25,34 @@ pub fn build(b: *std.Build) !void {
+     // Ghostty dependencies used by many artifacts.
+     const deps = try buildpkg.SharedDeps.init(b, &config);
+ 
++    const devspace_tests = b.addTest(.{
++        .name = "devspace-gtk-test",
++        .filters = &.{"DevSpace"},
++        .root_module = b.createModule(.{
++            .root_source_file = b.path("src/devspace_gtk_test.zig"),
++            .target = config.target,
++            .optimize = .Debug,
++        }),
++        .use_llvm = true,
++    });
++    _ = try deps.add(devspace_tests);
++    if (!b.systemIntegrationOption("gtk4-layer-shell", .{})) {
++        if (b.lazyDependency("gtk4_layer_shell", .{
++            .target = config.target,
++            .optimize = config.optimize,
++        })) |layer_shell| {
++            devspace_tests.root_module.addRPath(layer_shell.artifact("gtk4-layer-shell").getEmittedBin().dirname());
++        }
++    }
++    const devspace_header = b.addTranslateC(.{
++        .root_source_file = b.path("include/ghostty.h"),
++        .target = config.target,
++        .optimize = config.optimize,
++    });
++    devspace_tests.root_module.addImport("ghostty.h", devspace_header.createModule());
++    const devspace_test_run = b.addRunArtifact(devspace_tests);
++    b.step("test-devspace", "Test the DevSpace GTK integration").dependOn(&devspace_test_run.step);
++
+     // The modules exported for Zig consumers of libghostty. If you're
+     // writing a Zig program that uses libghostty, read this file.
+     const mod = try buildpkg.GhosttyZig.init(

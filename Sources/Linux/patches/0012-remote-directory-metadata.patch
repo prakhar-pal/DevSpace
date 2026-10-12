@@ -1,0 +1,70 @@
+--- a/src/apprt/surface.zig
++++ b/src/apprt/surface.zig
+@@ -89,2 +89,5 @@
+-    /// The terminal has reported a change in the working directory.
+-    pwd_change: WriteReq,
++    /// Untrusted remote directory metadata, never a local working directory.
++    remote_pwd_change: WriteReq,
++
++    /// The terminal has reported a change in the working directory.
++    pwd_change: WriteReq,
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -1051,2 +1051,9 @@
+-        .pwd_change => |w| {
+-            defer w.deinit();
++        .remote_pwd_change => |w| {
++            defer w.deinit();
++            if (comptime @hasDecl(apprt.Surface, "remotePwd")) {
++                self.rt_surface.remotePwd(w.slice());
++            }
++        },
++
++        .pwd_change => |w| {
++            defer w.deinit();
+--- a/src/apprt/gtk/Surface.zig
++++ b/src/apprt/gtk/Surface.zig
+@@ -18,3 +18,7 @@
+-pub fn firstOutput(self: *Self) void {
+-    self.surface.firstOutput();
+-}
++pub fn remotePwd(self: *Self, path: []const u8) void {
++    self.surface.reportRemotePwd(path);
++}
++
++pub fn firstOutput(self: *Self) void {
++    self.surface.firstOutput();
++}
+--- a/src/apprt/gtk/class/surface.zig
++++ b/src/apprt/gtk/class/surface.zig
+@@ -1723,1 +1723,9 @@
+-    pub fn bindDevSpaceTerminal(self: *Self, client: *devspace.Client, effect: devspace.TerminalEffect) !void {
++    pub fn reportRemotePwd(self: *Self, path: []const u8) void {
++        // Only backend-bound SSH panes consume this as editor metadata.
++        // Do not set GTK/terminal pwd: that would trust a remote local path.
++        if (self.private().devspace_terminal) |binding| {
++            binding.report("terminal_directory", path);
++        }
++    }
++
++    pub fn bindDevSpaceTerminal(self: *Self, client: *devspace.Client, effect: devspace.TerminalEffect) !void {
+--- a/src/termio/stream_handler.zig
++++ b/src/termio/stream_handler.zig
+@@ -1175,4 +1175,13 @@
+-        if (!host_valid) {
+-            log.warn("OSC 7 host ({s}) must be local", .{host});
+-            return;
+-        }
++        if (!host_valid) {
++            // Keep foreign paths out of local terminal/GTK pwd. The runtime
++            // may separately consume them as untrusted remote metadata.
++            var arena: std.heap.ArenaAllocator = .init(self.alloc);
++            defer arena.deinit();
++            const path = try uri.path.toRawMaybeAlloc(arena.allocator());
++            if (apprt.surface.Message.WriteReq.init(self.alloc, path)) |req| {
++                self.surfaceMessageWriter(.{ .remote_pwd_change = req });
++            } else |err| {
++                log.warn("error notifying surface of remote pwd err={}", .{err});
++            }
++            return;
++        }

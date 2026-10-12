@@ -3,6 +3,9 @@
 
 #include <sys/types.h>
 
+// Swift's Linux Glibc import exposes struct flock but not the BSD function.
+int devspace_flock(int fd, int operation);
+
 // Thin C shims for PTY operations that aren't directly callable from Swift:
 // forkpty lives in <util.h> (not exported by the Darwin overlay) and ioctl is
 // variadic (variadic C functions are not imported into Swift).

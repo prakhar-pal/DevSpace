@@ -1,0 +1,92 @@
+--- a/src/termio/Termio.zig
++++ b/src/termio/Termio.zig
+@@ -65,6 +65,7 @@
+ /// Last time the cursor was reset. This is used to prevent message
+ /// flooding with cursor resets.
+ last_cursor_reset: ?std.time.Instant = null,
++first_output_reported: bool = false,
+ 
+ /// State we have for thread enter. This may be null if we don't need
+ /// to keep track of any state or if its already been freed.
+@@ -685,6 +686,16 @@
+ 
+ /// Process output from readdata but the lock is already held.
+ fn processOutputLocked(self: *Termio, buf: []const u8) void {
++    if (buf.len > 0 and !self.first_output_reported) {
++        self.first_output_reported = true;
++        if (self.surface_mailbox.push(.{ .first_output = {} }, .{ .instant = {} }) == 0) {
++            // As with stream-handler messages, never wait on the UI mailbox
++            // while holding the renderer mutex.
++            self.renderer_state.mutex.unlock();
++            _ = self.surface_mailbox.push(.{ .first_output = {} }, .{ .forever = {} });
++            self.renderer_state.mutex.lock();
++        }
++    }
+     // Schedule a render. We can call this first because we have the lock.
+     self.terminal_stream.handler.queueRender() catch unreachable;
+ 
+--- a/src/apprt/surface.zig
++++ b/src/apprt/surface.zig
+@@ -51,6 +51,9 @@
+     /// command are given in the `ChildExited` struct.
+     child_exited: ChildExited,
+ 
++    /// First nonempty PTY read; delivered on the application's event queue.
++    first_output: void,
++
+     /// Show a desktop notification.
+     desktop_notification: struct {
+         /// Desktop notification title.
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -1066,6 +1066,10 @@
+ 
+         .child_exited => |v| self.childExited(v),
+ 
++        .first_output => {
++            if (comptime @hasDecl(apprt.Surface, "firstOutput")) self.rt_surface.firstOutput();
++        },
++
+         .desktop_notification => |notification| {
+             if (!self.config.desktop_notifications) {
+                 log.info("application attempted to display a desktop notification, but 'desktop-notifications' is disabled", .{});
+--- a/src/apprt/gtk/Surface.zig
++++ b/src/apprt/gtk/Surface.zig
+@@ -15,6 +15,10 @@
+     _ = self;
+ }
+ 
++pub fn firstOutput(self: *Self) void {
++    self.surface.firstOutput();
++}
++
+ /// Returns the GObject surface for this apprt surface. This is a function
+ /// so we can add some extra logic if we ever have to here.
+ pub fn gobj(self: *Self) *Surface {
+--- a/src/apprt/gtk/class/surface.zig
++++ b/src/apprt/gtk/class/surface.zig
+@@ -627,6 +627,7 @@
+         // eventually.
+         core_surface: ?*CoreSurface = null,
+         devspace_terminal: ?*devspace.TerminalBinding = null,
++        devspace_has_output: bool = false,
+ 
+         /// Cached metrics for libghostty callbacks
+         size: apprt.SurfaceSize,
+@@ -1728,9 +1729,16 @@
+         const priv = self.private();
+         if (priv.devspace_terminal) |previous| previous.destroy();
+         priv.devspace_terminal = binding;
++        if (priv.devspace_has_output) binding.report("terminal_output", null);
+         if (priv.pwd) |pwd| binding.report("terminal_directory", pwd);
+     }
+ 
++    pub fn firstOutput(self: *Self) void {
++        const priv = self.private();
++        priv.devspace_has_output = true;
++        if (priv.devspace_terminal) |binding| binding.report("terminal_output", null);
++    }
++
+     pub fn sendDesktopNotification(self: *Self, title: [:0]const u8, body: [:0]const u8) void {
+         const app = Application.default();
+         const priv: *Private = self.private();

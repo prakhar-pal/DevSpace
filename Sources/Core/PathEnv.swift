@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(Darwin)
 import Darwin
+#else
+import Glibc
+#endif
 
 // Port of src-tauri/src/path_env.rs — repair PATH for GUI (LaunchServices)
 // launches, which inherit only a minimal system PATH that omits where `devpod`
@@ -80,7 +84,7 @@ public enum PathEnv {
         let outPipe = Pipe()
         proc.standardOutput = outPipe
         proc.standardError = FileHandle.nullDevice
-        if (try? proc.run()) != nil {
+        if (try? runDesktopProcess(proc)) != nil {
             let deadline = Date().addingTimeInterval(3)
             while proc.isRunning, Date() < deadline {
                 usleep(50_000)

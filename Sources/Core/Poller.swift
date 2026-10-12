@@ -5,7 +5,7 @@ import Foundation
 // cycle (names first, then resolved statuses) carrying a status cache across
 // cycles to avoid flicker.
 
-public struct WorkspaceView: Identifiable, Equatable, Sendable {
+public struct WorkspaceView: Identifiable, Codable, Equatable, Sendable {
     public let id: String
     public let provider: String
     public let source: String
@@ -66,6 +66,23 @@ public final class PollRevisionSource: @unchecked Sendable {
 /// How many `devpod status` calls run concurrently per poll cycle.
 let maxConcurrentStatus = 4
 
+private final class StatusResults: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: Result<WorkspaceStatus, DevpodError>] = [:]
+
+    func set(_ value: Result<WorkspaceStatus, DevpodError>, for id: String) {
+        lock.lock()
+        values[id] = value
+        lock.unlock()
+    }
+
+    var snapshot: [String: Result<WorkspaceStatus, DevpodError>] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+}
+
 public enum Poller {
     /// Merge the workspace list with a map of id -> status (or error).
     public static func merge(
@@ -105,8 +122,7 @@ public enum Poller {
         _ runner: CommandRunning,
         _ workspaces: [Workspace]
     ) -> [String: Result<WorkspaceStatus, DevpodError>] {
-        var result: [String: Result<WorkspaceStatus, DevpodError>] = [:]
-        let lock = NSLock()
+        let result = StatusResults()
         let sem = DispatchSemaphore(value: maxConcurrentStatus)
         let group = DispatchGroup()
         let queue = DispatchQueue.global(qos: .userInitiated)
@@ -123,15 +139,13 @@ public enum Poller {
                 } catch {
                     r = .failure(DevpodError("\(error)"))
                 }
-                lock.lock()
-                result[w.id] = r
-                lock.unlock()
+                result.set(r, for: w.id)
                 sem.signal()
                 group.leave()
             }
         }
         group.wait()
-        return result
+        return result.snapshot
     }
 
     /// One full poll cycle: list, fetch all statuses, merge.

@@ -78,26 +78,118 @@ public protocol CommandRunning: Sendable {
     func run(_ args: [String]) throws -> String
 }
 
+private final class CommandPipeOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    func store(_ value: Data) { lock.lock(); data = value; lock.unlock() }
+    var snapshot: Data { lock.lock(); defer { lock.unlock() }; return data }
+}
+
 /// Runs the real `devpod` binary, resolved via PATH (so PathEnv.repair must run
 /// first when launched from Finder).
-public struct DevpodCLI: CommandRunning {
-    public init() {}
+public final class DevpodCLI: CommandRunning, @unchecked Sendable {
+    private let runner: DesktopCommandRunner
+    public init(environment: [String: String]? = nil) {
+        runner = DesktopCommandRunner(executable: "/usr/bin/env", prefix: ["devpod"], environment: environment)
+    }
+    public var hasActiveCommands: Bool { runner.hasActiveCommands }
+    public func cancel() { runner.cancel() }
+    public func run(_ args: [String]) throws -> String { try runner.run(args) }
+    public func run(_ args: [String], onOutput: (@Sendable (Data) -> Void)?) throws -> String {
+        try runner.run(args, onOutput: onOutput)
+    }
+}
+
+/// Shared pipe draining and cancellation for DevPod and SSH configuration.
+final class DesktopCommandRunner: CommandRunning, @unchecked Sendable {
+    private let executable: String
+    private let prefix: [String]
+    private let superviseSSH: Bool
+    private let environment: [String: String]?
+    private let processLock = NSLock()
+    private var activeProcesses: [Process] = []
+    private var cancelled = false
+
+    init(executable: String, prefix: [String] = [], environment: [String: String]? = nil,
+         superviseSSH: Bool = false) {
+        self.executable = executable
+        self.prefix = prefix
+        self.environment = environment
+        self.superviseSSH = superviseSSH
+    }
+
+    public var hasActiveCommands: Bool {
+        processLock.lock()
+        defer { processLock.unlock() }
+        return !activeProcesses.isEmpty
+    }
+
+    /// Terminate every command currently started by this runner. Completion
+    /// still flows through `run`, allowing callers to cleanly serialize state
+    /// changes instead of abandoning a child process during backend shutdown.
+    public func cancel() {
+        processLock.lock()
+        cancelled = true
+        let processes = activeProcesses
+        processLock.unlock()
+        for process in processes where process.isRunning {
+            process.terminate()
+        }
+    }
+
     public func run(_ args: [String]) throws -> String {
+        try run(args, onOutput: nil)
+    }
+
+    /// Raw chunks preserve UTF-8 split across pipe reads. Observers marshal
+    /// them onto their controller queue; both pipes are always drained.
+    public func run(_ args: [String], onOutput: (@Sendable (Data) -> Void)?) throws -> String {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        proc.arguments = ["devpod"] + args
+        proc.executableURL = URL(fileURLWithPath: executable)
+        proc.arguments = prefix + args
+        // Commands must never compete with the backend's NDJSON reader.
+        proc.standardInput = FileHandle.nullDevice
+        if let environment {
+            proc.environment = ProcessInfo.processInfo.environment.merging(environment) { _, supplied in supplied }
+        }
         let outPipe = Pipe()
         let errPipe = Pipe()
         proc.standardOutput = outPipe
         proc.standardError = errPipe
+        // Serialize spawn/registration with cancellation: shutdown must not
+        // miss a child between Process.run() and adding it to the active set.
+        processLock.lock()
+        guard !cancelled else {
+            processLock.unlock()
+            throw DevpodError("devpod runner cancelled")
+        }
         do {
-            try proc.run()
+            if superviseSSH { try runDesktopSSHMaster(proc) }
+            else { try runDesktopProcess(proc) }
         } catch {
+            processLock.unlock()
             throw DevpodError("failed to spawn devpod: \(error.localizedDescription)")
         }
-        // Read before wait to avoid deadlocking on a full pipe buffer.
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        activeProcesses.append(proc)
+        processLock.unlock()
+        defer {
+            processLock.lock()
+            activeProcesses.removeAll { $0 === proc }
+            processLock.unlock()
+        }
+        // Drain both pipes concurrently: waiting for stdout EOF first can
+        // deadlock while the command is blocked on a full stderr buffer.
+        let stderr = CommandPipeOutput()
+        let stderrRead = DispatchGroup()
+        let stderrHandle = errPipe.fileHandleForReading
+        stderrRead.enter()
+        DispatchQueue.global(qos: .utility).async {
+            stderr.store(Self.drain(stderrHandle, onOutput: onOutput))
+            stderrRead.leave()
+        }
+        let outData = Self.drain(outPipe.fileHandleForReading, onOutput: onOutput)
+        stderrRead.wait()
+        let errData = stderr.snapshot
         proc.waitUntilExit()
         if proc.terminationStatus != 0 {
             let msg = String(decoding: errData, as: UTF8.self)
@@ -105,6 +197,32 @@ public struct DevpodCLI: CommandRunning {
             throw DevpodError(msg)
         }
         return String(decoding: outData, as: UTF8.self)
+    }
+
+    private static func drain(_ handle: FileHandle, onOutput: (@Sendable (Data) -> Void)?) -> Data {
+        var result = Data()
+        var pending = Data()
+        while true {
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                if !pending.isEmpty { onOutput?(pending) }
+                return result
+            }
+            result.append(chunk)
+            guard let onOutput else { continue }
+            pending.append(chunk)
+            // Do not mix another pipe's bytes into an incomplete UTF-8 scalar.
+            // Retain at most three trailing bytes until this pipe's next read.
+            let bytes = Array(pending)
+            var end = bytes.count
+            var start = end - 1
+            while start > 0 && bytes[start] & 0xc0 == 0x80 { start -= 1 }
+            let leading = bytes[start]
+            let width = leading & 0xf8 == 0xf0 ? 4 : leading & 0xf0 == 0xe0 ? 3 : leading & 0xe0 == 0xc0 ? 2 : 1
+            if end - start < width { end = start }
+            if end > 0 { onOutput(Data(bytes.prefix(end))) }
+            pending = Data(bytes.suffix(bytes.count - end))
+        }
     }
 }
 

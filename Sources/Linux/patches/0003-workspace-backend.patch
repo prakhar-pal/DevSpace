@@ -1,0 +1,15 @@
+diff --git a/src/apprt/gtk/class/window.zig b/src/apprt/gtk/class/window.zig
+--- a/src/apprt/gtk/class/window.zig
++++ b/src/apprt/gtk/class/window.zig
+@@ -288,5 +288,11 @@ pub const Window = extern struct {
+         sidebar.as(gtk.Widget).setSizeRequest(220, -1);
+         sidebar.append(gtk.Label.new("Workspaces").as(gtk.Widget));
++        const backend = @import("../../../devspace_backend_client.zig");
++        backend.Client.attach(
++            @ptrCast(sidebar),
++            std.posix.getenv("DEVSPACE_BACKEND") orelse "DevSpaceLinuxBackend",
++            std.posix.getenv("DEVSPACE_BUILD_CHANNEL") orelse "production",
++        ) catch |err| log.warn("workspace backend unavailable: {}", .{err});
+         layout.append(sidebar.as(gtk.Widget));
+         content.setHexpand(1);
+         layout.append(content);
