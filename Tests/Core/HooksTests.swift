@@ -4,6 +4,46 @@ import XCTest
 
 // Mirrors hooks.rs tests.
 final class HooksTests: XCTestCase {
+    func testSignalDuringPublicationDoesNotContinueWithoutItsLock() throws {
+        final class InterruptedRunner: CommandRunning, @unchecked Sendable {
+            let directory: URL
+            init(_ directory: URL) { self.directory = directory }
+            func run(_ args: [String]) throws -> String {
+                var interrupted = args
+                interrupted[2] = args[2].replacingOccurrences(of: "&& settings_tmp=", with: "&& kill -TERM $$ && settings_tmp=")
+                return try LocalShellRunner(directory: directory).run(interrupted)
+            }
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("claude-signal-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = directory.appendingPathComponent("settings.json")
+        let original = "{\"unrelated\":true}"
+        try original.write(to: settings, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try Hooks.inject(InterruptedRunner(directory), podID: "pod", token: "tok", installManualHelper: false))
+        XCTAssertEqual(try String(contentsOf: settings, encoding: .utf8), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(".devspace-settings.lock").path))
+    }
+    func testConcurrentSettingsEditIsNotOverwritten() throws {
+        final class EditingRunner: CommandRunning, @unchecked Sendable {
+            let directory: URL
+            var calls = 0
+            init(_ directory: URL) { self.directory = directory }
+            func run(_ args: [String]) throws -> String {
+                calls += 1
+                if calls == 2 {
+                    try "{\"concurrentEdit\":true}".write(to: directory.appendingPathComponent("settings.json"), atomically: true, encoding: .utf8)
+                }
+                return try LocalShellRunner(directory: directory).run(args)
+            }
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("claude-race-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let runner = EditingRunner(directory)
+        XCTAssertThrowsError(try Hooks.inject(runner, podID: "pod", token: "tok", installManualHelper: false))
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("settings.json"), encoding: .utf8), "{\"concurrentEdit\":true}")
+    }
     private final class LocalShellRunner: CommandRunning, @unchecked Sendable {
         let runner: DesktopCommandRunner
         init(directory: URL, environment: [String: String] = [:]) {

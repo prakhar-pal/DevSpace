@@ -26,6 +26,20 @@ private struct PanicRunner: CommandRunning {
 }
 
 final class DevpodTests: XCTestCase {
+    func testStreamingCommandRetainsOnlyBoundedOutputTail() throws {
+        let runner = DesktopCommandRunner(executable: "/bin/sh")
+        let output = try runner.run(["-c", "head -c 1048576 /dev/zero | tr '\\0' x; printf END"], onOutput: { _ in })
+        XCTAssertLessThanOrEqual(output.utf8.count, 65536)
+        XCTAssertTrue(output.hasSuffix("END"))
+        XCTAssertEqual(try runner.run(["-c", "printf 'complete-output'"], onOutput: nil), "complete-output")
+        do {
+            _ = try runner.run(["-c", "head -c 1048576 /dev/zero | tr '\\0' x >&2; printf ERROR >&2; exit 1"], onOutput: { _ in })
+            XCTFail("nonzero command should fail")
+        } catch let error as DevpodError {
+            XCTAssertLessThanOrEqual(error.message.utf8.count, 65536)
+            XCTAssertTrue(error.message.hasSuffix("ERROR"))
+        }
+    }
     #if os(Linux)
     func testCLIReadsStderrWhileWaitingForStdout() throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())

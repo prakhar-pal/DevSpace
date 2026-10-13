@@ -12,7 +12,16 @@ private func requestedIdentity() -> DevSpaceRuntimeIdentity {
     return DevSpaceRuntimeIdentity(channel: channel)
 }
 
+// Repair before constructing runners, queues or services. Shell startup output
+// is captured by PathEnv, never emitted onto the private protocol channel.
+PathEnv.repair()
+if CommandLine.arguments.contains("--print-path") {
+    print(ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
+    exit(0)
+}
 private let outputLock = NSLock()
+private let outputQueue = DispatchQueue(label: "devspace.protocol-output")
+private var pendingOutputBytes = 0
 // Broken frontend pipes are shutdown events, not permission to abandon owned
 // subprocesses through SIGPIPE's default immediate process termination.
 private let ignoreBrokenPipe = Glibc.signal(SIGPIPE, SIG_IGN)
@@ -20,25 +29,37 @@ private let ignoreBrokenPipe = Glibc.signal(SIGPIPE, SIG_IGN)
 private func send(_ message: BackendProtocolMessage) -> Bool {
     guard let line = try? message.encodeLine() else { return false }
     outputLock.lock()
-    defer { outputLock.unlock() }
+    guard line.count <= BackendProtocol.maximumFrameBytes,
+          pendingOutputBytes <= BackendProtocol.maximumFrameBytes - line.count else {
+        outputLock.unlock()
+        DispatchQueue.main.async { shutdownExitStatus = 1; shutdown(nil) }
+        return false
+    }
+    pendingOutputBytes += line.count
+    outputLock.unlock()
     _ = ignoreBrokenPipe
-    let written = line.withUnsafeBytes { bytes -> Bool in
-        var offset = 0
-        while offset < bytes.count {
-            let count = Glibc.write(STDOUT_FILENO, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
-            if count < 0 && errno == EINTR { continue }
-            guard count > 0 else { return false }
-            offset += count
+    outputQueue.async {
+        let written = line.withUnsafeBytes { bytes -> Bool in
+            var offset = 0
+            while offset < bytes.count {
+                let count = Glibc.write(STDOUT_FILENO, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
+                if count < 0 && errno == EINTR { continue }
+                guard count > 0 else { return false }
+                offset += count
+            }
+            return true
         }
-        return true
-    }
-    if !written {
-        DispatchQueue.main.async {
-            shutdownExitStatus = 1
-            shutdown(nil)
+        outputLock.lock()
+        pendingOutputBytes -= line.count
+        outputLock.unlock()
+        if !written {
+            DispatchQueue.main.async {
+                shutdownExitStatus = 1
+                shutdown(nil)
+            }
         }
     }
-    return written
+    return true
 }
 
 private func fail(_ message: String) {
@@ -123,6 +144,7 @@ terminals.onDisconnect = { workspace, _ in
     for job in integrationJobs.values where job.workspace == workspace { job.cancel() }
     for job in uploadJobs.values where job.workspace == workspace { job.cancel() }
 }
+terminals.onFocus = { workspace in controller.select(workspace) }
 
 private func installIntegration(_ workspace: String, requestID: String?) throws {
     try Devpod.validateId(workspace)
@@ -331,6 +353,8 @@ private func handle(_ message: BackendProtocolMessage) {
                 guard controller.snapshot.workspaces.contains(where: { $0.id == workspace && $0.state == "Running" }) else {
                     throw DevpodError("workspace is not running: \(workspace)")
                 }
+                controller.select(workspace)
+                _ = sendSnapshot(nil, from: controller)
                 if message.kind == "reconnect" { try terminals.reconnect(workspace) }
                 else { try terminals.connect(workspace) }
             }
@@ -339,7 +363,7 @@ private func handle(_ message: BackendProtocolMessage) {
             _ = send(BackendProtocolMessage(id: message.id, kind: "error", payload: ["message": String(describing: error)]))
         }
 
-    case "terminal_output", "terminal_directory", "terminal_exit", "terminal_launch_failed":
+    case "terminal_output", "terminal_directory", "terminal_focus", "terminal_exit", "terminal_launch_failed":
         let payload = message.payload ?? [:]
         guard let workspace = payload["workspace_id"],
               let generationString = payload["generation"], let generation = UUID(uuidString: generationString),
@@ -368,6 +392,7 @@ private func handle(_ message: BackendProtocolMessage) {
                 case let .success(views):
                     let revision = controller.snapshot.revision &+ 1
                     _ = controller.apply(PollUpdate(revision: revision, views: views))
+                    terminals.reconcile(views)
                     _ = sendSnapshot(requestID, from: controller)
                 case let .failure(error):
                     _ = send(BackendProtocolMessage(
@@ -433,7 +458,8 @@ private func finishShutdown(_ requestID: String?) {
         return
     }
     _ = send(BackendProtocolMessage(id: requestID, kind: "stopped"))
-    exit(shutdownExitStatus)
+    let status = shutdownExitStatus
+    outputQueue.async { exit(status) }
 }
 
 // SSH callbacks/timers require a live main queue. Blocking stdin reads belong

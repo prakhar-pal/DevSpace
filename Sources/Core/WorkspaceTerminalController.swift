@@ -16,6 +16,7 @@ public struct WorkspaceTerminalEffect: Codable, Equatable, Sendable {
 public final class WorkspaceTerminalController {
     public var onFirstOutput: ((String, UUID) -> Bool)?
     public var onDisconnect: ((String, UUID) -> Void)?
+    public var onFocus: ((String) -> Void)?
     private final class Connection {
         let generation = UUID()
         let transport: SSHTransportControlling
@@ -49,6 +50,15 @@ public final class WorkspaceTerminalController {
     }
 
     public var hasOwnedTransports: Bool { !connections.isEmpty }
+
+    /// Only definitive stop/removal withdraws terminal intent. Unknown status
+    /// must not destroy a working shell; a stale queued reload must not reopen it.
+    public func reconcile(_ workspaces: [WorkspaceView]) {
+        let states = Dictionary(workspaces.map { ($0.id, $0.state) }, uniquingKeysWith: { _, last in last })
+        for workspace in Array(connections.keys) where states[workspace] == nil || states[workspace] == "Stopped" {
+            disconnect(workspace)
+        }
+    }
 
     /// A cancelled installer may finish after a replacement shell produces its
     /// first output. Retry only that current, live, not-yet-accepted generation.
@@ -155,6 +165,7 @@ public final class WorkspaceTerminalController {
         guard let connection = connections[workspace], !connection.stopping,
               connection.generation == generation, connection.panes.keys.contains(pane) else { return false }
         switch kind {
+        case "terminal_focus": onFocus?(workspace)
         case "terminal_output":
             connection.producedOutput.insert(pane)
             retryIntegration(workspace)

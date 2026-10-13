@@ -117,17 +117,23 @@ public enum Hooks {
         let merged = mergeSettings(existing, podID: podID, token: token)
         let serialized = try JSONSerialization.data(withJSONObject: merged)
         let settingsB64 = serialized.base64EncodedString()
+        let originalB64 = Data(read.utf8).base64EncodedString()
         var cmd = "umask 077; CLAUDE_DIR=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\" "
             + "&& mkdir -p \"$CLAUDE_DIR\" "
+            + "&& lock_dir=\"$CLAUDE_DIR/.devspace-settings.lock\" && mkdir \"$lock_dir\" "
+            + "&& trap 'rmdir -- \"$lock_dir\"' EXIT && trap 'exit 1' HUP INT TERM "
             + "&& settings_tmp=$(mktemp \"$CLAUDE_DIR/.devspace-settings-XXXXXX\") "
-            + "&& trap 'rm -f -- \"$settings_tmp\"' EXIT HUP INT TERM "
+            + "&& trap 'rm -f -- \"$settings_tmp\"; rmdir -- \"$lock_dir\"' EXIT "
             + "&& echo \(settingsB64) | base64 -d > \"$settings_tmp\" "
             + "&& chmod 600 \"$settings_tmp\" "
+            + "&& current_b64=$(if [ -e \"$CLAUDE_DIR/settings.json\" ]; then base64 < \"$CLAUDE_DIR/settings.json\"; else printf e30=; fi) "
+            + "&& current_b64=$(printf '%s' \"$current_b64\" | tr -d '\\n') "
+            + "&& [ \"$current_b64\" = '\(originalB64)' ] "
             + "&& mv -f -- \"$settings_tmp\" \"$CLAUDE_DIR/settings.json\""
         if installManualHelper {
             let helperB64 = base64Encode(Data(notifyHelperScript(podID: podID, token: token).utf8))
             cmd += " && helper_tmp=$(mktemp \"$HOME/.devspace-notify-XXXXXX\")"
-            cmd += " && trap 'rm -f -- \"$settings_tmp\" \"$helper_tmp\"' EXIT HUP INT TERM"
+            cmd += " && trap 'rm -f -- \"$settings_tmp\" \"$helper_tmp\"; rmdir -- \"$lock_dir\"' EXIT"
             cmd += " && echo \(helperB64) | base64 -d > \"$helper_tmp\""
             cmd += " && chmod 700 \"$helper_tmp\" && mv -f -- \"$helper_tmp\" ~/.devspace-notify"
         }

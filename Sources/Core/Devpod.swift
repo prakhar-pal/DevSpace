@@ -209,6 +209,11 @@ final class DesktopCommandRunner: CommandRunning, @unchecked Sendable {
                 return result
             }
             result.append(chunk)
+            // Streaming callers consume chunks directly and only need a
+            // bounded diagnostic tail. JSON/list callers still get full output.
+            if onOutput != nil, result.count > 64 * 1024 {
+                result = Data(result.suffix(64 * 1024))
+            }
             guard let onOutput else { continue }
             pending.append(chunk)
             // Do not mix another pipe's bytes into an incomplete UTF-8 scalar.

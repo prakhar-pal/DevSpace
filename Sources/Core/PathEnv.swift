@@ -65,7 +65,9 @@ public enum PathEnv {
         let currentPath = env["PATH"] ?? ""
 
         // Fast path: if devpod already resolves, skip the shell spawn entirely.
+        #if !os(Linux)
         if devpodIn(currentPath) { return }
+        #endif
 
         var fallbacks = ["/opt/homebrew/bin", "/usr/local/bin"]
         if let home = env["HOME"] {
@@ -81,26 +83,51 @@ public enum PathEnv {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: shell)
         proc.arguments = ["-lc", pathQueryCommand()]
+        // Profiles must never consume the backend's protocol handshake (or an
+        // interactive terminal's input) while discovering executable paths.
+        proc.standardInput = FileHandle.nullDevice
         let outPipe = Pipe()
         proc.standardOutput = outPipe
         proc.standardError = FileHandle.nullDevice
+        defer { try? outPipe.fileHandleForReading.close() }
         if (try? runDesktopProcess(proc)) != nil {
-            let deadline = Date().addingTimeInterval(3)
-            while proc.isRunning, Date() < deadline {
-                usleep(50_000)
+            // Read while the shell runs: profiles can fill the pipe or leave
+            // stdout open in a background child after the shell has exited.
+            // Complete markers, not EOF, delimit this best-effort query.
+            let deadline = ProcessInfo.processInfo.systemUptime + 3
+            var output = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            var descriptor = pollfd(fd: outPipe.fileHandleForReading.fileDescriptor,
+                                    events: Int16(POLLIN), revents: 0)
+            while ProcessInfo.processInfo.systemUptime < deadline, output.count < 1_048_576 {
+                let ready = poll(&descriptor, 1, 50)
+                if ready < 0 {
+                    if errno == EINTR { continue }
+                    break
+                }
+                if ready == 0 { continue }
+                let count = read(descriptor.fd, &buffer, buffer.count)
+                if count <= 0 { break }
+                output.append(contentsOf: buffer.prefix(count))
+                if let extracted = extractPath(String(decoding: output, as: UTF8.self)) {
+                    shellPath = extracted
+                    break
+                }
             }
             if proc.isRunning {
                 proc.terminate()
-            } else if proc.terminationStatus == 0 {
-                let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-                if let extracted = extractPath(String(decoding: data, as: UTF8.self)) {
-                    shellPath = extracted
-                }
             }
         }
 
+        #if os(Linux)
+        // Desktop PATH also needs profile-installed Zed and SSH helpers even
+        // when DevPod already resolves. Explicit launcher overrides win.
+        let merged = mergePath(shellPath, currentPath)
+        let finalPath = mergePath(fallbackStr, merged)
+        #else
         let merged = mergePath(currentPath, shellPath)
         let finalPath = mergePath(merged, fallbackStr)
+        #endif
         setenv("PATH", finalPath, 1)
     }
 }

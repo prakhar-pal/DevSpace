@@ -51,8 +51,25 @@ targets += [
 ]
 #elseif os(Linux)
 targets += [
+    .systemLibrary(
+        name: "CGTK",
+        path: "Sources/LinuxGTK",
+        pkgConfig: "gtk4",
+        providers: [.apt(["libgtk-4-dev"])]
+    ),
+    .systemLibrary(
+        name: "CVTE",
+        path: "Sources/LinuxVTE",
+        pkgConfig: "vte-2.91-gtk4",
+        providers: [.apt(["libvte-2.91-gtk4-dev"])]
+    ),
+    .executableTarget(
+        name: "DevSpaceLinuxApp",
+        dependencies: ["DevSpaceCore", "CGTK", "CVTE"],
+        path: "Sources/LinuxApp"
+    ),
     // Child process owned by the GTK frontend. Its stdin/stdout are reserved
-    // for the private control protocol; terminal bytes stay in Ghostty.
+    // for the private control protocol; terminal bytes stay in VTE.
     .executableTarget(
         name: "DevSpaceLinuxBackend",
         dependencies: ["DevSpaceCore"],

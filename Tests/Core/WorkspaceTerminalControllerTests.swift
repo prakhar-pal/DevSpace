@@ -29,6 +29,43 @@ private final class TimeoutMasterScheduler: SSHTransportScheduling {
 }
 
 final class WorkspaceTerminalControllerTests: XCTestCase {
+    func testFocusSelectsOnlyTheCurrentPaneGeneration() throws {
+        let master = ControlledMaster()
+        var effects: [WorkspaceTerminalEffect] = []
+        let selection = WorkspaceController(workspaces: [.init(id: "pod", provider: "", source: "", lastUsed: "", state: "Running", error: nil)])
+        selection.select("other")
+        XCTAssertTrue(selection.receiveNotification(workspaceID: "pod"))
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) })
+        controller.onFocus = { selection.select($0) }
+        try controller.connect("pod")
+        master.ready()
+        let launch = try XCTUnwrap(effects.first)
+        XCTAssertTrue(controller.report(workspace: "pod", generation: launch.generation, pane: try XCTUnwrap(launch.paneID), kind: "terminal_focus"))
+        XCTAssertEqual(selection.snapshot.selectedID, "pod")
+        XCTAssertEqual(selection.snapshot.badges, [])
+        controller.disconnect("pod")
+        selection.select("other")
+        XCTAssertTrue(selection.receiveNotification(workspaceID: "pod"))
+        XCTAssertFalse(controller.report(workspace: "pod", generation: launch.generation, pane: try XCTUnwrap(launch.paneID), kind: "terminal_focus"))
+        XCTAssertEqual(selection.snapshot.selectedID, "other")
+        XCTAssertEqual(selection.snapshot.badges, ["pod"])
+    }
+    func testStoppedOrMissingWorkspaceCancelsReloadAndReleasesTransport() throws {
+        for states: [WorkspaceView] in [[], [.init(id: "pod", provider: "", source: "", lastUsed: "", state: "Stopped", error: nil)]] {
+            let master = ControlledMaster()
+            var launches = 0
+            let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+                makeTransport: { _ in master }, emit: { if $0.kind == "terminal_launch" { launches += 1 } })
+            try controller.connect("pod")
+            master.ready()
+            try controller.reconnect("pod")
+            controller.reconcile(states)
+            master.stopped()
+            XCTAssertFalse(controller.hasOwnedTransports)
+            XCTAssertEqual(launches, 1)
+        }
+    }
     func testImageCompletionCannotInjectIntoReloadedOrClosedPane() throws {
         let master = ControlledMaster()
         var effects: [WorkspaceTerminalEffect] = []

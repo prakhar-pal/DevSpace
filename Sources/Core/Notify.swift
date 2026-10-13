@@ -254,7 +254,10 @@ public final class NotifyListener: @unchecked Sendable {
             let count = read(fd, &buffer, buffer.count)
             guard count > 0 else { return }
             request.append(buffer, count: Int(count))
-            if let parsed = Self.completeRequest(request) {
+            let parsed: HTTPRequest?
+            do { parsed = try Self.completeRequest(request) }
+            catch { return }
+            if let parsed {
                 process(parsed)
                 let response = Array("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
                 _ = response.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
@@ -276,7 +279,10 @@ public final class NotifyListener: @unchecked Sendable {
             var buf = buffer
             if let data { buf.append(data) }
 
-            if let request = Self.completeRequest(buf) {
+            let request: HTTPRequest?
+            do { request = try Self.completeRequest(buf) }
+            catch { conn.cancel(); return }
+            if let request {
                 self.process(request: request, conn: conn)
                 return
             }
@@ -292,16 +298,27 @@ public final class NotifyListener: @unchecked Sendable {
 
     /// Returns the request body once headers + Content-Length bytes have all
     /// arrived; nil if more data is needed.
-    private static func completeRequest(_ buf: Data) -> HTTPRequest? {
+    private static func completeRequest(_ buf: Data) throws -> HTTPRequest? {
+        guard buf.count <= 64 * 1024 else { throw DevpodError("HTTP request too large") }
         let sep = Data("\r\n\r\n".utf8)
         guard let r = buf.range(of: sep) else { return nil }
         let headerData = buf.subdata(in: buf.startIndex ..< r.lowerBound)
         let header = String(decoding: headerData, as: UTF8.self)
         let lines = header.split(separator: "\r\n", omittingEmptySubsequences: false)
-        let contentLength = header
-            .split(separator: "\r\n")
-            .first { $0.lowercased().hasPrefix("content-length:") }
-            .flatMap { Int($0.split(separator: ":")[1].trimmingCharacters(in: .whitespaces)) } ?? 0
+        let lengths = lines.filter { $0.lowercased().hasPrefix("content-length:") }
+        guard lengths.count <= 1,
+              !lines.contains(where: { $0.lowercased().hasPrefix("transfer-encoding:") }) else {
+            throw DevpodError("ambiguous HTTP framing")
+        }
+        var contentLength = 0
+        if let line = lengths.first {
+            let text = line.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)
+            guard !text.isEmpty, text.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+                  let length = Int(text), length <= 64 * 1024 - r.upperBound else {
+                throw DevpodError("invalid HTTP Content-Length")
+            }
+            contentLength = length
+        }
         let bodyStart = r.upperBound
         let available = buf.distance(from: bodyStart, to: buf.endIndex)
         guard available >= contentLength else { return nil }
