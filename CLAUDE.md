@@ -108,6 +108,10 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
 - **Agents may commit only on a non-`main`/non-`master` branch.** Never run
   `git commit` or `git push` while checked out on `main` or `master`; create
   and use a feature branch instead.
+- **Commit completed milestones incrementally.** On a non-`main`/non-`master`
+  feature branch, commit each small, independently verified milestone with a
+  conventional commit message. Stage only files belonging to that milestone;
+  leave unrelated or unfinished working-tree changes unstaged.
 - **Always use `gh stack` to create PRs**, including single-PR changes. When PR
   creation is explicitly authorized, establish local stack tracking with
   `gh stack init` (or extend it with `gh stack add`), then publish with
