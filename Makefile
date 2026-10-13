@@ -53,13 +53,13 @@ linux-test-protocol:
 
 linux-test-gtk:
 	env -u WAYLAND_DISPLAY GDK_BACKEND=x11 DEVSPACE_SWIFTC="$(SWIFTC)" \
-	python3 -B -m unittest Tests.Linux.test_linux_workspace_window Tests.Linux.test_linux_gtk_app -v
+	dbus-run-session -- python3 -B -m unittest Tests.Linux.test_linux_workspace_window Tests.Linux.test_linux_gtk_app -v
 
 linux-test: linux-build-dev
 	DEVSPACE_TEST_BACKEND="$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxBackend" \
 	DEVSPACE_TEST_FRONTEND_PREFIX="$(LINUX_DEV_PREFIX)" \
 	DEVSPACE_TEST_SWIFT_RUNTIME="$(LINUX_SWIFT_RUNTIME)" \
-	DEVSPACE_SWIFTC="$(SWIFTC)" python3 -B -m unittest discover -s Tests/Linux -v
+	DEVSPACE_SWIFTC="$(SWIFTC)" dbus-run-session -- python3 -B -m unittest discover -s Tests/Linux -v
 
 endif
 

@@ -11,8 +11,11 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-BACKEND = ROOT / ".tmp/swift-linux-app/debug/DevSpaceLinuxBackend"
+BACKEND = Path(os.environ.get(
+    "DEVSPACE_TEST_BACKEND", ROOT / "build/linux-dev/bin/DevSpaceLinuxBackend"
+))
 WORKSPACE = os.environ.get("DEVSPACE_HOST_INTEGRATION_WORKSPACE")
+CHANNEL = os.environ.get("DEVSPACE_TEST_CHANNEL", "development")
 
 
 @unittest.skipUnless(WORKSPACE, "opt-in authorized remote home integration")
@@ -25,7 +28,7 @@ class HostIntegrationTests(unittest.TestCase):
         return result.stdout
 
     def setUp(self):
-        self.process = subprocess.Popen([str(BACKEND), "--channel", "development"],
+        self.process = subprocess.Popen([str(BACKEND), "--channel", CHANNEL],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(self.cleanup_backend)
         self.buffer = b""
