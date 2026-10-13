@@ -80,6 +80,33 @@ struct WorkspaceWindowTests {
             let copiedText = try readClipboardText(clipboard)
             try expect(copiedText.contains("received:from-shortcut"),
                        "Ctrl+Shift+C did not copy the VTE selection to the private clipboard")
+
+            let pixel = Data([255, 0, 0, 255])
+            let imageBytes = pixel.withUnsafeBytes { g_bytes_new($0.baseAddress, gsize($0.count)) }!
+            defer { g_bytes_unref(imageBytes) }
+            guard let texture = gdk_memory_texture_new(1, 1, GDK_MEMORY_R8G8B8A8, imageBytes, 4) else {
+                throw TestFailure("private clipboard texture could not be created")
+            }
+            gdk_clipboard_set_texture(clipboard, texture)
+            g_object_unref(UnsafeMutableRawPointer(texture))
+            try expect(originalPane.handleKey(keyval: UInt32(GDK_KEY_v), modifiers: copyPasteModifiers),
+                       "Ctrl+Shift+V did not handle an image clipboard")
+            try expect(pumpUntil {
+                commands.contains { $0.0 == "paste_image" }
+            }, "Ctrl+Shift+V did not route the clipboard image to the backend")
+            let imagePayload = commands.first { $0.0 == "paste_image" }?.1 ?? [:]
+            guard let imagePath = imagePayload["source_path"] else {
+                throw TestFailure("clipboard image request did not include its temporary PNG")
+            }
+            defer { try? FileManager.default.removeItem(atPath: imagePath) }
+            var imageInfo = stat()
+            try expect(lstat(imagePath, &imageInfo) == 0, "clipboard PNG was not written to disk")
+            try expect((imageInfo.st_mode & mode_t(0o777)) == 0o600,
+                       "clipboard PNG permissions were not private")
+            try expect(try Data(contentsOf: URL(fileURLWithPath: imagePath))
+                .starts(with: Data([137, 80, 78, 71, 13, 10, 26, 10])),
+                       "clipboard image upload source was not a PNG")
+
             try expect(originalPane.handleKey(keyval: UInt32(GDK_KEY_r), modifiers: copyPasteModifiers),
                        "Ctrl+Shift+R was not handled by the terminal")
             try expect(commands.contains {

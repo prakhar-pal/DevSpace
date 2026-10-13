@@ -148,7 +148,7 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=120,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("host-vte workspace=connected output=received input=sent close=workspace-preserved",
+        self.assertIn("host-vte workspace=connected clipboard=image-pasted image-upload=verified close=workspace-preserved",
                       result.stdout)
 
     def test_existing_python_backend_regression_suite(self):

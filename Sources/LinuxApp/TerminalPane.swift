@@ -96,7 +96,7 @@ final class TerminalPane {
             vte_terminal_copy_clipboard_format(terminal, VTE_FORMAT_TEXT)
             return true
         case UInt32(GDK_KEY_v):
-            vte_terminal_paste_clipboard(terminal)
+            pasteClipboard()
             return true
         case UInt32(GDK_KEY_r):
             onEvent("reconnect", ["workspace_id": identity.workspaceID])
@@ -239,6 +239,72 @@ final class TerminalPane {
             "pane_id": identity.paneID.uuidString.lowercased(),
         ])
     }
+
+    private func pasteClipboard() {
+        guard let display = gdk_display_get_default(),
+              let clipboard = gdk_display_get_clipboard(display) else {
+            vte_terminal_paste_clipboard(terminal)
+            return
+        }
+        let callback = unsafeBitCast(
+            devspaceLinuxClipboardTextureReady as @convention(c)
+                (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void,
+            to: GAsyncReadyCallback.self
+        )
+        let context = ClipboardImageContext(self)
+        gdk_clipboard_read_texture_async(
+            clipboard, nil, callback, Unmanaged.passRetained(context).toOpaque()
+        )
+    }
+
+    fileprivate func clipboardTextureReady(_ clipboard: OpaquePointer, _ result: OpaquePointer) {
+        guard !isClosed else { return }
+        var error: UnsafeMutablePointer<GError>?
+        guard let texture = gdk_clipboard_read_texture_finish(clipboard, result, &error) else {
+            if let error { g_error_free(error) }
+            vte_terminal_paste_clipboard(terminal)
+            return
+        }
+        defer { g_object_unref(UnsafeMutableRawPointer(texture)) }
+        guard let sourcePath = privatePNG(from: texture) else {
+            vte_terminal_paste_clipboard(terminal)
+            return
+        }
+        onEvent("paste_image", [
+            "workspace_id": identity.workspaceID,
+            "generation": identity.generation.uuidString.lowercased(),
+            "pane_id": identity.paneID.uuidString.lowercased(),
+            "source_path": sourcePath,
+        ])
+    }
+
+    private func privatePNG(from texture: OpaquePointer) -> String? {
+        guard let png = gdk_texture_save_to_png_bytes(texture) else { return nil }
+        defer { g_bytes_unref(png) }
+        var size: gsize = 0
+        guard let bytes = g_bytes_get_data(png, &size), size > 8 else { return nil }
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("devspace-paste-\(UUID().uuidString).png")
+        let descriptor = url.path.withCString {
+            Glibc.open($0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600))
+        }
+        guard descriptor >= 0 else { return nil }
+        defer { _ = Glibc.close(descriptor) }
+
+        let count = Int(size)
+        var offset = 0
+        while offset < count {
+            let result = Glibc.write(descriptor, bytes.advanced(by: offset), count - offset)
+            if result < 0 && errno == EINTR { continue }
+            guard result > 0 else {
+                _ = url.path.withCString { Glibc.unlink($0) }
+                return nil
+            }
+            offset += result
+        }
+        return url.path
+    }
 }
 
 @_cdecl("devspace_linux_vte_contents_changed")
@@ -279,4 +345,19 @@ private func devspaceLinuxVteKeyPressed(
 private final class SpawnContext {
     weak var pane: TerminalPane?
     init(_ pane: TerminalPane) { self.pane = pane }
+}
+
+private final class ClipboardImageContext {
+    weak var pane: TerminalPane?
+    init(_ pane: TerminalPane) { self.pane = pane }
+}
+
+@_cdecl("devspace_linux_clipboard_texture_ready")
+private func devspaceLinuxClipboardTextureReady(
+    _ source: UnsafeMutableRawPointer?, _ result: UnsafeMutableRawPointer?, _ data: UnsafeMutableRawPointer?
+) {
+    guard let data else { return }
+    let context = Unmanaged<ClipboardImageContext>.fromOpaque(data).takeRetainedValue()
+    guard let pane = context.pane, let source, let result else { return }
+    pane.clipboardTextureReady(OpaquePointer(source), OpaquePointer(result))
 }

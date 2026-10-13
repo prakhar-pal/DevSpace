@@ -77,6 +77,8 @@ for line in sys.stdin:
         frame = snapshot(3)
         frame["id"] = request["id"]
         send(frame)
+    elif kind == "paste_image":
+        send({"version": 1, "id": request["id"], "kind": "completed"})
     elif kind == "shutdown":
         send({"version": 1, "id": request["id"], "kind": "stopped"})
         break

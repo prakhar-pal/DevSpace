@@ -12,8 +12,12 @@ private final class TestContext {
     var failureObservedAt: Date?
     var connectSent = false
     var terminalClosed = false
+    var imagePasteSent = false
+    var imagePastePath: String?
     var hostCommandSent = false
-    var hostInputSent = false
+    var hostImageRequested = false
+    var hostImageInputSubmitted = false
+    var hostImageVerified = false
     var failure: String?
     var exitCode: Int32 = 1
 
@@ -66,14 +70,34 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
         }
         if let pane = window.pane(forWorkspace: context.fixture) {
             if !context.hostCommandSent, pane.childPID != nil {
-                pane.feed("printf '\\104\\123\\137\\125\\111\\137\\122\\105\\101\\104\\131\\n'; IFS= read -r input; printf '\\104\\123\\137\\125\\111\\137\\111\\116\\120\\125\\124\\072%s\\n' \"$input\"\n")
+                pane.feed("printf '\\104\\123\\137\\125\\111\\137\\122\\105\\101\\104\\131\\n'; IFS= read -r input; printf '\\104\\123\\137\\125\\111\\137\\111\\116\\120\\125\\124\\072%s\\n' \"$input\"; case \"$input\" in 'Image pasted: '*) image_path=${input#Image pasted: }; image_path=${image_path% }; if [ -f \"$image_path\" ]; then printf '\\104\\123\\137\\125\\111\\137\\111\\115\\101\\107\\105\\137\\102\\131\\124\\105\\123\\072'; base64 -w0 -- \"$image_path\"; else printf '\\104\\123\\137\\125\\111\\137\\111\\115\\101\\107\\105\\137\\115\\111\\123\\123\\111\\116\\107'; fi; rm -f -- \"$image_path\";; esac\n")
                 context.hostCommandSent = true
             }
-            if !context.hostInputSent && pane.text.contains("DS_UI_READY") {
-                pane.feed("ui-check\n")
-                context.hostInputSent = true
+            if !context.hostImageRequested && pane.text.contains("DS_UI_READY") {
+                guard setPrivateClipboardImage(), pane.handleKey(
+                    keyval: UInt32(GDK_KEY_v),
+                    modifiers: GdkModifierType(rawValue: GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue)
+                ) else {
+                    context.failure = "VTE could not paste the private clipboard image"
+                    controller.requestShutdown()
+                    return 1
+                }
+                context.hostImageRequested = true
             }
-            if pane.text.contains("DS_UI_INPUT:ui-check") {
+            if context.hostImageRequested && !context.hostImageInputSubmitted,
+               pane.text.contains("Image pasted: /tmp/devspace-paste-") {
+                pane.feed("\n")
+                context.hostImageInputSubmitted = true
+            }
+            if !context.hostImageVerified,
+               let marker = pane.text.range(of: "DS_UI_IMAGE_BYTES:") {
+                let encoded = pane.text[marker.upperBound...].prefix { !$0.isWhitespace }
+                let signature = Data([137, 80, 78, 71, 13, 10, 26, 10])
+                if let image = Data(base64Encoded: String(encoded)), image.starts(with: signature) {
+                    context.hostImageVerified = true
+                }
+            }
+            if context.hostImageVerified {
                 guard window.snapshot.workspaces.first(where: { $0.id == context.fixture })?.state == "Running" else {
                     context.failure = "closing the real workspace terminal changed workspace lifecycle state"
                     controller.requestShutdown()
@@ -87,7 +111,7 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
         if controller.backend.state == .stopped {
             if context.failure == nil && context.connectSent && context.terminalClosed {
                 context.exitCode = 0
-                print("host-vte workspace=connected output=received input=sent close=workspace-preserved")
+                print("host-vte workspace=connected clipboard=image-pasted image-upload=verified close=workspace-preserved")
             }
             g_application_quit(UnsafeMutableRawPointer(context.application).assumingMemoryBound(to: GApplication.self))
             return 0
@@ -135,6 +159,29 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
     )
     if !context.terminalClosed,
        let pane = window.pane(for: identity), pane.text.contains("received:from-app") {
+        if !context.imagePasteSent {
+            let imageURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("devspace-paste-\(UUID().uuidString).png")
+            let pngSignature = Data([137, 80, 78, 71, 13, 10, 26, 10])
+            guard FileManager.default.createFile(atPath: imageURL.path, contents: pngSignature,
+                                                 attributes: [.posixPermissions: 0o600]) else {
+                context.failure = "could not create temporary clipboard image"
+                controller.requestShutdown()
+                return 1
+            }
+            context.imagePastePath = imageURL.path
+            context.imagePasteSent = true
+            controller.sendCommand("paste_image", payload: [
+                "workspace_id": identity.workspaceID,
+                "generation": identity.generation.uuidString.lowercased(),
+                "pane_id": identity.paneID.uuidString.lowercased(),
+                "source_path": imageURL.path,
+            ])
+            return 1
+        }
+        if let imagePath = context.imagePastePath, FileManager.default.fileExists(atPath: imagePath) {
+            return 1
+        }
         guard window.snapshot.workspaces.first?.state == "Running" else {
             context.failure = "closing the pane changed the workspace state"
             controller.requestShutdown()
@@ -158,6 +205,20 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
         controller.requestShutdown()
     }
     return 1
+}
+
+private func setPrivateClipboardImage() -> Bool {
+    guard let display = gdk_display_get_default(),
+          let clipboard = gdk_display_get_clipboard(display) else { return false }
+    let pixel = Data([255, 0, 0, 255])
+    guard let bytes = pixel.withUnsafeBytes({ g_bytes_new($0.baseAddress, gsize($0.count)) }) else {
+        return false
+    }
+    defer { g_bytes_unref(bytes) }
+    guard let texture = gdk_memory_texture_new(1, 1, GDK_MEMORY_R8G8B8A8, bytes, 4) else { return false }
+    gdk_clipboard_set_texture(clipboard, texture)
+    g_object_unref(UnsafeMutableRawPointer(texture))
+    return true
 }
 
 private func countWidgets(_ widget: UnsafeMutablePointer<GtkWidget>, cssName: String) -> Int {

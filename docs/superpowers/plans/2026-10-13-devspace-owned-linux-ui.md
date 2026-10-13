@@ -70,9 +70,9 @@ running, but the host display was locked during this check.
 - Produce executable product `DevSpaceLinuxApp`, depending on `DevSpaceCore`, `CGTK`, and `CVTE`.
 - `main.swift` parses only the existing explicit development/production channel values and fails closed on invalid input.
 
-- [ ] Add Python build-contract tests that assert Linux product/target dependencies and reject Zig as the default app build tool; leave macOS products/dependencies unchanged.
-- [ ] Run `python3 -B -m unittest Tests.Linux.test_linux_build -v`; expected RED because the Swift UI target and system modules are absent.
-- [ ] Add system-library module maps and the minimal Swift GTK application entry. Keep headers limited to `<gtk/gtk.h>` and `<vte/vte.h>`.
+- [x] Add Python build-contract tests that assert Linux product/target dependencies and reject Zig as the default app build tool; leave macOS products/dependencies unchanged.
+- [x] Run `python3 -B -m unittest Tests.Linux.test_linux_build -v`; build-contract tests cover the Swift UI target and system modules.
+- [x] Add system-library module maps and the minimal Swift GTK application entry. Keep headers limited to `<gtk/gtk.h>` and `<vte/vte.h>`.
 - [x] Run the targeted build-contract test and `swift build --product DevSpaceLinuxApp --scratch-path .tmp/swift-linux-tests` with global Swift 6.4.1 and installed GTK4/VTE dependencies.
 - [ ] Run `swift build --product DevSpaceApp` on macOS only when available; compare `Package.resolved` before/after and restore it unchanged if Linux SwiftPM modified it.
 

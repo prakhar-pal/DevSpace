@@ -32,6 +32,7 @@ final class LinuxApplicationController {
     private var shutdownSent = false
     private var shutdownStartedAt: Date?
     private var shownBackendFailure = false
+    private var pendingImageSources: [String: URL] = [:]
 
     init(application: UnsafeMutablePointer<GtkApplication>, channel: String,
          backendExecutableURL: URL? = nil, backendArguments: [String]? = nil) {
@@ -71,13 +72,19 @@ final class LinuxApplicationController {
     }
 
     func sendCommand(_ kind: String, payload: [String: String]? = nil) {
+        let imageSource = kind == "paste_image"
+            ? payload?["source_path"].map(URL.init(fileURLWithPath:))
+            : nil
         guard backend.state == .ready else {
+            if let imageSource { try? FileManager.default.removeItem(at: imageSource) }
             window?.setStatus("Workspace backend is not connected")
             return
         }
         do {
-            _ = try backend.send(kind, payload: payload)
+            let requestID = try backend.send(kind, payload: payload)
+            if let imageSource { pendingImageSources[requestID] = imageSource }
         } catch {
+            if let imageSource { try? FileManager.default.removeItem(at: imageSource) }
             window?.setStatus(errorMessage(for: error))
         }
     }
@@ -114,6 +121,7 @@ final class LinuxApplicationController {
         }
 
         if case .failed = backend.state {
+            discardPendingImageSources()
             window?.setActionsEnabled(false)
             if !shownBackendFailure {
                 window?.setStatus(backend.failure ?? "Workspace backend disconnected")
@@ -134,10 +142,15 @@ final class LinuxApplicationController {
 
     deinit {
         if pumpSource != 0 { _ = g_source_remove(pumpSource) }
+        discardPendingImageSources()
         if backend.state != .stopped { backend.terminate() }
     }
 
     private func receive(_ message: BackendProtocolMessage) {
+        if let requestID = message.id,
+           let imageSource = pendingImageSources.removeValue(forKey: requestID) {
+            try? FileManager.default.removeItem(at: imageSource)
+        }
         if message.id == pendingPollID {
             pendingPollID = nil
             nextPollDate = Date().addingTimeInterval(5)
@@ -261,11 +274,17 @@ final class LinuxApplicationController {
     }
 
     private func quitApplication() {
+        discardPendingImageSources()
         if let window {
             gtk_window_destroy(window.window)
             self.window = nil
         }
         g_application_quit(UnsafeMutableRawPointer(application).assumingMemoryBound(to: GApplication.self))
+    }
+
+    private func discardPendingImageSources() {
+        for source in pendingImageSources.values { try? FileManager.default.removeItem(at: source) }
+        pendingImageSources.removeAll()
     }
 }
 
