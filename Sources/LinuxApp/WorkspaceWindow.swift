@@ -171,6 +171,10 @@ final class WorkspaceWindow {
         terminalPanes[identity]
     }
 
+    func pane(forWorkspace workspaceID: String) -> TerminalPane? {
+        terminalPanes.values.first { $0.identity.workspaceID == workspaceID }
+    }
+
     func closeTerminal(_ identity: TerminalPaneIdentity, reportExit: Bool = false) {
         guard let pane = terminalPanes.removeValue(forKey: identity) else { return }
         if reportExit { pane.reportExit() }

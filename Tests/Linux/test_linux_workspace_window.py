@@ -135,6 +135,22 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("backend-failure=visible actions=disabled gtk=responsive", result.stdout)
 
+    @unittest.skipUnless(os.environ.get("DEVSPACE_HOST_UI_WORKSPACE"),
+                         "opt-in authorized real workspace through GTK/VTE")
+    def test_real_workspace_shell_round_trips_through_the_vte_widget(self):
+        workspace = os.environ["DEVSPACE_HOST_UI_WORKSPACE"]
+        channel = os.environ.get("DEVSPACE_TEST_CHANNEL", "production")
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11",
+                           DEVSPACE_TEST_CHANNEL=channel)
+        environment.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run(
+            ["xvfb-run", "-a", str(self.app_runner), str(self.backend_binary), workspace, "host"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("host-vte workspace=connected output=received input=sent close=workspace-preserved",
+                      result.stdout)
+
     def test_existing_python_backend_regression_suite(self):
         environment = dict(os.environ, DEVSPACE_TEST_BACKEND=str(self.backend_binary))
         result = subprocess.run(

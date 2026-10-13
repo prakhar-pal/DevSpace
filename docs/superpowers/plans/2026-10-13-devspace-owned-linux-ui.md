@@ -27,9 +27,11 @@ Tasks 1–4 are implemented and their host verification is recorded in the
 [completion audit](2026-10-13-linux-completion-audit.md). Verification uses the
 global Swift.org 6.4.1 Ubuntu 26.04 toolchain; no compiler is installed in the
 repository. The obsolete Linux Ghostty/Zig app pipeline has been retired.
-Automated current-host suites pass. Task 5 remains open for visible host layout
-and an actual `wc-1` shell through the running app's VTE widget, plus the
-explicitly deferred release/manual gates. The latest DevSpaceDev app is open.
+Automated current-host suites pass. The actual `wc-1` shell round-trip through
+the GTK/VTE app passed under Xvfb. Task 5 remains open for visual inspection on
+the unlocked host display and hook/notification/ded/image flows through the
+visible app, plus the explicitly deferred release/manual gates. DevSpaceDev is
+running, but the host display was locked during this check.
 
 ## File Boundaries
 
@@ -127,7 +129,7 @@ explicitly deferred release/manual gates. The latest DevSpaceDev app is open.
 
 - [x] Add build/assembly tests for Swift executable names, dev channel metadata, runtime lookup and relocation; observe RED before replacement.
 - [x] Switch default Linux targets and bundle assembly to the Swift frontend after Tasks 1–3 pass.
-- [x] Run the full Linux test suite (68 passed, two opt-in skips), Core XCTest (220 passed, one opt-in skip), private channel coexistence, and bundle relocation/replacement tests.
+- [x] Run the full Linux test suite (69 passed, three opt-in skips), Core XCTest (220 passed, one opt-in skip), private channel coexistence, and bundle relocation/replacement tests.
 - [x] Retire obsolete Zig/Ghostty Linux sources, patches and tests after equivalent GTK/VTE coverage passed; retain historical migration evidence.
 - [x] Update Linux docs with GTK/VTE system package names and make commands; remove Linux Ghostty/Zig runtime requirements and retain macOS libghostty instructions.
 
@@ -143,7 +145,8 @@ explicitly deferred release/manual gates. The latest DevSpaceDev app is open.
 
 - [x] Run Core/backend/protocol/UI/package suites on the current Ubuntu host; outcomes and skips are recorded in the completion audit.
 - [x] With private Xvfb, test controlled output/input/resize/disposal and copy/paste using the private test clipboard, without touching the physical clipboard.
-- [ ] With the host display, verify visual GTK layout, actual wc-1 terminal output/input and close/reopen using the approved workspace; do not test clipboard replacement without separate approval.
+- [x] Run an actual `wc-1` shell round-trip through the GTK/VTE app under Xvfb, verifying output, input and terminal close while the workspace remains running.
+- [ ] With the unlocked host display, verify visual GTK layout and close/reopen using the approved workspace; do not test clipboard replacement without separate approval.
 - [ ] Verify these hook/notification/ded/image paths through the visible Swift frontend; the wc-1 backend/SSH integration passed without workspace lifecycle/project-file changes.
 - [x] Record manual/deferred checks (IME, physical clipboard, notification banner/click, Ubuntu 24.04, package signing/CI) as unverified rather than inferring them from unit tests.
 - [x] Run a final `git diff --check` and inspect the macOS lockfile comparison; commit verified milestones per `AGENTS.md`, without publishing.

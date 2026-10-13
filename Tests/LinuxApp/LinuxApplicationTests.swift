@@ -12,6 +12,8 @@ private final class TestContext {
     var failureObservedAt: Date?
     var connectSent = false
     var terminalClosed = false
+    var hostCommandSent = false
+    var hostInputSent = false
     var failure: String?
     var exitCode: Int32 = 1
 
@@ -28,11 +30,14 @@ private func activate(_ rawApplication: UnsafeMutableRawPointer?, _ data: Unsafe
     guard let rawApplication, let data else { return }
     let context = Unmanaged<TestContext>.fromOpaque(data).takeUnretainedValue()
     let application = UnsafeMutableRawPointer(rawApplication).assumingMemoryBound(to: GtkApplication.self)
+    let hostMode = context.mode == "host"
+    let channel = hostMode ? (ProcessInfo.processInfo.environment["DEVSPACE_TEST_CHANNEL"] ?? "production")
+        : "development"
     let controller = LinuxApplicationController(
         application: application,
-        channel: "development",
+        channel: channel,
         backendExecutableURL: URL(fileURLWithPath: context.python),
-        backendArguments: [context.fixture, context.mode]
+        backendArguments: hostMode ? ["--channel", channel] : [context.fixture, context.mode]
     )
     context.controller = controller
     do {
@@ -49,6 +54,50 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
     guard let data else { return 0 }
     let context = Unmanaged<TestContext>.fromOpaque(data).takeUnretainedValue()
     guard let controller = context.controller, let window = controller.window else { return 1 }
+    if context.mode == "host" {
+        if Date().timeIntervalSince(context.startedAt) > 90 && context.failure == nil {
+            context.failure = "timed out waiting for real workspace terminal input/output"
+            controller.requestShutdown()
+        }
+        if !context.connectSent,
+           window.snapshot.workspaces.contains(where: { $0.id == context.fixture && $0.state == "Running" }) {
+            context.connectSent = true
+            controller.sendCommand("connect", payload: ["workspace_id": context.fixture])
+        }
+        if let pane = window.pane(forWorkspace: context.fixture) {
+            if !context.hostCommandSent, pane.childPID != nil {
+                pane.feed("printf '\\104\\123\\137\\125\\111\\137\\122\\105\\101\\104\\131\\n'; IFS= read -r input; printf '\\104\\123\\137\\125\\111\\137\\111\\116\\120\\125\\124\\072%s\\n' \"$input\"\n")
+                context.hostCommandSent = true
+            }
+            if !context.hostInputSent && pane.text.contains("DS_UI_READY") {
+                pane.feed("ui-check\n")
+                context.hostInputSent = true
+            }
+            if pane.text.contains("DS_UI_INPUT:ui-check") {
+                guard window.snapshot.workspaces.first(where: { $0.id == context.fixture })?.state == "Running" else {
+                    context.failure = "closing the real workspace terminal changed workspace lifecycle state"
+                    controller.requestShutdown()
+                    return 1
+                }
+                window.closeTerminal(pane.identity, reportExit: true)
+                context.terminalClosed = true
+                controller.requestShutdown()
+            }
+        }
+        if controller.backend.state == .stopped {
+            if context.failure == nil && context.connectSent && context.terminalClosed {
+                context.exitCode = 0
+                print("host-vte workspace=connected output=received input=sent close=workspace-preserved")
+            }
+            g_application_quit(UnsafeMutableRawPointer(context.application).assumingMemoryBound(to: GApplication.self))
+            return 0
+        }
+        if case .failed = controller.backend.state, context.failure == nil {
+            context.failure = controller.backend.failure ?? "real workspace backend failed"
+            controller.requestShutdown()
+        }
+        return 1
+    }
     if context.mode == "crash" {
         if case .failed = controller.backend.state {
             if context.failureObservedAt == nil { context.failureObservedAt = Date() }
@@ -168,7 +217,10 @@ struct LinuxApplicationTests {
             fputs("LinuxApplicationTests: backend executable lookup ignored its launcher environment\n", stderr)
             exit(EXIT_FAILURE)
         }
-        let identifier = LinuxApplicationChannel.applicationIdentifier("development")!
+        let channel = CommandLine.arguments[3] == "host"
+            ? (ProcessInfo.processInfo.environment["DEVSPACE_TEST_CHANNEL"] ?? "production")
+            : "development"
+        let identifier = LinuxApplicationChannel.applicationIdentifier(channel)!
         let application = gtk_application_new(identifier, GApplicationFlags(rawValue: 0))!
         let context = TestContext(
             python: CommandLine.arguments[1], fixture: CommandLine.arguments[2], mode: CommandLine.arguments[3],
