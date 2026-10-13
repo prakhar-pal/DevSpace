@@ -23,28 +23,21 @@ APP_INSTALL_LOCATION ?= /Applications
 .PHONY: bootstrap build-dev build test run clean install help
 
 ifeq ($(shell uname -s),Linux)
-LINUX_UPSTREAM ?= .tmp/linux-migration/upstream/ghostty-1.3.1
-# Content-addressed copies avoid stale patches without overwriting existing work.
-LINUX_FRONTEND ?= .tmp/linux-migration/frontend-$(shell sha256sum Sources/Linux/ghostty-source.json Sources/Linux/patches/*.patch Sources/Linux/*.zig Tests/Linux/gtk_terminal_test.zig scripts/prepare-linux-frontend.py | sha256sum | cut -c1-16)
 LINUX_DEV_PREFIX ?= build/linux-dev
 LINUX_DEV_BUNDLE ?= build/linux-dev-bundle
+LINUX_SWIFT_SCRATCH ?= .tmp/swift-linux-app
 LINUX_SWIFT_RUNTIME ?= $(shell $(SWIFT) -print-target-info | python3 -c 'import json,sys; print(json.load(sys.stdin)["paths"]["runtimeLibraryPaths"][0])')
-LINUX_OPTIMIZE ?= Debug
 SWIFT ?= swift
-ZIG ?= zig
+SWIFTC ?= swiftc
 
-.PHONY: linux-prepare linux-build-dev linux-bundle-dev linux-run linux-test-core linux-test-protocol linux-test-gtk
-linux-prepare:
-	@test -d "$(LINUX_UPSTREAM)" || python3 scripts/prepare-linux-ghostty.py --output .tmp/linux-migration/upstream
-	python3 scripts/prepare-linux-frontend.py --upstream "$(LINUX_UPSTREAM)" --output "$(LINUX_FRONTEND)"
+.PHONY: linux-build-dev linux-bundle-dev linux-run linux-test-core linux-test-protocol linux-test-gtk linux-test
 
-$(LINUX_FRONTEND)/src/devspace_gtk_test.zig:
-	$(MAKE) linux-prepare
-
-linux-build-dev: $(LINUX_FRONTEND)/src/devspace_gtk_test.zig
-	$(SWIFT) build --product DevSpaceLinuxBackend --scratch-path .tmp/swift-controller-test
-	cd "$(LINUX_FRONTEND)" && $(if $(findstring /,$(ZIG)),$(abspath $(ZIG)),$(ZIG)) build -Doptimize=$(LINUX_OPTIMIZE) -Dcpu=baseline -Demit-docs=false -Demit-webdata=false -Di18n=false -fno-sys=gtk4-layer-shell -j2 --cache-dir "$(CURDIR)/.tmp/linux-migration/zig-local-cache" --global-cache-dir "$(CURDIR)/.tmp/linux-migration/zig-cache" --prefix "$(abspath $(LINUX_DEV_PREFIX))"
-	install -m 755 .tmp/swift-controller-test/debug/DevSpaceLinuxBackend "$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxBackend"
+linux-build-dev:
+	$(SWIFT) build --product DevSpaceLinuxApp --scratch-path "$(LINUX_SWIFT_SCRATCH)"
+	$(SWIFT) build --product DevSpaceLinuxBackend --scratch-path "$(LINUX_SWIFT_SCRATCH)"
+	mkdir -p "$(LINUX_DEV_PREFIX)/bin"
+	install -m 755 "$(LINUX_SWIFT_SCRATCH)/debug/DevSpaceLinuxApp" "$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxApp"
+	install -m 755 "$(LINUX_SWIFT_SCRATCH)/debug/DevSpaceLinuxBackend" "$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxBackend"
 
 linux-bundle-dev: linux-build-dev
 	python3 scripts/assemble-linux.py --frontend "$(LINUX_DEV_PREFIX)" --backend "$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxBackend" --swift-runtime "$(LINUX_SWIFT_RUNTIME)" --channel development --output "$(LINUX_DEV_BUNDLE)" --replace
@@ -53,13 +46,20 @@ linux-run: linux-bundle-dev
 	"$(LINUX_DEV_BUNDLE)/bin/devspace-dev"
 
 linux-test-core:
-	$(SWIFT) test --scratch-path .tmp/swift-controller-test
+	$(SWIFT) test --scratch-path .tmp/swift-linux-tests
 
 linux-test-protocol:
-	$(ZIG) test --dep protocol -Mroot=Tests/Linux/backend_protocol_test.zig -Mprotocol=Sources/Linux/backend_protocol.zig --cache-dir .tmp/linux-migration/zig-local-cache --global-cache-dir .tmp/linux-migration/zig-cache
+	DEVSPACE_SWIFTC="$(SWIFTC)" python3 -B -m unittest Tests.Linux.test_linux_backend_client -v
 
-linux-test-gtk: $(LINUX_FRONTEND)/src/devspace_gtk_test.zig
-	cd "$(LINUX_FRONTEND)" && $(if $(findstring /,$(ZIG)),$(abspath $(ZIG)),$(ZIG)) build test-devspace -Doptimize=$(LINUX_OPTIMIZE) -Dcpu=baseline -Demit-docs=false -Demit-webdata=false -Di18n=false -fno-sys=gtk4-layer-shell -j2 --cache-dir "$(CURDIR)/.tmp/linux-migration/zig-local-cache" --global-cache-dir "$(CURDIR)/.tmp/linux-migration/zig-cache"
+linux-test-gtk:
+	env -u WAYLAND_DISPLAY GDK_BACKEND=x11 DEVSPACE_SWIFTC="$(SWIFTC)" \
+	python3 -B -m unittest Tests.Linux.test_linux_workspace_window Tests.Linux.test_linux_gtk_app -v
+
+linux-test: linux-build-dev
+	DEVSPACE_TEST_BACKEND="$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxBackend" \
+	DEVSPACE_TEST_FRONTEND_PREFIX="$(LINUX_DEV_PREFIX)" \
+	DEVSPACE_TEST_SWIFT_RUNTIME="$(LINUX_SWIFT_RUNTIME)" \
+	DEVSPACE_SWIFTC="$(SWIFTC)" python3 -B -m unittest discover -s Tests/Linux -v
 
 endif
 
@@ -71,13 +71,12 @@ help:
 	@echo "  make run        - build-dev and launch the app"
 	@echo "  make install    - release build + install to \$$APP_INSTALL_LOCATION (default /Applications)"
 	@echo "  make clean      - remove build output"
-	@echo "  make linux-prepare       - prepare patched GTK source"
-	@echo "  make linux-build-dev     - build the GTK frontend and Swift backend"
+	@echo "  make linux-build-dev     - build the Swift GTK/VTE frontend and backend"
 	@echo "  make linux-bundle-dev    - assemble a relocatable development bundle"
 	@echo "  make linux-run           - build, bundle, and launch DevSpaceDev on Linux"
-	@echo "  make linux-test-core     - test the portable Swift controller"
-	@echo "  make linux-test-protocol - test the Zig backend protocol"
-	@echo "  make linux-test-gtk      - test the real GTK window and terminals"
+	@echo "  make linux-test-core     - run the Swift Core XCTest target"
+	@echo "  make linux-test-protocol - exercise the Swift backend protocol client"
+	@echo "  make linux-test-gtk      - test the GTK/VTE window and terminal lifecycle"
 
 bootstrap:
 	@echo "Uses the Swift toolchain bundled with Xcode — nothing to install."

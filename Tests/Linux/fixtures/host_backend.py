@@ -12,6 +12,19 @@ import threading
 log = Path(os.environ["DEVSPACE_TEST_EVENTS"])
 trace = log.open("a")
 lock = threading.Lock()
+if "DEVSPACE_HOST_CONFIG_HOME" in os.environ:
+    # Layout isolation must not install a throwaway authentication token into
+    # the real pod's hooks. Seed only our fresh test config, never the real one.
+    source = Path(os.environ["DEVSPACE_HOST_CONFIG_HOME"])
+    if not source.is_absolute():
+        source = Path.home() / ".config"
+    token = (source / "devspace/notify-token").read_bytes().strip()
+    if len(token) != 32 or any(byte not in b"0123456789abcdefABCDEF" for byte in token):
+        raise ValueError("Host notification token is invalid; launch DevSpaceDev first")
+    target = Path(os.environ["XDG_CONFIG_HOME"]) / "devspace/notify-token"
+    target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as seeded:
+        seeded.write(token)
 child = subprocess.Popen([os.environ["DEVSPACE_HOST_BACKEND"], *sys.argv[1:]],
                          stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 

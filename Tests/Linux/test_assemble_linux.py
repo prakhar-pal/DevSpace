@@ -1,6 +1,7 @@
 """Exercise the real Linux launcher and bundle assembly in isolated paths."""
 
 import json
+import os
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -14,22 +15,33 @@ SCRIPT = ROOT / "scripts/assemble-linux.py"
 
 
 class AssembleLinuxTests(unittest.TestCase):
+    def test_launcher_finds_user_local_tools_with_minimal_gui_path(self):
+        home = self.directory / "home"
+        tools = home / ".local/bin"
+        tools.mkdir(parents=True)
+        for name in ("devpod", "zed"):
+            tool = tools / name
+            tool.write_text("#!/bin/sh\nprintf FOUND\n")
+            tool.chmod(0o755)
+        (self.frontend / "bin/DevSpaceLinuxApp").write_text("#!/bin/sh\ncommand -v devpod && command -v zed\n")
+        self.assertEqual(self.assemble().returncode, 0)
+        env = dict(os.environ, HOME=str(home), PATH="/usr/bin:/bin")
+        result = subprocess.run([str(self.output / "bin/devspace-dev")], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [str(tools / "devpod"), str(tools / "zed")])
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(dir=ROOT / ".tmp")
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         self.frontend = self.directory / "frontend"
         (self.frontend / "bin").mkdir(parents=True)
-        executable = self.frontend / "bin/ghostty"
+        executable = self.frontend / "bin/DevSpaceLinuxApp"
         executable.write_text("#!/usr/bin/env python3\nimport json,os,sys\n"
                               "print(json.dumps({'args':sys.argv[1:],'channel':os.environ['DEVSPACE_BUILD_CHANNEL'],"
-                              "'backend':os.environ['DEVSPACE_BACKEND'],'resources':os.environ['GHOSTTY_RESOURCES_DIR'],"
+                              "'backend':os.environ['DEVSPACE_BACKEND'],"
                               "'libraries':os.environ['LD_LIBRARY_PATH']}))\n")
         executable.chmod(0o755)
-        (self.frontend / "share/ghostty").mkdir(parents=True)
-        (self.frontend / "share/ghostty/resource").write_text("retained resource")
-        (self.frontend / "lib").mkdir()
-        (self.frontend / "lib/libgtk4-layer-shell.so").write_text("layer shell")
         self.backend = self.directory / "backend"
         self.backend.write_text("backend artifact")
         self.runtime = self.directory / "runtime"
@@ -55,11 +67,10 @@ class AssembleLinuxTests(unittest.TestCase):
         launched = json.loads(result.stdout)
         self.assertEqual(launched["channel"], "development")
         self.assertEqual(launched["backend"], str(moved / "bin/DevSpaceDevBackend"))
-        self.assertEqual(launched["resources"], str(moved / "share/ghostty"))
         self.assertEqual(launched["libraries"].split(":")[0], str(moved / "lib"))
         self.assertEqual(launched["args"], ["argument with spaces", "α"])
         self.assertEqual((moved / "lib/libswiftCore.so").read_text(), "Swift runtime")
-        self.assertEqual((moved / "share/ghostty/resource").read_text(), "retained resource")
+        self.assertFalse((moved / "share/ghostty").exists())
         self.assertTrue((moved / "bin/DevSpaceDev").is_file())
 
     def test_production_has_distinct_executables_and_desktop_identity(self):

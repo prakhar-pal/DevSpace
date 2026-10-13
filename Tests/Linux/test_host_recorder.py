@@ -8,11 +8,38 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-BACKEND = ROOT / ".tmp/swift-controller-test/debug/DevSpaceLinuxBackend"
+BACKEND = Path(os.environ.get(
+    "DEVSPACE_TEST_BACKEND", ROOT / "build/linux-dev/bin/DevSpaceLinuxBackend"
+))
 
 
 @unittest.skipUnless(BACKEND.is_file(), "build the Swift backend first")
 class HostRecorderTests(unittest.TestCase):
+    def test_isolated_host_run_keeps_real_notification_token(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / ".tmp") as temporary:
+            directory = Path(temporary)
+            original = directory / "real-config/devspace/notify-token"
+            original.parent.mkdir(parents=True)
+            token = b"0123456789abcdef0123456789abcdef"
+            original.write_bytes(token)
+            original.chmod(0o600)
+            isolated = directory / "isolated-config"
+            env = dict(os.environ, DEVSPACE_HOST_BACKEND=str(BACKEND),
+                       DEVSPACE_TEST_EVENTS=str(directory / "events.jsonl"),
+                       DEVSPACE_HOST_CONFIG_HOME=str(directory / "real-config"),
+                       XDG_CONFIG_HOME=str(isolated))
+            requests = [{"version": 1, "id": "1", "kind": "handshake"},
+                        {"version": 1, "id": "2", "kind": "shutdown"}]
+            result = subprocess.run([str(ROOT / "Tests/Linux/fixtures/host_backend.py"),
+                                     "--channel", "development", "--notify-port", "0"],
+                                    input="".join(json.dumps(row) + "\n" for row in requests),
+                                    env=env, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            copied = isolated / "devspace/notify-token"
+            self.assertEqual(copied.read_bytes(), token)
+            self.assertEqual(copied.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(original.read_bytes(), token)
+
     def test_frontend_can_close_response_pipe_during_shutdown(self):
         with tempfile.TemporaryDirectory(dir=ROOT / ".tmp") as temporary:
             log = Path(temporary) / "events.jsonl"

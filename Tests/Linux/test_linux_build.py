@@ -1,7 +1,9 @@
-"""Exercise Make's Linux build orchestration with controlled compiler tools."""
+"""Exercise the Swift Linux build path with controlled compiler products."""
 
 import json
+import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -16,98 +18,137 @@ class LinuxBuildTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         shutil.copyfile(ROOT / "Makefile", self.directory / "Makefile")
-        (self.directory / "scripts").mkdir()
-        shutil.copyfile(ROOT / "scripts/assemble-linux.py", self.directory / "scripts/assemble-linux.py")
+        shutil.copytree(ROOT / "scripts", self.directory / "scripts",
+                        ignore=shutil.ignore_patterns("*.pyc", "__pycache__"))
         shutil.copytree(ROOT / "Resources", self.directory / "Resources")
+
         self.runtime = self.directory / "runtime"
         self.runtime.mkdir()
         (self.runtime / "libswiftCore.so").write_text("controlled runtime")
-        self.frontend = self.directory / "frontend"
-        (self.frontend / "src").mkdir(parents=True)
-        (self.frontend / "src/devspace_gtk_test.zig").touch()
+
+        self.app_program = (
+            "#!/usr/bin/env python3\nimport json,os,sys\n"
+            "print(json.dumps({'channel':os.environ['DEVSPACE_BUILD_CHANNEL'],"
+            "'backend':os.environ['DEVSPACE_BACKEND'],"
+            "'libraries':os.environ['LD_LIBRARY_PATH'],'args':sys.argv[1:]}))\n"
+        )
+        self.backend_program = (
+            "#!/bin/sh\nif [ \"$1\" = --print-path ]; then "
+            "printf '%s\\n' \"/usr/bin:/bin:$HOME/.local/bin\"; fi\n"
+        )
+        self.products = self.directory / "products.json"
+        self.products.write_text(json.dumps({
+            "DevSpaceLinuxApp": self.app_program,
+            "DevSpaceLinuxBackend": self.backend_program,
+        }))
+
         self.swift = self.directory / "swift"
-        self.swift.write_text("#!/usr/bin/env python3\nfrom pathlib import Path\n"
-                              "p=Path('.tmp/swift-controller-test/debug/DevSpaceLinuxBackend')\n"
-                              "p.parent.mkdir(parents=True,exist_ok=True)\n"
-                              "p.write_text('controlled backend artifact')\n")
+        self.swift.write_text(
+            "#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\n"
+            "args=sys.argv[1:]\n"
+            "with open('swift-products.jsonl','a') as log: log.write(json.dumps(args)+'\\n')\n"
+            "if 'build' in args:\n"
+            " product=args[args.index('--product')+1]\n"
+            " if os.environ.get('DEVSPACE_TEST_FAIL_PRODUCT') == product: raise SystemExit(42)\n"
+            " scratch=Path(args[args.index('--scratch-path')+1])\n"
+            " output=scratch/'debug'/product\n"
+            " output.parent.mkdir(parents=True,exist_ok=True)\n"
+            " output.write_text(json.load(open(os.environ['DEVSPACE_TEST_PRODUCTS']))[product])\n"
+            " output.chmod(0o755)\n"
+        )
         self.swift.chmod(0o755)
+
         self.zig = self.directory / "zig"
-        self.zig.write_text("#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\n"
-                            "Path('../arguments.json').write_text(json.dumps(sys.argv[1:]))\n"
-                            "prefix=Path(sys.argv[sys.argv.index('--prefix')+1])\n"
-                            "(prefix/'bin').mkdir(parents=True,exist_ok=True)\n"
-                            "(prefix/'bin/ghostty').write_text('controlled frontend artifact')\n")
+        self.zig.write_text("#!/bin/sh\ntouch zig-was-invoked\nexit 99\n")
         self.zig.chmod(0o755)
 
-    def build(self):
-        return subprocess.run(["make", "linux-build-dev", f"LINUX_FRONTEND={self.frontend}",
-                               f"SWIFT={self.swift}", f"ZIG={self.zig}"], cwd=self.directory,
-                              capture_output=True, text=True)
+    def run_make(self, target, *extra, fail_product=None):
+        environment = dict(os.environ, DEVSPACE_TEST_PRODUCTS=str(self.products))
+        if fail_product:
+            environment["DEVSPACE_TEST_FAIL_PRODUCT"] = fail_product
+        return subprocess.run(
+            ["make", target, f"SWIFT={self.swift}", f"ZIG={self.zig}",
+             f"LINUX_SWIFT_RUNTIME={self.runtime}", *extra],
+            cwd=self.directory, env=environment, capture_output=True, text=True,
+        )
 
-    def test_build_uses_one_shared_local_cache_and_installs_backend(self):
-        result = self.build()
+    def test_linux_build_installs_swift_frontend_and_backend_without_zig(self):
+        result = self.run_make("linux-build-dev")
         self.assertEqual(result.returncode, 0, result.stderr)
-        arguments = json.loads((self.directory / "arguments.json").read_text())
-        self.assertIn("--cache-dir", arguments, "avoid a new compiler cache for each prepared revision")
-        self.assertEqual(arguments[arguments.index("--cache-dir") + 1],
-                         str(self.directory / ".tmp/linux-migration/zig-local-cache"))
-        self.assertIn("-Dcpu=baseline", arguments)
-        self.assertIn("-Doptimize=Debug", arguments)
-        backend = self.directory / "build/linux-dev/bin/DevSpaceLinuxBackend"
-        self.assertEqual(backend.read_text(), "controlled backend artifact")
+        products = [json.loads(line) for line in
+                    (self.directory / "swift-products.jsonl").read_text().splitlines()]
+        built_products = [args[args.index("--product") + 1] for args in products]
+        self.assertEqual(built_products, ["DevSpaceLinuxApp", "DevSpaceLinuxBackend"])
+        self.assertFalse((self.directory / "zig-was-invoked").exists())
+        self.assertEqual((self.directory / "build/linux-dev/bin/DevSpaceLinuxApp").read_text(),
+                         self.app_program)
+        self.assertEqual((self.directory / "build/linux-dev/bin/DevSpaceLinuxBackend").read_text(),
+                         self.backend_program)
 
-    def test_compiler_failure_does_not_publish_backend_as_a_complete_build(self):
-        self.zig.write_text("#!/usr/bin/env python3\nraise SystemExit(42)\n")
-        result = self.build()
+    def test_backend_compile_failure_does_not_install_partial_frontend(self):
+        result = self.run_make("linux-build-dev", fail_product="DevSpaceLinuxBackend")
         self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.directory / "build/linux-dev/bin/DevSpaceLinuxApp").exists())
         self.assertFalse((self.directory / "build/linux-dev/bin/DevSpaceLinuxBackend").exists())
 
-    def test_run_builds_and_refreshes_a_development_bundle(self):
-        # The compiler peer supplies artifacts; Make, assembly, and launcher are real.
-        self.zig.write_text("#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\n"
-                            "prefix=Path(sys.argv[sys.argv.index('--prefix')+1])\n"
-                            "(prefix/'bin').mkdir(parents=True,exist_ok=True)\n"
-                            "p=prefix/'bin/ghostty'\n"
-                            "p.write_text(\"#!/usr/bin/env python3\\nimport json,os\\n"
-                            "print(json.dumps({'channel':os.environ['DEVSPACE_BUILD_CHANNEL'],"
-                            "'backend':os.environ['DEVSPACE_BACKEND']}))\\n\")\n"
-                            "p.chmod(0o755)\n"
-                            "(prefix/'lib').mkdir(exist_ok=True)\n"
-                            "(prefix/'share/ghostty').mkdir(parents=True,exist_ok=True)\n")
+    def test_swiftpm_test_target_does_not_collect_standalone_integration_runners(self):
+        manifest = (ROOT / "Package.swift").read_text()
+        self.assertNotIn('name: "DevSpaceLinuxAppTests"', manifest,
+                         "Tests/LinuxApp contains standalone @main runners, not one SwiftPM test module")
+
+    def test_run_rebuilds_and_replaces_a_relocatable_dev_bundle(self):
         for _ in range(2):
-            result = subprocess.run(["make", "linux-run", f"LINUX_FRONTEND={self.frontend}",
-                                     f"SWIFT={self.swift}", f"ZIG={self.zig}",
-                                     f"LINUX_SWIFT_RUNTIME={self.runtime}"], cwd=self.directory,
-                                    capture_output=True, text=True)
+            result = self.run_make("linux-run")
             self.assertEqual(result.returncode, 0, result.stderr)
-            launched = json.loads(result.stdout.splitlines()[-1])
+            output = result.stdout.splitlines()
+            self.assertTrue(output, f"linux-run produced no output; stderr={result.stderr!r}")
+            launched = None
+            for line in reversed(output):
+                try:
+                    candidate = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(candidate, dict):
+                    launched = candidate
+                    break
+            self.assertIsNotNone(launched,
+                                 f"launcher did not emit its JSON probe; stdout={result.stdout!r}; "
+                                 f"stderr={result.stderr!r}")
+            bundle = self.directory / "build/linux-dev-bundle"
             self.assertEqual(launched["channel"], "development")
-            self.assertEqual(launched["backend"],
-                             str(self.directory / "build/linux-dev-bundle/bin/DevSpaceDevBackend"))
-            self.assertEqual(Path(launched["backend"]).read_text(), "controlled backend artifact")
+            self.assertEqual(launched["backend"], str(bundle / "bin/DevSpaceDevBackend"))
+            self.assertEqual(launched["libraries"].split(":")[0], str(bundle / "lib"))
+            self.assertTrue((bundle / "bin/DevSpaceDev").is_file())
+            self.assertTrue((bundle / "bin/DevSpaceDevBackend").is_file())
 
-    def test_protocol_target_keeps_both_compiler_caches_inside_the_project(self):
-        self.zig.write_text("#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\n"
-                            "Path('arguments.json').write_text(json.dumps(sys.argv[1:]))\n")
-        result = subprocess.run(["make", "linux-test-protocol", f"ZIG={self.zig}"],
-                                cwd=self.directory, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        arguments = json.loads((self.directory / "arguments.json").read_text())
-        self.assertIn("--global-cache-dir", arguments, "the sandbox cannot write the default home cache")
-        self.assertEqual(arguments[arguments.index("--global-cache-dir") + 1],
-                         ".tmp/linux-migration/zig-cache")
-        self.assertEqual(arguments[arguments.index("--cache-dir") + 1],
-                         ".tmp/linux-migration/zig-local-cache")
+    def test_linux_app_typechecks_against_system_gtk_and_vte_modules(self):
+        compiler = os.environ.get("DEVSPACE_SWIFTC") or shutil.which("swiftc")
+        self.assertIsNotNone(compiler, "Swift compiler must be installed")
+        build = self.directory / "swift-modules"
+        build.mkdir()
+        module_map = ROOT / "Tests/Linux/fixtures/CPTY.modulemap"
+        core_command = [compiler, "-emit-module", "-module-name", "DevSpaceCore",
+                        "-emit-module-path", str(build / "DevSpaceCore.swiftmodule"),
+                        "-module-cache-path", str(build / "core-module-cache"),
+                        "-Xcc", f"-fmodule-map-file={module_map}",
+                        "-I", str(ROOT / "Sources/CPTY/include"),
+                        *map(str, sorted((ROOT / "Sources/Core").glob("*.swift")))]
+        core = subprocess.run(core_command, cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(core.returncode, 0, core.stderr)
 
-    def test_gtk_target_runs_the_native_integration_test_with_shared_caches(self):
-        self.zig.write_text("#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\n"
-                            "Path('../arguments.json').write_text(json.dumps(sys.argv[1:]))\n")
-        result = subprocess.run(["make", "linux-test-gtk", f"ZIG={self.zig}",
-                                 f"LINUX_FRONTEND={self.frontend}"], cwd=self.directory,
-                                capture_output=True, text=True)
+        cflags = shlex.split(subprocess.check_output(
+            ["pkg-config", "--cflags", "gtk4", "vte-2.91-gtk4"], text=True
+        ))
+        command = [compiler, "-typecheck", *map(str, sorted((ROOT / "Sources/LinuxApp").glob("*.swift"))),
+                   "-I", str(build), "-I", str(ROOT / "Sources/CPTY/include"),
+                   "-Xcc", f"-fmodule-map-file={module_map}",
+                   "-module-cache-path", str(build / "app-module-cache"),
+                   "-I", str(ROOT / "Sources/LinuxGTK"), "-I", str(ROOT / "Sources/LinuxVTE")]
+        for flag in cflags:
+            command.extend(["-Xcc", flag])
+        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        arguments = json.loads((self.directory / "arguments.json").read_text())
-        self.assertEqual(arguments[:2], ["build", "test-devspace"])
-        self.assertIn("-Dcpu=baseline", arguments)
-        self.assertEqual(arguments[arguments.index("--cache-dir") + 1],
-                         str(self.directory / ".tmp/linux-migration/zig-local-cache"))
+
+
+if __name__ == "__main__":
+    unittest.main()

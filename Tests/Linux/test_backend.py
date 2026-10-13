@@ -11,7 +11,7 @@ import unittest
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
-BACKEND = Path(os.environ.get("DEVSPACE_TEST_BACKEND", ROOT / ".tmp/swift-controller-test/debug/DevSpaceLinuxBackend"))
+BACKEND = Path(os.environ.get("DEVSPACE_TEST_BACKEND", ROOT / ".tmp/swift-linux-app/debug/DevSpaceLinuxBackend"))
 
 
 @unittest.skipUnless(BACKEND.is_file(), "build DevSpaceLinuxBackend first")
@@ -92,6 +92,88 @@ class BackendIntegrationTests(unittest.TestCase):
         response = self.request("select", workspace_id="pod")
         self.assertEqual(response["kind"], "snapshot")
         self.assertEqual(json.loads(response["payload"]["json"])["selectedID"], "pod")
+
+    def test_path_probe_repairs_login_path_without_protocol_frames(self):
+        visible = self.directory / "visible-bin"
+        visible.mkdir()
+        (visible / "devpod").write_text("#!/bin/sh\nexit 0\n")
+        (visible / "devpod").chmod(0o755)
+        shell = self.directory / "login-shell"
+        shell.write_text("#!/bin/sh\nprintf '__DEVSPACE_PATH_START__%s/custom/bin:/usr/bin:/bin__DEVSPACE_PATH_END__\\n' \"$HOME\"\n")
+        shell.chmod(0o755)
+        env = dict(self.environment, PATH=f"{visible}:/usr/bin:/bin", HOME=str(self.directory), SHELL=str(shell))
+        result = subprocess.run([str(BACKEND), "--print-path"], stdin=subprocess.DEVNULL, env=env, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(str(self.directory / "custom/bin"), result.stdout.strip().split(":"))
+        self.assertEqual(result.stdout.strip().split(":")[0], str(visible))
+        self.assertNotIn('"version"', result.stdout)
+
+    def test_path_probe_does_not_wait_for_background_stdout_owner(self):
+        shell = self.directory / "background-login-shell"
+        shell.write_text("#!/bin/sh\n/bin/sleep 4 &\nprintf '__DEVSPACE_PATH_START__/profile/bin:/usr/bin:/bin__DEVSPACE_PATH_END__\\n'\n")
+        shell.chmod(0o755)
+        started = time.monotonic()
+        result = subprocess.run([str(BACKEND), "--print-path"],
+                                stdin=subprocess.DEVNULL,
+                                env=dict(self.environment, SHELL=str(shell)),
+                                capture_output=True, text=True, timeout=6)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("/profile/bin", result.stdout.strip().split(":"))
+        self.assertLess(time.monotonic() - started, 2,
+                        "PATH discovery waited for a background stdout owner")
+
+    def test_login_shell_cannot_consume_backend_handshake(self):
+        shell = self.directory / "reading-login-shell"
+        shell.write_text("#!/bin/sh\nread ignored || :\nprintf '__DEVSPACE_PATH_START__/usr/bin:/bin__DEVSPACE_PATH_END__\\n'\n")
+        shell.chmod(0o755)
+        requests = "".join(json.dumps({"version": 1, "id": str(index), "kind": kind}) + "\n"
+                           for index, kind in enumerate(("handshake", "shutdown")))
+        result = subprocess.run([str(BACKEND), "--channel", "development", "--notify-port", "0"],
+                                input=requests, env=dict(self.environment, SHELL=str(shell)),
+                                capture_output=True, text=True, timeout=5)
+        frames = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertIn("ready", [frame["kind"] for frame in frames], result.stderr)
+
+    def test_stalled_frontend_output_does_not_block_control_input(self):
+        import threading
+        finished = threading.Event()
+        def submit():
+            try:
+                for number in range(6000):
+                    self.process.stdin.write(json.dumps({"version": 1, "id": str(number), "kind": "ping"}) + "\n")
+                self.process.stdin.flush()
+            finally:
+                finished.set()
+        writer = threading.Thread(target=submit, daemon=True)
+        writer.start()
+        completed = finished.wait(2)
+        # Drain in either case so the diagnostic does not strand a child or
+        # race cleanup against a thread still using its stdin.
+        drained = 0
+        while not finished.is_set():
+            self.next_frame()
+            drained += 1
+        writer.join()
+        for _ in range(6000 - drained):
+            self.next_frame()
+        self.assertTrue(completed, "backend stopped consuming controls when its output pipe filled")
+
+    def test_malformed_http_length_does_not_crash_backend(self):
+        import socket
+        import threading
+        # Drain crash diagnostics so a fatal-error backtrace cannot fill stderr
+        # and falsely appear to be a live backend.
+        threading.Thread(target=self.process.stderr.read, daemon=True).start()
+        port = int(self.ready_response["payload"]["notify_port"])
+        for length in ("", "-1", "abc", "999999999999999999999999999"):
+            with socket.create_connection(("127.0.0.1", port), timeout=2) as peer:
+                peer.sendall(("POST /notify HTTP/1.1\r\nContent-Length: " + length + "\r\n\r\n").encode())
+                peer.settimeout(2)
+                try:
+                    peer.recv(1024)
+                except ConnectionResetError:
+                    pass
+            self.assertEqual(self.request("ping")["kind"], "pong")
 
     def test_alias_edit_is_persisted_and_loaded_after_backend_restart(self):
         self.request("poll")

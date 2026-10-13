@@ -20,6 +20,9 @@ for line in sys.stdin:
         with open(events_path, "a", encoding="utf-8") as events:
             events.write(json.dumps(request) + "\n")
     kind = request["kind"]
+    if kind == "poll" and os.environ.get("DEVSPACE_TEST_CLOSE_SIDEBAR") == "1":
+        print(json.dumps({"version": 1, "kind": "terminal_close", "payload": {"json": json.dumps({
+            "kind": "terminal_close", "workspaceID": "pod", "generation": "generation", "paneID": "pane"})}}), flush=True)
     if kind == "handshake":
         response = {"version": 1, "id": request["id"], "kind": "ready"}
         if len(sys.argv) > 2 and sys.argv[2] == "notification-listener-unavailable":
@@ -64,6 +67,10 @@ for line in sys.stdin:
         response = {"version": 1, "id": request["id"], "kind": "snapshot",
                     "payload": {"json": json.dumps(snapshot)}}
     elif kind == "shutdown":
+        if os.environ.get("DEVSPACE_TEST_SHUTDOWN_BURST") == "1":
+            for _ in range(2000):
+                print(json.dumps({"version": 1, "kind": "pong", "payload": {"padding": "x" * 128}}))
+            sys.stdout.flush()
         if len(sys.argv) > 2 and Path(sys.argv[2]).is_absolute():
             Path(sys.argv[2]).write_text("shutdown")
         break
@@ -98,6 +105,9 @@ for line in sys.stdin:
             state = "Running"
             response = {"version": 1, "kind": "terminal_close", "payload": {"json": json.dumps(effect)}}
     elif kind == "paste_image":
+        if os.environ.get("DEVSPACE_TEST_SKIP_IMAGES") == "1":
+            print(json.dumps({"version": 1, "id": request["id"], "kind": "completed"}), flush=True)
+            continue
         payload = request["payload"]
         image = Path(payload["source_path"])
         if image.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
@@ -139,5 +149,12 @@ for line in sys.stdin:
             state = "Stopped"
         response = {"version": 1, "id": request["id"], "kind": "completed"}
     print(json.dumps(response), flush=True)
+    if kind == "poll" and os.environ.get("DEVSPACE_TEST_STALL_INPUT") == "1":
+        import time
+        time.sleep(0.5)
+    if kind == "poll" and len(sys.argv) > 2 and sys.argv[2] == "no-read":
+        import time
+        time.sleep(2)
+        break
     if kind == "poll" and len(sys.argv) > 2 and sys.argv[2] == "exit":
         break

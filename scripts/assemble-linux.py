@@ -64,21 +64,22 @@ def main():
     command = "devspace-dev" if development else "devspace"
     identity = "com.prakharp.devspace.dev" if development else "com.prakharp.devspace"
     width, icon = icon_png(ROOT / "Resources" / f"{name}.icns")
+    app = args.frontend / "bin/DevSpaceLinuxApp"
+    if not app.is_file():
+        parser.exit(1, f"Swift Linux application was not built: {app}\n")
+    if not args.backend.is_file():
+        parser.exit(1, f"Swift Linux backend was not built: {args.backend}\n")
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".devspace-bundle-", dir=output.parent) as temporary:
         bundle = Path(temporary) / "bundle"
         (bundle / "bin").mkdir(parents=True)
-        shutil.copy2(args.frontend / "bin/ghostty", bundle / "bin" / name)
+        (bundle / "lib").mkdir()
+        shutil.copy2(app, bundle / "bin" / name)
         shutil.copy2(args.backend, bundle / "bin" / f"{name}Backend")
         (bundle / "bin" / f"{name}Backend").chmod(0o755)
-        shutil.copytree(args.frontend / "lib", bundle / "lib", symlinks=True)
         for runtime in args.swift_runtime.glob("*.so*"):
             if runtime.is_file():
                 shutil.copy2(runtime, bundle / "lib" / runtime.name)
-        for resource in ("ghostty", "terminfo"):
-            source = args.frontend / "share" / resource
-            if source.is_dir():
-                shutil.copytree(source, bundle / "share" / resource, symlinks=True)
         launcher = bundle / "bin" / command
         launcher.write_text(f'''#!/bin/sh
 set -eu
@@ -86,9 +87,12 @@ devspace_launcher=$(readlink -f -- "$0")
 devspace_prefix=$(CDPATH= cd -- "$(dirname -- "$devspace_launcher")/.." && pwd -P)
 export DEVSPACE_BUILD_CHANNEL={args.channel}
 export DEVSPACE_BACKEND="$devspace_prefix/bin/{name}Backend"
-export GHOSTTY_RESOURCES_DIR="$devspace_prefix/share/ghostty"
 export LD_LIBRARY_PATH="$devspace_prefix/lib${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
 export XDG_DATA_DIRS="$devspace_prefix/share:${{XDG_DATA_DIRS:-/usr/local/share:/usr/share}}"
+export PATH="${{PATH:-/usr/local/bin:/usr/bin:/bin}}${{HOME:+:$HOME/.local/bin}}:/usr/local/bin"
+if devspace_path=$("$DEVSPACE_BACKEND" --print-path 2>/dev/null); then
+    export PATH="$devspace_path"
+fi
 exec "$devspace_prefix/bin/{name}" "$@"
 ''')
         launcher.chmod(0o755)
