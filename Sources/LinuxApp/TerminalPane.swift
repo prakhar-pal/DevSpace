@@ -84,6 +84,28 @@ final class TerminalPane {
         vte_terminal_set_size(terminal, Int(columns), Int(rows))
     }
 
+    @discardableResult
+    func handleKey(keyval: UInt32, modifiers: GdkModifierType) -> Bool {
+        guard !isClosed else { return false }
+        let control = GDK_CONTROL_MASK.rawValue
+        let shift = GDK_SHIFT_MASK.rawValue
+        let disallowed = GDK_ALT_MASK.rawValue | GDK_SUPER_MASK.rawValue
+        guard modifiers.rawValue & (control | shift | disallowed) == (control | shift) else { return false }
+        switch gdk_keyval_to_lower(keyval) {
+        case UInt32(GDK_KEY_c):
+            vte_terminal_copy_clipboard_format(terminal, VTE_FORMAT_TEXT)
+            return true
+        case UInt32(GDK_KEY_v):
+            vte_terminal_paste_clipboard(terminal)
+            return true
+        case UInt32(GDK_KEY_r):
+            onEvent("reconnect", ["workspace_id": identity.workspaceID])
+            return true
+        default:
+            return false
+        }
+    }
+
     var ptySize: (rows: Int32, columns: Int32)? {
         guard !isClosed, let pty = vte_terminal_get_pty(terminal) else { return nil }
         var rows: Int32 = 0
@@ -197,6 +219,17 @@ final class TerminalPane {
         )
         _ = g_signal_connect_data(UnsafeMutableRawPointer(focus), "enter", focusEntered,
                                   userData, nil, GConnectFlags(rawValue: 0))
+
+        let keyController = gtk_event_controller_key_new()!
+        gtk_event_controller_set_propagation_phase(keyController, GTK_PHASE_CAPTURE)
+        gtk_widget_add_controller(widget, keyController)
+        let keyPressed = unsafeBitCast(
+            devspaceLinuxVteKeyPressed as @convention(c)
+                (UnsafeMutableRawPointer?, UInt32, UInt32, UInt32, UnsafeMutableRawPointer?) -> Int32,
+            to: GCallback.self
+        )
+        _ = g_signal_connect_data(UnsafeMutableRawPointer(keyController), "key-pressed", keyPressed,
+                                  userData, nil, GConnectFlags(rawValue: 0))
     }
 
     private func report(_ kind: String) {
@@ -228,6 +261,19 @@ private func devspaceLinuxVteFocusEntered(_ controller: UnsafeMutableRawPointer?
     guard let data else { return }
     Unmanaged<TerminalPane>.fromOpaque(data).takeUnretainedValue().focusEntered()
     _ = controller
+}
+
+@_cdecl("devspace_linux_vte_key_pressed")
+private func devspaceLinuxVteKeyPressed(
+    _ controller: UnsafeMutableRawPointer?, _ keyval: UInt32, _ keycode: UInt32,
+    _ state: UInt32, _ data: UnsafeMutableRawPointer?
+) -> Int32 {
+    guard let data else { return 0 }
+    let pane = Unmanaged<TerminalPane>.fromOpaque(data).takeUnretainedValue()
+    let handled = pane.handleKey(keyval: keyval, modifiers: GdkModifierType(rawValue: state))
+    _ = controller
+    _ = keycode
+    return handled ? 1 : 0
 }
 
 private final class SpawnContext {

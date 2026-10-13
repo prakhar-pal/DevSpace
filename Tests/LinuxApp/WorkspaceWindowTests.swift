@@ -1,6 +1,7 @@
 import Foundation
 import DevSpaceCore
 import CGTK
+import CVTE
 
 @main
 struct WorkspaceWindowTests {
@@ -46,7 +47,7 @@ struct WorkspaceWindowTests {
             try window.apply(terminalEffect(
                 kind: "terminal_launch", workspace: workspace.id, generation: generation, pane: paneID,
                 executable: "/bin/sh",
-                arguments: ["-c", "printf 'ready\\n'; IFS= read -r input; printf 'received:%s\\n' \"$input\"; exec sleep 30"]
+                arguments: ["-c", "printf 'ready\\n'; while IFS= read -r input; do printf 'received:%s\\n' \"$input\"; done; exec sleep 30"]
             ))
             try expect(pumpUntil { window.pane(for: identity)?.text.contains("ready") == true },
                        "the validated terminal launch did not render output")
@@ -54,6 +55,36 @@ struct WorkspaceWindowTests {
                 throw TestFailure("terminal pane was not retained")
             }
             let originalWidget = originalPane.widget
+            originalPane.resize(columns: 100, rows: 30)
+            try expect(pumpUntil {
+                originalPane.ptySize?.columns == 100 && originalPane.ptySize?.rows == 30
+            }, "resizing the VTE widget did not resize its PTY")
+
+            guard let clipboard = gdk_display_get_clipboard(gdk_display_get_default()!) else {
+                throw TestFailure("GTK did not provide the private test clipboard")
+            }
+            gdk_clipboard_set_text(clipboard, "from-shortcut\n")
+            let terminalControl = GdkModifierType(rawValue: GDK_CONTROL_MASK.rawValue)
+            try expect(!originalPane.handleKey(keyval: UInt32(GDK_KEY_c), modifiers: terminalControl),
+                       "plain Ctrl+C was intercepted instead of reaching the shell")
+            let copyPasteModifiers = GdkModifierType(
+                rawValue: GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue
+            )
+            try expect(originalPane.handleKey(keyval: UInt32(GDK_KEY_v), modifiers: copyPasteModifiers),
+                       "Ctrl+Shift+V was not handled by the terminal")
+            try expect(pumpUntil { originalPane.text.contains("received:from-shortcut") },
+                       "Ctrl+Shift+V did not paste private clipboard text into the VTE child")
+            vte_terminal_select_all(UnsafeMutableRawPointer(originalPane.widget).assumingMemoryBound(to: VteTerminal.self))
+            try expect(originalPane.handleKey(keyval: UInt32(GDK_KEY_c), modifiers: copyPasteModifiers),
+                       "Ctrl+Shift+C was not handled by the terminal")
+            let copiedText = try readClipboardText(clipboard)
+            try expect(copiedText.contains("received:from-shortcut"),
+                       "Ctrl+Shift+C did not copy the VTE selection to the private clipboard")
+            try expect(originalPane.handleKey(keyval: UInt32(GDK_KEY_r), modifiers: copyPasteModifiers),
+                       "Ctrl+Shift+R was not handled by the terminal")
+            try expect(commands.contains {
+                $0.0 == "reconnect" && $0.1? ["workspace_id"] == workspace.id
+            }, "Ctrl+Shift+R did not request a reconnect for the bound workspace")
 
             window.update(WorkspaceControllerSnapshot(
                 revision: 2, workspaces: [workspace], selectedID: workspace.id,
@@ -127,6 +158,18 @@ struct WorkspaceWindowTests {
         if !condition { throw TestFailure(message) }
     }
 
+    private static func readClipboardText(_ clipboard: OpaquePointer) throws -> String {
+        let context = ClipboardReadContext()
+        let callback = unsafeBitCast(
+            clipboardReadFinished as @convention(c)
+                (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void,
+            to: GAsyncReadyCallback.self
+        )
+        gdk_clipboard_read_text_async(clipboard, nil, callback, Unmanaged.passRetained(context).toOpaque())
+        try expect(pumpUntil { context.finished }, "private clipboard read timed out")
+        return context.text ?? ""
+    }
+
     private static func containsButton(_ title: String, in widget: UnsafeMutablePointer<GtkWidget>) -> Bool {
         if String(cString: gtk_widget_get_css_name(widget)) == "button",
            let label = widget.withMemoryRebound(to: GtkButton.self, capacity: 1) { gtk_button_get_label($0) },
@@ -140,6 +183,29 @@ struct WorkspaceWindowTests {
         }
         return false
     }
+}
+
+private final class ClipboardReadContext {
+    var text: String?
+    var finished = false
+}
+
+@_cdecl("devspace_linux_test_clipboard_read_finished")
+private func clipboardReadFinished(
+    _ source: UnsafeMutableRawPointer?, _ result: UnsafeMutableRawPointer?, _ data: UnsafeMutableRawPointer?
+) {
+    guard let data else { return }
+    let context = Unmanaged<ClipboardReadContext>.fromOpaque(data).takeRetainedValue()
+    if let source, let result {
+        let text = gdk_clipboard_read_text_finish(
+            OpaquePointer(source), OpaquePointer(result), nil
+        )
+        if let text {
+            context.text = String(cString: text)
+            g_free(UnsafeMutableRawPointer(text))
+        }
+    }
+    context.finished = true
 }
 
 private struct TestFailure: Error, CustomStringConvertible {
