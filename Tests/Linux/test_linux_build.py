@@ -96,6 +96,18 @@ class LinuxBuildTests(unittest.TestCase):
         self.assertNotIn('name: "DevSpaceLinuxAppTests"', manifest,
                          "Tests/LinuxApp contains standalone @main runners, not one SwiftPM test module")
 
+    def test_legacy_ghostty_zig_frontend_pipeline_is_retired(self):
+        obsolete = (
+            ROOT / "scripts/prepare-linux-frontend.py",
+            ROOT / "scripts/prepare-linux-ghostty.py",
+            ROOT / "Sources/Linux/backend_client.zig",
+            ROOT / "Sources/Linux/gtk",
+            ROOT / "Sources/Linux/patches",
+            ROOT / "Sources/Linux/engine-patches",
+        )
+        remaining = [str(path.relative_to(ROOT)) for path in obsolete if path.exists()]
+        self.assertEqual(remaining, [], f"obsolete Ghostty/Zig frontend remains: {remaining}")
+
     def test_run_rebuilds_and_replaces_a_relocatable_dev_bundle(self):
         for _ in range(2):
             result = self.run_make("linux-run")

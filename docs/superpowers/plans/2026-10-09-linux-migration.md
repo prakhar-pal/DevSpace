@@ -2,11 +2,13 @@
 
 > **For agentic workers:** Use `superpowers:executing-plans` to implement this plan task by task in the current checkout. Do not create worktrees or delegate unless explicitly authorized. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add Linux support while retaining the native macOS app, with full parity for daily use on Ubuntu 24.04+ x86_64 under GNOME Wayland and X11.
+**Goal:** Add a usable, native GTK/VTE Linux app while retaining the native macOS app. Linux feature parity with macOS is a later effort. Validate first on the current Ubuntu host; Ubuntu 24.04 remains deferred by user direction.
 
-**Architecture:** Keep the Swift workspace backend and add a GTK4/libadwaita frontend in Zig, adapting Ghostty's Linux runtime. The frontend launches a Swift backend child process and exchanges commands and events through private JSON pipes. Terminal bytes stay inside Ghostty.
+**Architecture:** Keep application, workspace, and backend protocol logic in Swift. Linux uses a DevSpace-owned GTK4 frontend with VTE for terminal rendering/input; Linux does not depend on Ghostty. macOS continues to use SwiftUI and libghostty. The frontend launches a Swift backend child process and exchanges commands and events through private JSON pipes.
 
-**Tech Stack:** Swift/SwiftPM, Zig 0.15.2, Ghostty 1.3.1, GTK4/libadwaita, POSIX sockets/PTYs, OpenSSH, DevPod, Ubuntu `.deb` packaging.
+**2026-10-13 ownership amendment:** The user requires Ghostty only as the macOS terminal renderer, not as a Linux application shell or a 1:1 GTK replica. The approved Linux UI uses DevSpace-owned GTK and VTE. The [replacement design](../specs/2026-10-13-devspace-owned-linux-ui-design.md) and [replacement implementation plan](2026-10-13-devspace-owned-linux-ui.md) supersede conflicting Linux architecture/tasks below. Historical prototype steps remain audit evidence, not current requirements.
+
+**Tech Stack:** Swift/SwiftPM, GTK4, VTE, POSIX sockets/PTYs, OpenSSH, DevPod, Ubuntu packaging. Zig is not used by the Linux app.
 
 **Spec:** The approved design and acceptance criteria are included below. The user approved this migration plan on 2026-10-09.
 
@@ -17,8 +19,8 @@
 
 - Current validation scope (user direction, 2026-10-12): test on the existing Ubuntu host and use running `wc-1` for temporary terminal sessions. Defer Ubuntu 24.04 environment/acceptance testing until later; it remains a release gate, not a blocker for current host work. Do not start/stop/delete the workspace or change its project files for terminal acceptance.
 - Retain macOS support and its existing application identity and storage locations.
-- Target Ubuntu 24.04+ x86_64, GNOME Wayland and X11, for the first Linux release.
-- Preserve Ghostty rendering and full daily-driver feature parity.
+- Initial Linux validation targets the current Ubuntu host with GTK4/VTE. Ubuntu 24.04 is a deferred release gate.
+- Preserve the macOS libghostty renderer; Linux uses VTE and does not require Linux Ghostty feature parity in this milestone.
 - Work in the current checkout on a conventional feature branch; never commit on `main` or `master`.
 - Use `.tmp/` for temporary files.
 - Confirm before running `make build` for macOS release builds; never close the user's production app during development.
@@ -35,7 +37,8 @@
 ## Architecture and Interfaces
 
 - **Shared Swift controller:** Extract workspace state, lifecycle operations, polling, SSH master management, hook injection, layout, badges, and connection recovery from `AppModel`. The macOS model becomes a SwiftUI adapter around this controller.
-- **Platform terminal adapters:** macOS retains its existing terminal integration. Linux uses Ghostty-owned PTYs running SSH clients attached to the controller's master connection.
+- **Platform terminal adapters:** macOS retains its existing libghostty integration. Linux uses VTE for terminal rendering/input and SSH clients attached to the controller's master connection.
+- **Linux UI ownership:** DevSpace owns the GTK application/window/layout/actions. VTE supplies the terminal widget; Ghostty supplies no Linux app-shell or terminal dependency. Do not create an inherited local terminal at startup.
 - **Terminal lifecycle contract:** The controller requests terminal creation or closure using workspace ID, pane ID, connection generation, executable, arguments, and environment. Adapters report launch failure, first output, working-directory changes, and exit. Reject events from superseded generations.
 - **Private protocol:** Versioned newline-delimited JSON over stdin/stdout, with request IDs, responses, ordered state snapshots, and terminal/platform effects. Reserve stderr for diagnostics. Handshake before starting workspace operations.
 - **Ownership:** Swift owns DevPod operations and SSH masters; GTK owns windows, terminal surfaces, clipboard access, desktop notifications, and Zed launching. Backend stdin EOF closes sessions and masters without stopping workspaces. Backend failure disables frontend actions and shows a restart option.
