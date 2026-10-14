@@ -2,6 +2,28 @@
 
 ## Current checkpoint — 2026-10-14
 
+PR111 CI on `26795ee` completed: macOS tests, development assembly, and release
+executable build all passed. Linux Core crashed with signal 11 during the first
+PTY test, in libdispatch's epoll event loop. The notification/PTY sequence
+passed separately on the host (19 tests), and the full host Core run passed
+225 tests with one opt-in skip. Upstream libdispatch issue949 reports a similar
+read-source teardown use-after-free; this is a hypothesis, not a confirmed
+DevSpace root cause. Added rapid 128-session PTY lifecycle coverage passed on
+the host in isolation. Running the full suite with that regression then
+reproduced the same epoll crash during rapid PTY lifecycle teardown. A Linux-only
+blocking PTY reader avoids DispatchSourceRead and owns the master descriptor
+until read completion; macOS keeps its existing implementation. The first full
+post-change run passed 226 tests with one opt-in skip. Two further full runs
+passed the same 226 tests; Linux integration passed 74 tests with three opt-in
+skips in 105.526 seconds. Current-head container/macOS CI remains required.
+
+The user confirmed authority to license existing DevSpace code and selected
+GPL-3.0-or-later. Commit `e723860` adds the standard GPL text and source-scope
+declaration, preserving copied skill licenses. The approved Debian maintainer
+is `prakhar-pal <prakharpalpfdr+github@gmail.com>`. Artwork licensing and binary
+third-party notice coverage are still open; a source LICENSE alone does not
+clear binary distribution requirements.
+
 This checkpoint supersedes historical UI and availability descriptions below.
 The approved UI now has selection-only compact DevPod rows with running/stopped
 dots, no Workspaces heading, no terminal title/Close bar, no hook-success label,

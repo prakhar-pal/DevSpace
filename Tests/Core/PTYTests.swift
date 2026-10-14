@@ -2,6 +2,26 @@ import XCTest
 @testable import DevSpaceCore
 
 final class PTYTests: XCTestCase {
+    func testRapidPTYLifecyclesPreserveOutputAndSingleExit() {
+        for index in 0..<128 {
+            let pty = PTYSession()
+            let output = expectation(description: "PTY \(index) output")
+            output.assertForOverFulfill = false
+            let exited = expectation(description: "PTY \(index) exits once")
+            let marker = "devspace-cycle-\(index)"
+            pty.onOutput = { data in
+                if String(decoding: data, as: UTF8.self).contains(marker) { output.fulfill() }
+            }
+            pty.onExit = { status in
+                XCTAssertEqual(status, 0)
+                exited.fulfill()
+            }
+            pty.start(path: "/bin/echo", args: [marker], cols: 80, rows: 24)
+            wait(for: [output, exited], timeout: 5)
+            pty.terminate()
+        }
+    }
+
     /// Spawns a real PTY child, reads its output, and confirms exit — exercising
     /// forkpty + execve + the read loop + reap without any GUI.
     func testEchoRunsStreamsOutputAndExits() {

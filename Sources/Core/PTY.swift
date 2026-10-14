@@ -127,6 +127,26 @@ public final class PTYSession: @unchecked Sendable {
     // MARK: - Reading
 
     private func startReading() {
+        #if os(Linux)
+        // Linux libdispatch can deliver a freed epoll muxnote during read-source
+        // teardown (swift-corelibs-libdispatch#949). Keep descriptor ownership
+        // with a blocking reader instead; only this reader closes the master.
+        let fd = masterFD
+        DispatchQueue.global(qos: .userInteractive).async { [self] in
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let count = buffer.withUnsafeMutableBytes { Glibc.read(fd, $0.baseAddress, $0.count) }
+                if count < 0, errno == EINTR { continue }
+                guard count > 0 else { break }
+                onOutput?(Data(buffer.prefix(count)))
+            }
+            lock.lock()
+            masterFD = -1
+            lock.unlock()
+            _ = Glibc.close(fd)
+            reap()
+        }
+        #else
         let src = DispatchSource.makeReadSource(
             fileDescriptor: masterFD,
             queue: DispatchQueue.global(qos: .userInteractive)
@@ -154,6 +174,7 @@ public final class PTYSession: @unchecked Sendable {
         }
         readSource = src
         src.resume()
+        #endif
     }
 
     private func startExitWatcher() {
