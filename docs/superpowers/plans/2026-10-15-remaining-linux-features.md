@@ -1,114 +1,156 @@
-# Remaining DevSpace Linux Port — Milestone Plan
+# Remaining DevSpace Linux Port — Prioritized Milestone Plan
 
-> **For agentic workers:** Use superpowers:executing-plans to implement this plan milestone by milestone in the current checkout and main thread. Do not create worktrees or delegate implementation. Inspect the macOS implementation before each milestone; ask questions only where genuine ambiguity remains.
+> **For agentic workers:** Use superpowers:executing-plans to implement the explicitly requested milestone in the current checkout and main thread. Do not create worktrees or delegate implementation. Inspect macOS source before each milestone; ask only where genuine ambiguity remains. These milestone numbers supersede the original ordering; the earlier M01 execution request does not automatically authorize this revised plan.
 
 ## Direction
 
-Use the macOS implementation as the reference for workflows, availability of actions, dialogs and session behavior. Implement Linux presentation in Swift with native GTK4 and VTE.
+Use macOS as the reference for feature behavior, action availability, dialogs and session lifecycle. Implement Linux presentation in Swift with native GTK4 and VTE. The user's importance ratings determine delivery order: prioritize DevSpace integration and daily use over conveniences already available through DevPod CLI.
 
-Reuse existing backend features rather than rebuild them. Keep libghostty rendering parity and Ubuntu 24.04 validation deferred. Each milestone produces a usable increment and a small conventional commit.
+Reuse existing backend features rather than rebuilding them. Keep libghostty rendering parity and Ubuntu 24.04 validation deferred. Deliver usable, independently verified increments with small conventional commits. Later optional features must not block earlier delivery.
 
-## M01 — Workspace actions and sidebar organization
+## User priorities
 
-Port macOS sidebar behavior:
+Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.
 
-- Friendly-name dialog; Move Up/Down with boundary disabling.
-- Hide/Show and collapsible Hidden section, retaining access to the selected hidden workspace.
-- Context menus with Disconnect, Reload SSH Session, New Terminal and Open in Zed, enabled according to workspace/session state.
-- Restore macOS-inspired hover actions and New/Guide access using GTK controls—not a persistent toolbar.
-- Keep names, status dots and selection highlighting; preserve natural sidebar sizing.
+| ID | Feature | Importance / 10 | Milestone |
+| --- | --- | --- | --- |
+| P01 | Start/stop DevPods | 10 | M01 |
+| P02 | Workspace lifecycle notifications | 10 | M01 |
+| P03 | Connect/disconnect/reload SSH and recovery | 7 | M04; readiness prerequisite in M01 |
+| P04 | Automatic Claude hook installation/cleanup | 10 | M01 |
+| P05 | Claude notifications, badges and activation | 10 | M01 |
+| P06 | Terminal text copy/paste | 9 | M02 |
+| P07 | Clipboard-image upload | 8 | M03 |
+| P08 | Open in Zed / authenticated ded | 8 | M03 |
+| P09 | Keyboard navigation and session shortcuts | 8 | M03 |
+| P10 | Friendly workspace names | 5 | M06 |
+| P11 | Saved sidebar ordering | 5 | M06 |
+| P12 | Hide/show workspaces | 2 | M08 |
+| P13 | Multiple terminal tabs | 1 | M09 |
+| P14 | Create workspaces | 1 | M10 |
+| P15 | Recreate workspaces | 1 | M10 |
+| P16 | In-app Guide | 1 | M10 |
+| P17 | UI/input polish | 6 | M05 |
+| P18 | Production .deb | 3 | M07 |
 
-Reuse existing `alias`, `hide`, `show`, ordering and collapse commands plus the current layout format.
+## M01 — Start/stop and DevSpace notification lifecycle
 
-**Acceptance:** aliases never change DevPod IDs; organization survives restart; selected/background terminals survive sidebar updates; unavailable actions cannot run.
+**Features:** P01, P02, P04, P05 — all 10/10.
 
-## M02 — Workspace creation and lifecycle UI
+- Add state-appropriate Start/Stop actions, busy-state disabling, operation progress and retained errors using existing commands/snapshots. Keep compact rows; do not add provisioning dialogs or tabs.
+- Match macOS lifecycle notifications: distinguish confirmed Running/Stopped transitions from initial discovery and unknown/transient status. Announce becoming usable only after the owned SSH connection produces its first terminal output, not merely when Start returns.
+- Detect externally initiated stops, including provider inactivity shutdown, through polling without issuing lifecycle commands. Repeated snapshots must not repeat notifications. Match macOS foreground/selected-workspace suppression and badge behavior.
+- Finish/verify automatic Claude hooks once per live connection and safe removal on disconnect. Preserve unrelated settings and another live channel's integration. Hook success remains implicit; failures are nonfatal and actionable.
+- Finish/verify Claude finished/needs-input alerts, badges, clearing on selection and click-to-focus of the existing terminal.
 
-Port the macOS creation, recreation and status-panel flows:
+Readiness and generation-safe cleanup are prerequisites here; fix defects blocking notifications/hooks, but defer additional SSH controls and recovery presentation to M04. Reuse macOS transition gating rather than inventing another notification policy.
 
-- Create dialog with repository URL and optional DevPod ID.
-- Start/Stop actions, connection progress and actionable connection failures.
-- Recreate confirmation with the same destructive-operation warning.
-- Live provisioning/start/stop/recreate output, cancellation and retained failure output.
-- Select the discovered workspace after successful creation; reconnect only after lifecycle completion and confirmed running status.
+**Acceptance:** fixture-controlled start/stop and external transitions produce the correct single event; initial/unknown states produce no false alerts; first output gates the live event; selection never starts a stopped workspace; stale integration completions cannot alter replacements; notification activation creates no duplicate terminal.
 
-Reuse existing operation commands and snapshots. Do not add a Delete UI merely because the backend supports deletion—the current macOS UI is the reference.
+## M02 — Reliable terminal text copy/paste
 
-**Acceptance:** duplicate submission is blocked; cancellation affects only its operation; failures remain readable; SSH cleanup precedes destructive operations; stopped workspaces never start merely through selection.
+**Feature:** P06 — 9/10.
 
-## M03 — Multiple terminal tabs
+- Verify and finish selection, Ctrl+Shift+C/V, ordinary text paste and bracketed paste through the active VTE terminal.
+- Preserve terminal Ctrl+C/Ctrl+R and dialog text input.
+- Preserve selection/scrollback across workspace switches and polling. Stale clipboard callbacks cannot target hidden or retired panes.
 
-Match macOS terminal behavior:
+**Acceptance:** actual private-display clipboard round-trips, multiline/Unicode text and bracketed paste; ordinary Ctrl keys reach the shell; missing text and closed-pane callbacks fail safely. Record physical-host clipboard acceptance separately; replacing the user's physical clipboard requires authorization.
 
-- Explicit New Terminal creates another shell sharing the workspace’s existing SSH master.
-- Selection and polling never create additional terminals.
-- Show a numbered tab strip, close controls and “+” only when multiple tabs exist.
-- Preserve background shells, scrollback and the active tab per workspace.
-- Closing one tab preserves siblings; closing the last disconnects without stopping the DevPod.
-- Reload waits for the previous master to exit before creating the replacement session.
+## M03 — Image paste, editor integration and keyboard navigation
 
-Add an explicit private `new_terminal` command; keep `connect` idempotent. Track stable pane order and active pane identity in the GTK adapter. Retain generation-bound lifecycle events.
+**Features:** P07, P08, P09 — all 8/10.
 
-**Acceptance:** two independent shell round-trips over one master; correct focus after switching/closing; no duplicates after repeated snapshots; stale events cannot close or inject into replacements.
+- Finish/verify image upload into the original active pane, bounded PNG handling, local/remote temporary-file cleanup and nonfatal failures. Reuse the existing transport.
+- Open in Zed targets the active terminal directory with macOS-equivalent workspace fallback. Explicit ded paths never fall back to another folder. Preserve stale-request protection and editor fallback rules with Linux executable discovery.
+- Port VTE directory-URI reporting for editor targeting; tab-title presentation remains deferred to M09.
+- Add Ctrl+Shift+R/O/B for reload, Zed and sidebar toggle; Ctrl+Shift+1–9 selects visible workspaces. Retain copy/paste from M02 and suppress workspace shortcuts during dialogs.
 
-## M04 — Keyboard, terminal navigation and Guide
+Do not add new-tab, tab-navigation or reorder shortcuts before their owning milestones. Reuse reconnect for the reload shortcut before expanding recovery UI in M04.
 
-Translate macOS application shortcuts into Linux-safe bindings:
+**Acceptance:** exact uploaded bytes and correct injection target; stale upload cannot inject into a replacement; Unicode/space-containing editor paths are correct; missing/failing Zed stays nonfatal; shortcuts do not swallow ordinary shell keys.
 
-- Ctrl+Shift+C/V: copy and text/image paste.
-- Ctrl+Shift+R/T/O/B: reload, new terminal, Zed and sidebar toggle.
-- Ctrl+Shift+1–9: select visible workspace.
-- Ctrl+PageUp/PageDown: previous/next terminal tab.
-- Ctrl+Shift+Alt+Up/Down: reorder selected workspace.
+## M04 — Explicit SSH controls and recovery
 
-Suppress workspace shortcuts while dialogs own input. Leave ordinary terminal Ctrl keys untouched. Port current-directory reporting through VTE’s directory-URI signal for tab titles and editor targets.
+**Feature:** P03 — 7/10; builds on M01 readiness guarantees.
 
-Provide a GTK Guide containing the actual supported actions and bindings.
+- Expose Connect, Disconnect and Reload SSH Session according to macOS state/session eligibility.
+- Show progress, actionable failures and explicit retry without starting stopped workspaces or adding automatic network reconnection beyond macOS.
+- Keep connect idempotent: polling, selection and notification activation reuse the existing terminal.
+- Reload waits for the previous master and owned cleanup before replacement. Disconnect/terminal exit never stops the DevPod.
+- Verify backend failure leaves the UI responsive and shutdown releases owned resources without touching another instance.
 
-**Acceptance:** modal input remains usable; shortcuts target the active workspace/pane; terminal Ctrl+C/Ctrl+R still reach the shell; Unicode paths produce correct titles and targets.
+**Acceptance:** retry, reload ordering, late callbacks, repeated connection requests and orderly shutdown; no duplicate panes, unintended DevPod start/stop or interference with production.
 
-## M05 — Editor and notification workflow parity
+## M05 — Native UI and input polish
 
-Finish differences around integrations already implemented:
+**Feature:** P17 — 6/10.
 
-- Open in Zed targets the active terminal’s directory, with macOS-equivalent workspace fallback.
-- Explicit `ded` paths must never fall back to opening a different folder.
-- Preserve macOS stale-request protection and editor-launch fallback rules using Linux executable discovery.
-- Verify notification badges, clearing on selection and activation of the existing workspace terminal.
-- Verify automatic hook installation and disconnect cleanup, preserving unrelated settings and hooks needed by another live DevSpace channel.
+- Verify compact sizing, theme changes, scrolling, terminal expansion, focus and readable empty/error/busy states for delivered workflows.
+- Exercise Wayland and X11, available input methods, resize, scrollback and mouse selection. Fix observed defects; do not build a Ghostty-like settings surface.
+- Verify development/production coexistence and shutdown/relaunch. Separate programmatic evidence from physical desktop checks.
 
-Do not rebuild notification transport, hooks or image upload.
+**Acceptance:** high-priority workflows work on the current Ubuntu desktop; theme/selection changes preserve terminal state; direct evidence covers input/focus/layout or explicitly documents platform limitations.
 
-**Acceptance:** missing/failing Zed remains nonfatal; authenticated notifications activate the original pane without opening another; reconnect/disconnect races cannot install stale hooks or remove a peer’s working integration.
+## M06 — Friendly names and saved ordering
 
-## M06 — Host acceptance and regression closure
+**Features:** P10, P11 — both 5/10.
 
-Exercise the completed workflows on the current Ubuntu desktop:
+- Add the macOS-inspired friendly-name dialog and Move Up/Down context-menu actions with boundary disabling.
+- Reuse existing alias/order commands and persistence; names never change DevPod IDs.
+- Add Ctrl+Shift+Alt+Up/Down for reordering the selected visible workspace.
 
-- Wayland and X11: input, resize, focus, scrollback, selection, text/bracketed paste and theme changes.
-- Actual clipboard-image upload and cleanup.
-- Real notification-banner activation and available input-method behavior.
-- Shutdown/relaunch, failed SSH recovery, and development/production coexistence.
-- Authorized running `wc-1`: multiple shells, reload, notification hooks and disconnect without stopping the workspace.
+**Acceptance:** names/order survive restart; unavailable actions cannot run; organization and polling preserve selected/background terminals.
 
-Use fixtures for creation/start/stop/recreate unless a disposable workspace is explicitly authorized. Record manual checks separately from automated evidence.
+## M07 — Production package and high-priority handoff
 
-**Acceptance:** every workflow above has direct evidence or an explicitly recorded platform limitation; macOS regression checks remain green.
+**Feature:** P18 — 3/10. This release does not depend on M08–M10.
 
-## M07 — Production package and handoff
+- Build/verify the .deb with confirmed GPL-3.0-or-later icons, runtime notices and approved Git maintainer identity.
+- Verify dependencies, desktop entry, launcher, relocation and absence of repository-local toolchain requirements.
+- Install/run on clean Ubuntu 26.04 without development tools and exercise installed M01–M06 workflows against an authorized DevPod.
+- Run final Linux/macOS regressions, update docs and PR #111 through the stack workflow, and retain an evidence-backed checklist.
+- Build production artifacts only with release approval; never install over, replace or stop production without separate permission.
 
-- Finish and verify the `.deb` with confirmed GPL-3.0-or-later icons, runtime notices and approved Git maintainer identity.
-- Verify package dependencies, desktop entry, launcher, relocation and absence of repository-local toolchain requirements.
-- Install and run on a clean Ubuntu 26.04 environment without development tools; exercise the installed application against an authorized DevPod.
-- Update documentation and PR #111 through the established stack workflow.
-- Build production artifacts only with release approval; never replace or stop the running production app without separate permission.
+**Acceptance:** installable package, verified installed-app daily workflow and current Linux/macOS CI. Low-priority conveniences do not block handoff.
 
-**Acceptance:** installable package, successful installed-app workflow, current Linux/macOS CI, and an evidence-backed completion checklist.
+## M08 — Optional hide/show organization
+
+**Feature:** P12 — 2/10.
+
+- Add Hide/Show and collapsible Hidden section using existing commands/layout storage.
+- Match macOS selected-hidden-row behavior so active workspaces remain reachable. Hiding is not stopping or disconnecting.
+
+**Acceptance:** persistence, collapse/expand and selected-hidden access; no lost terminal state or accidental lifecycle commands.
+
+## M09 — Optional multiple terminal tabs
+
+**Feature:** P13 — 1/10; not required for core usability.
+
+- Add explicit private new_terminal command while keeping connect idempotent. Additional shells share one owned master.
+- Show numbered tabs, close controls and + only for multiple panes. Preserve stable order and active-pane identity per workspace.
+- Closing a tab preserves siblings; closing the last disconnects without stopping the DevPod. Background shells and scrollback survive switching/polling.
+- Add Ctrl+Shift+T and Ctrl+PageUp/PageDown for creation/navigation; use M03 directory reporting for titles.
+
+**Acceptance:** independent shell round-trips over one master, correct focus after switching/closing, stable snapshots and stale-event rejection.
+
+## M10 — Optional provisioning conveniences and Guide
+
+**Features:** P14, P15, P16 — all 1/10. DevPod CLI remains the alternative until this milestone.
+
+- Add Create with repository URL/optional ID and Recreate with the macOS destructive-operation confirmation.
+- Reuse backend commands for live provisioning output, cancellation, retained failure output and successful created-workspace selection.
+- Reconnect only after lifecycle completion and confirmed running status. Do not add Delete UI merely because the backend supports it; current macOS UI is the reference.
+- Add New/Guide access and GTK Guide covering only implemented workflows and actual bindings.
+
+**Acceptance:** duplicate submission blocked, cancellation scoped to its operation, readable failures, SSH cleanup before recreation, no stopped workspace awakened by selection, and Guide matching shipped behavior.
 
 ## Testing and execution rules
 
-- Swift XCTest for portable logic; native Swift GTK/VTE tests for UI/session behavior; existing packaging harnesses for artifacts.
-- Run affected tests per milestone. Run broader suites for shared lifecycle/protocol changes and once for final release verification—not after every documentation change.
-- Inspect the relevant macOS implementation and dependencies before each milestone.
-- Work in the current feature checkout, in the main thread; commit independently verified increments.
-- No renderer replacement, speculative settings surface, split panes or automatic network-reconnection feature beyond current macOS behavior.
+- Swift XCTest for portable logic; native Swift GTK/VTE tests for UI/session behavior; existing packaging harnesses for artifacts. Use TDD for behavior changes.
+- Run affected tests per milestone. Run broader suites for shared lifecycle/protocol changes and once for release verification—not after every documentation change.
+- Validate host-facing acceptance within its owning milestone; do not postpone everything until packaging. Distinguish fixture-only and manual evidence.
+- Inspect macOS source and dependencies up to depth two before changes. macOS semantics outrank earlier UI preferences; ratings determine scheduling, not replacement behavior.
+- Use fixtures for create/start/stop/recreate unless a disposable real workspace is explicitly authorized. Existing wc-1 authorization covers temporary SSH/hook tests, not lifecycle mutation or project-file edits. Recheck availability before live tests.
+- Preserve production and unrelated edits. Use global Swift, keep scratch evidence in .tmp, restore Package.resolved after Linux Swift commands and commit verified milestones on the feature branch.
+- No renderer replacement, speculative settings surface, splits or automatic network-reconnection feature beyond macOS.
