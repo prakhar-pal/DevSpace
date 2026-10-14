@@ -10,6 +10,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  linux-build-test:
+    name: Build & test (Linux GTK/VTE)
+    if: >-
+      github.head_ref != 'release/main' &&
+      !contains(github.event.head_commit.message, 'chore: release v')
+    runs-on: ubuntu-26.04
+    container: swift:6.4.1-resolute
+    timeout-minutes: 30
+    env:
+      GDK_BACKEND: x11
+      GTK_A11Y: none
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GTK/VTE and test dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential dpkg-dev pkg-config libgtk-4-dev \
+            libvte-2.91-gtk4-dev xvfb xauth dbus python3 openssh-client util-linux
+
+      - name: Show toolchain and native libraries
+        run: |
+          swift --version
+          pkg-config --modversion gtk4 vte-2.91-gtk4
+
+      - name: Test portable Core
+        run: make linux-test-core
+
+      - name: Test Swift protocol client
+        run: make linux-test-protocol
+
+      - name: Test Linux integration and package assembly
+        run: make linux-test
+
+      - name: Assemble development bundle
+        run: make linux-bundle-dev
+
   build-test:
     name: Build & test (SwiftPM)
     # Skip for the automated release flow (.github/workflows/release.yml):

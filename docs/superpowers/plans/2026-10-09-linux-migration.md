@@ -116,7 +116,7 @@ work; no full-port or installed-package completion is claimed.
 - [ ] Produce an Ubuntu `.deb` containing the Linux frontend/backend, required Swift runtime libraries, desktop entries/icons, and license notices. Declare GTK4 and VTE GTK4 as system dependencies; do not bundle Ghostty resources because Linux uses VTE.
 - [ ] Build against Ubuntu 24.04 with baseline CPU settings; validate installation on a clean machine without developer toolchains.
 - [ ] Add Linux core/protocol tests and package builds to CI alongside macOS tests and development builds.
-- [ ] Record the architecture decision, dependency pins, build prerequisites, patch-update procedure, and Linux installation instructions.
+- [x] Record the architecture decision, dependency pins, build prerequisites, patch-update procedure, and Linux installation instructions.
 - [ ] Complete the release acceptance workflow below on the installed package.
 
 **Deliverable:** A reproducible, installable Linux package validated alongside the maintained macOS application.
@@ -132,6 +132,15 @@ No actual production package has been built. Project/runtime copyright coverage,
 maintainer metadata, release-build confirmation, clean-machine install, and CI
 remain open.
 
+The Linux CI job is now defined alongside the unchanged macOS job, using the
+official Swift 6.4.1 Ubuntu 26.04 container. Its shell steps and YAML are locally
+validated. The corresponding global-toolchain commands passed Core220 tests
+(one opt-in skip), protocol4 checks, and Linux73 tests (three opt-in skips), and
+assembled the updated development bundle. GitHub/container execution and an
+actual production package build remain unverified. [ADR 0002](../../adr/0002-linux-swift-gtk-vte.md)
+records the current architecture and replaces Linux Ghostty patch maintenance
+with GTK/VTE/toolchain update checks.
+
 ## Test and Acceptance Criteria
 
 - **Workspace behavior:** Create/cancel/recreate, start/stop/delete, polling races, stopped-workspace selection, aliases, hiding, ordering, and persistence.
@@ -146,5 +155,5 @@ remain open.
 - First-release distribution is Ubuntu `.deb`; ARM64, other desktops, Flatpak, and AppImage follow separately.
 - Layout files remain transferable manually; secrets and notification tokens are created locally.
 - Simultaneous connections from different computers to the same pod retain today's tunnel limitations; this migration does not introduce multi-host routing.
-- The Linux Ghostty integration is a source adaptation with a maintained patch series, not a supported public full-renderer embedding API.
+- Linux imports GTK4/VTE directly from system libraries; it has no Ghostty source adaptation or patch series to maintain.
 - This document records the approved migration plan. Implementation follows its milestones, with the terminal feasibility gate completed before the shared-controller extraction.

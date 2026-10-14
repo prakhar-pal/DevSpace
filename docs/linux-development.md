@@ -6,6 +6,7 @@ application, backend protocol, and lifecycle logic remain Swift. The macOS
 SwiftUI/libghostty app is unchanged. See the
 [Linux UI design](superpowers/specs/2026-10-13-devspace-owned-linux-ui-design.md)
 and [implementation plan](superpowers/plans/2026-10-13-devspace-owned-linux-ui.md).
+The architecture choice is recorded in [ADR 0002](adr/0002-linux-swift-gtk-vte.md).
 
 ## Dependencies
 
@@ -77,6 +78,29 @@ make linux-package \
 The result is `build/devspace_<version>_<architecture>.deb`. This target builds
 production artifacts; get confirmation before running it. The package has not
 yet been tested on a clean machine or Ubuntu 24.04.
+
+After producing and reviewing the package on its target Ubuntu version, install
+with `sudo apt install ./build/devspace_<version>_<architecture>.deb` so APT
+resolves the declared system dependencies. Launch it from the desktop menu or
+with `devspace`. The package requires DevPod to be installed separately. The
+builder preserves an existing output file; use `LINUX_PACKAGE_OUTPUT=` for a
+different artifact path when rebuilding.
+
+## Continuous integration
+
+The Linux job in `.github/workflows/ci.yml` uses the official
+[`swift:6.4.1-resolute` image](https://www.swift.org/install/linux/ubuntu/26_04/)
+on the [Ubuntu 26.04 runner](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2604-Readme.md).
+It installs GTK/VTE headers and test tools, runs Core XCTest, the Swift protocol
+client, Linux integration and synthetic package assembly checks, then assembles a
+development bundle. GUI checks use private Xvfb displays with accessibility
+disabled for test processes. Real workspaces, physical clipboard/IME, and
+notification banner clicks remain opt-in host acceptance.
+
+The workflow definition is locally validated; its GitHub execution is pending
+publication. It does not produce a production `.deb` while project/runtime
+copyright coverage and maintainer metadata are missing. The existing macOS
+job remains in the same workflow.
 
 ## Ownership and behavior
 
