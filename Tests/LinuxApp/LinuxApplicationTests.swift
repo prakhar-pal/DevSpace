@@ -93,7 +93,6 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
         if controller.backend.state == .stopped {
             if context.failure == nil && context.connectSent && context.terminalClosed {
                 context.exitCode = 0
-                print("host-vte workspace=connected shell=round-trip close=workspace-preserved")
             }
             g_application_quit(UnsafeMutableRawPointer(context.application).assumingMemoryBound(to: GApplication.self))
             return 0
@@ -279,6 +278,11 @@ struct LinuxApplicationTests {
         if let failure = context.failure {
             fputs("LinuxApplicationTests: \(failure)\n", stderr)
             exit(EXIT_FAILURE)
+        }
+        if context.mode == "host", context.connectSent, context.terminalClosed,
+           context.controller?.backend.state == .stopped {
+            print("host-vte workspace=connected shell=round-trip close=workspace-preserved")
+            exit(EXIT_SUCCESS)
         }
         if context.mode != "crash", context.connectSent, context.terminalClosed,
            context.controller?.backend.state == .stopped {
