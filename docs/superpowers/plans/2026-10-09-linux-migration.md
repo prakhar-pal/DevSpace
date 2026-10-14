@@ -112,7 +112,7 @@ work; no full-port or installed-package completion is claimed.
 
 ## Task 5: Package and Release
 
-- [ ] Add Linux build, test, run, and package targets while preserving the macOS commands.
+- [x] Add Linux build, test, run, and package targets while preserving the macOS commands.
 - [ ] Produce an Ubuntu `.deb` containing the Linux frontend/backend, required Swift runtime libraries, desktop entries/icons, and license notices. Declare GTK4 and VTE GTK4 as system dependencies; do not bundle Ghostty resources because Linux uses VTE.
 - [ ] Build against Ubuntu 24.04 with baseline CPU settings; validate installation on a clean machine without developer toolchains.
 - [ ] Add Linux core/protocol tests and package builds to CI alongside macOS tests and development builds.
@@ -120,6 +120,17 @@ work; no full-port or installed-package completion is claimed.
 - [ ] Complete the release acceptance workflow below on the installed package.
 
 **Deliverable:** A reproducible, installable Linux package validated alongside the maintained macOS application.
+
+2026-10-14 checkpoint: `make linux-package` and `scripts/package-linux.py`
+assemble a production `.deb` with standard system paths, Swift runtime notices,
+and binary-derived versioned dependencies. Twenty build/assembly tests pass,
+including a real XML-linked ELF fixture, package extraction, relocated launcher,
+lockfile preservation, and refusal to overwrite existing output. Dependency
+analysis of the current development binaries/runtime declares `libc6 >= 2.43`
+and `libxml2-16 >= 2.14.1`; this is an Ubuntu 26.04 ABI, not 24.04 validation.
+No actual production package has been built. Project/runtime copyright coverage,
+maintainer metadata, release-build confirmation, clean-machine install, and CI
+remain open.
 
 ## Test and Acceptance Criteria
 

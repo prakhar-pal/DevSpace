@@ -12,7 +12,7 @@ and [implementation plan](superpowers/plans/2026-10-13-devspace-owned-linux-ui.m
 On Ubuntu install GTK4/VTE headers and the native build tools:
 
 ```sh
-sudo apt-get install -y build-essential pkg-config libgtk-4-dev \
+sudo apt-get install -y build-essential dpkg-dev pkg-config libgtk-4-dev \
   libvte-2.91-gtk4-dev
 ```
 
@@ -51,6 +51,32 @@ No compiler is installed inside the repository. Verify the selected compiler
 with `swift --version`; if multiple toolchains are installed, pass the desired
 global executable through `SWIFT=` and `SWIFTC=`. Ubuntu 24.04 testing remains
 deferred by user direction.
+
+## Ubuntu package
+
+The production package build uses the release SwiftPM configuration, embeds the
+Swift runtime and its license notice, and keeps GTK/VTE as system dependencies.
+`dpkg-shlibdeps` derives versioned system-library dependencies from both app
+executables and every bundled Swift library, including Foundation's XML and
+networking libraries. Packages built on Ubuntu 26.04 declare that host ABI;
+they are not Ubuntu 24.04 packages.
+It installs the app under `/usr/lib/devspace`, the `devspace` launcher under
+`/usr/bin`, and desktop metadata/icon under `/usr/share`. DevPod remains a
+user-installed executable.
+
+The repository currently has no project copyright/license manifest. Supply a
+Debian-format copyright file and maintainer identity before building a package:
+The manifest must cover the project and third-party code in the bundled runtime.
+
+```sh
+make linux-package \
+  LINUX_PACKAGE_COPYRIGHT=/path/to/debian/copyright \
+  LINUX_PACKAGE_MAINTAINER="Name <email>"
+```
+
+The result is `build/devspace_<version>_<architecture>.deb`. This target builds
+production artifacts; get confirmation before running it. The package has not
+yet been tested on a clean machine or Ubuntu 24.04.
 
 ## Ownership and behavior
 

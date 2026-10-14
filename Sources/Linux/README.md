@@ -17,7 +17,7 @@ backend pipe.
 On Ubuntu, install the C headers and build tools:
 
 ```sh
-sudo apt-get install -y build-essential pkg-config libgtk-4-dev \
+sudo apt-get install -y build-essential dpkg-dev pkg-config libgtk-4-dev \
   libvte-2.91-gtk4-dev
 ```
 
@@ -47,6 +47,25 @@ the installed compiler. `make linux-test-gtk` exercises the actual GTK/VTE
 widgets under a private Xvfb display. `make linux-test-core` uses SwiftPM's
 Core XCTest target; `make linux-test` runs the Python integration and packaging
 suite after building the backend.
+
+To build a production Ubuntu package, provide the project's Debian copyright
+manifest and maintainer identity:
+
+```sh
+make linux-package \
+  LINUX_PACKAGE_COPYRIGHT=/path/to/debian/copyright \
+  LINUX_PACKAGE_MAINTAINER="Name <email>"
+```
+
+The `.deb` bundles the Swift runtime and installs DevSpace under `/usr/lib`,
+with the launcher and desktop metadata in standard system paths. GTK4, VTE,
+OpenSSH, and util-linux remain package dependencies; DevPod is user-installed.
+`dpkg-shlibdeps` derives versioned system-library requirements from the app and
+all bundled Swift libraries. A package built on Ubuntu 26.04 requires that
+host ABI; Ubuntu 24.04 compatibility is not claimed. The copyright manifest
+must cover the project and bundled third-party runtime code.
+This target builds release artifacts and requires confirmation before use. A
+project copyright manifest is not yet present in the repository.
 
 On the current Ubuntu 26.04 development host, use the globally installed
 Swift.org 6.4.1 toolchain (`swift`/`swiftc` on `PATH`). Its SwiftPM runner is

@@ -27,10 +27,17 @@ LINUX_DEV_PREFIX ?= build/linux-dev
 LINUX_DEV_BUNDLE ?= build/linux-dev-bundle
 LINUX_SWIFT_SCRATCH ?= .tmp/swift-linux-app
 LINUX_SWIFT_RUNTIME ?= $(shell $(SWIFT) -print-target-info | python3 -c 'import json,sys; print(json.load(sys.stdin)["paths"]["runtimeLibraryPaths"][0])')
+LINUX_RELEASE_SCRATCH ?= .tmp/swift-linux-release
+LINUX_PACKAGE_COPYRIGHT ?=
+LINUX_PACKAGE_MAINTAINER ?=
+LINUX_SWIFT_LICENSE ?= $(abspath $(LINUX_SWIFT_RUNTIME)/../../../share/swift/LICENSE.txt)
+LINUX_PACKAGE_VERSION ?= $(shell python3 -c 'import plistlib; print(plistlib.load(open("Info.plist", "rb"))["CFBundleShortVersionString"])')
+LINUX_PACKAGE_ARCH ?= $(shell dpkg --print-architecture)
+LINUX_PACKAGE_OUTPUT ?= build/devspace_$(LINUX_PACKAGE_VERSION)_$(LINUX_PACKAGE_ARCH).deb
 SWIFT ?= swift
 SWIFTC ?= swiftc
 
-.PHONY: linux-build-dev linux-bundle-dev linux-run linux-test-core linux-test-protocol linux-test-gtk linux-test
+.PHONY: linux-build-dev linux-bundle-dev linux-run linux-package linux-test-core linux-test-protocol linux-test-gtk linux-test
 
 linux-build-dev:
 	$(SWIFT) build --product DevSpaceLinuxApp --scratch-path "$(LINUX_SWIFT_SCRATCH)"
@@ -44,6 +51,32 @@ linux-bundle-dev: linux-build-dev
 
 linux-run: linux-bundle-dev
 	"$(LINUX_DEV_BUNDLE)/bin/devspace-dev"
+
+linux-package:
+	@test -n "$(LINUX_PACKAGE_COPYRIGHT)" || { echo "Set LINUX_PACKAGE_COPYRIGHT to the project's Debian copyright manifest." >&2; exit 2; }
+	@test -n "$(LINUX_PACKAGE_MAINTAINER)" || { echo "Set LINUX_PACKAGE_MAINTAINER to 'Name <email>'." >&2; exit 2; }
+	@set -eu; \
+	mkdir -p .tmp; \
+	work=$$(mktemp -d .tmp/linux-package.XXXXXX); \
+	lock_backup=$$(mktemp .tmp/linux-package-lock.XXXXXX); \
+	had_lock=no; \
+	if [ -f Package.resolved ]; then cp -p Package.resolved "$$lock_backup"; had_lock=yes; fi; \
+	restore() { \
+		if [ "$$had_lock" = yes ]; then cp -p "$$lock_backup" Package.resolved; \
+		else rm -f Package.resolved; fi; \
+		rm -f "$$lock_backup"; rm -rf "$$work"; \
+	}; \
+	trap restore EXIT; \
+	"$(SWIFT)" build -c release --product DevSpaceLinuxApp --scratch-path "$(LINUX_RELEASE_SCRATCH)"; \
+	"$(SWIFT)" build -c release --product DevSpaceLinuxBackend --scratch-path "$(LINUX_RELEASE_SCRATCH)"; \
+	mkdir -p "$$work/prefix/bin"; \
+	install -m 755 "$(LINUX_RELEASE_SCRATCH)/release/DevSpaceLinuxApp" "$$work/prefix/bin/DevSpaceLinuxApp"; \
+	install -m 755 "$(LINUX_RELEASE_SCRATCH)/release/DevSpaceLinuxBackend" "$$work/prefix/bin/DevSpaceLinuxBackend"; \
+	python3 scripts/assemble-linux.py --frontend "$$work/prefix" --backend "$$work/prefix/bin/DevSpaceLinuxBackend" \
+		--swift-runtime "$(LINUX_SWIFT_RUNTIME)" --channel production --output "$$work/bundle"; \
+	python3 scripts/package-linux.py --bundle "$$work/bundle" --copyright-file "$(LINUX_PACKAGE_COPYRIGHT)" \
+		--swift-license "$(LINUX_SWIFT_LICENSE)" --maintainer "$(LINUX_PACKAGE_MAINTAINER)" \
+		--output "$(LINUX_PACKAGE_OUTPUT)"
 
 linux-test-core:
 	$(SWIFT) test --scratch-path .tmp/swift-linux-tests
@@ -74,6 +107,7 @@ help:
 	@echo "  make linux-build-dev     - build the Swift GTK/VTE frontend and backend"
 	@echo "  make linux-bundle-dev    - assemble a relocatable development bundle"
 	@echo "  make linux-run           - build, bundle, and launch DevSpaceDev on Linux"
+	@echo "  make linux-package       - build a production Ubuntu .deb (requires copyright and maintainer metadata)"
 	@echo "  make linux-test-core     - run the Swift Core XCTest target"
 	@echo "  make linux-test-protocol - exercise the Swift backend protocol client"
 	@echo "  make linux-test-gtk      - test the GTK/VTE window and terminal lifecycle"

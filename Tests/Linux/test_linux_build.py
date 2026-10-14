@@ -21,6 +21,9 @@ class LinuxBuildTests(unittest.TestCase):
         shutil.copytree(ROOT / "scripts", self.directory / "scripts",
                         ignore=shutil.ignore_patterns("*.pyc", "__pycache__"))
         shutil.copytree(ROOT / "Resources", self.directory / "Resources")
+        shutil.copyfile(ROOT / "Info.plist", self.directory / "Info.plist")
+        if (ROOT / "Package.resolved").exists():
+            shutil.copyfile(ROOT / "Package.resolved", self.directory / "Package.resolved")
 
         self.runtime = self.directory / "runtime"
         self.runtime.mkdir()
@@ -51,7 +54,8 @@ class LinuxBuildTests(unittest.TestCase):
             " product=args[args.index('--product')+1]\n"
             " if os.environ.get('DEVSPACE_TEST_FAIL_PRODUCT') == product: raise SystemExit(42)\n"
             " scratch=Path(args[args.index('--scratch-path')+1])\n"
-            " output=scratch/'debug'/product\n"
+            " configuration='release' if '-c' in args and args[args.index('-c')+1] == 'release' else 'debug'\n"
+            " output=scratch/configuration/product\n"
             " output.parent.mkdir(parents=True,exist_ok=True)\n"
             " output.write_text(json.load(open(os.environ['DEVSPACE_TEST_PRODUCTS']))[product])\n"
             " output.chmod(0o755)\n"
@@ -90,6 +94,35 @@ class LinuxBuildTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.directory / "build/linux-dev/bin/DevSpaceLinuxApp").exists())
         self.assertFalse((self.directory / "build/linux-dev/bin/DevSpaceLinuxBackend").exists())
+
+    def test_linux_package_builds_production_products_and_preserves_macos_lockfile(self):
+        copyright_file = self.directory / "debian-copyright"
+        copyright_file.write_text(
+            "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n"
+            "Files: *\nCopyright: test only\nLicense: test\n"
+        )
+        swift_license = self.directory / "swift-LICENSE.txt"
+        swift_license.write_text("Swift license test fixture\n")
+        lockfile = (self.directory / "Package.resolved").read_bytes() if (self.directory / "Package.resolved").exists() else None
+        package_output = self.directory / "build/devspace-test.deb"
+        result = self.run_make(
+            "linux-package",
+            f"LINUX_PACKAGE_COPYRIGHT={copyright_file}",
+            f"LINUX_SWIFT_LICENSE={swift_license}",
+            "LINUX_PACKAGE_MAINTAINER=DevSpace test fixture <devspace@example.invalid>",
+            f"LINUX_PACKAGE_OUTPUT={package_output}",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        products = [json.loads(line) for line in
+                    (self.directory / "swift-products.jsonl").read_text().splitlines()]
+        self.assertEqual([args[args.index("--product") + 1] for args in products],
+                         ["DevSpaceLinuxApp", "DevSpaceLinuxBackend"])
+        self.assertTrue(all(args[args.index("-c") + 1] == "release" for args in products))
+        self.assertTrue(package_output.is_file())
+        self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(package_output), "Package"], text=True).strip(),
+                         "devspace")
+        if lockfile is not None:
+            self.assertEqual((self.directory / "Package.resolved").read_bytes(), lockfile)
 
     def test_swiftpm_test_target_does_not_collect_standalone_integration_runners(self):
         manifest = (ROOT / "Package.swift").read_text()

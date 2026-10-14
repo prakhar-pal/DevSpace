@@ -2,6 +2,7 @@
 
 import json
 import os
+import ctypes.util
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -12,6 +13,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/assemble-linux.py"
+PACKAGE_SCRIPT = ROOT / "scripts/package-linux.py"
 
 
 class AssembleLinuxTests(unittest.TestCase):
@@ -88,6 +90,109 @@ class AssembleLinuxTests(unittest.TestCase):
         icons = list((self.output / "share/icons/hicolor").glob("*/apps/com.prakharp.devspace.png"))
         self.assertEqual(len(icons), 1)
         self.assertTrue(icons[0].read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_deb_installs_production_bundle_with_system_dependencies_and_notices(self):
+        xml_library = ctypes.util.find_library("xml2")
+        self.assertIsNotNone(xml_library, "system XML library is required by Swift FoundationXML")
+        probe = subprocess.run([
+            "cc", "-shared", "-fPIC", "-x", "c", "-", f"-l:{xml_library}",
+            "-o", str(self.runtime / "libxml-dependency-probe.so"),
+        ], input="extern void xmlCheckVersion(int); void probe(void) { xmlCheckVersion(0); }\n",
+            capture_output=True, text=True)
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        self.assertEqual(self.assemble("production").returncode, 0)
+        copyright_file = self.directory / "debian-copyright"
+        copyright_text = (
+            "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n"
+            "Upstream-Name: DevSpace\nSource: https://example.invalid/\n\n"
+            "Files: *\nCopyright: test fixture only\nLicense: test-fixture\n"
+            " This text is only a package-builder test fixture.\n"
+        )
+        copyright_file.write_text(copyright_text)
+        swift_license = self.directory / "swift-LICENSE.txt"
+        swift_license.write_text("Swift runtime license test fixture\n")
+        package = self.directory / "devspace.deb"
+        maintainer = "DevSpace test fixture <devspace@example.invalid>"
+        package_command = [
+            sys.executable, str(PACKAGE_SCRIPT), "--bundle", str(self.output),
+            "--copyright-file", str(copyright_file), "--swift-license", str(swift_license),
+            "--maintainer", maintainer, "--output", str(package),
+        ]
+        result = subprocess.run(package_command, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        original_package = package.read_bytes()
+        repeat = subprocess.run(package_command, capture_output=True, text=True)
+        self.assertNotEqual(repeat.returncode, 0)
+        self.assertIn("output already exists", repeat.stderr)
+        self.assertEqual(package.read_bytes(), original_package)
+        self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(package), "Package"], text=True).strip(),
+                         "devspace")
+        self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(package), "Version"], text=True).strip(),
+                         "0.7.1")
+        self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(package), "Architecture"], text=True).strip(),
+                         subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip())
+        self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(package), "Maintainer"], text=True).strip(),
+                         maintainer)
+        dependencies = subprocess.check_output(["dpkg-deb", "-f", str(package), "Depends"], text=True)
+        for dependency in ("libgtk-4-1", "libvte-2.91-gtk4-0", "openssh-client", "util-linux"):
+            self.assertIn(dependency, dependencies)
+        self.assertRegex(dependencies, r"libxml2[^,]* \(>= [^)]+\)")
+
+        extracted = self.directory / "extracted"
+        subprocess.run(["dpkg-deb", "-x", str(package), str(extracted)], check=True)
+        prefix = extracted / "usr/lib/devspace"
+        self.assertTrue((prefix / "bin/DevSpace").is_file())
+        self.assertTrue((prefix / "bin/DevSpaceBackend").is_file())
+        self.assertTrue((prefix / "lib/libswiftCore.so").is_file())
+        launcher = extracted / "usr/bin/devspace"
+        self.assertTrue(launcher.is_symlink())
+        self.assertEqual(os.readlink(launcher), "../lib/devspace/bin/devspace")
+        desktop = extracted / "usr/share/applications/devspace.desktop"
+        self.assertIn("Exec=/usr/bin/devspace\n", desktop.read_text())
+        self.assertTrue(list((extracted / "usr/share/icons/hicolor").glob(
+            "*/apps/com.prakharp.devspace.png")))
+        self.assertEqual((extracted / "usr/share/doc/devspace/copyright").read_text(), copyright_text)
+        self.assertEqual((extracted / "usr/share/doc/devspace/swift-runtime-LICENSE.txt").read_text(),
+                         "Swift runtime license test fixture\n")
+
+        environment = dict(os.environ, PATH="/usr/bin:/bin", HOME=str(self.directory / "home"))
+        run = subprocess.run([str(launcher), "arg with spaces"], env=environment,
+                             capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        launched = json.loads(run.stdout)
+        self.assertEqual(launched["channel"], "production")
+        self.assertEqual(launched["backend"], str(prefix / "bin/DevSpaceBackend"))
+        self.assertEqual(launched["args"], ["arg with spaces"])
+
+    def test_deb_requires_project_copyright_and_does_not_overwrite_output(self):
+        self.assertEqual(self.assemble("production").returncode, 0)
+        output = self.directory / "existing.deb"
+        output.write_text("keep this unrelated file")
+        result = subprocess.run([
+            sys.executable, str(PACKAGE_SCRIPT), "--bundle", str(self.output),
+            "--swift-license", str(self.directory / "missing-license"),
+            "--maintainer", "DevSpace test fixture <devspace@example.invalid>",
+            "--output", str(output),
+        ], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(output.read_text(), "keep this unrelated file")
+
+    def test_deb_rejects_a_non_debian_copyright_file(self):
+        self.assertEqual(self.assemble("production").returncode, 0)
+        copyright_file = self.directory / "not-debian-copyright"
+        copyright_file.write_text("This is not a copyright manifest.\n")
+        swift_license = self.directory / "swift-LICENSE.txt"
+        swift_license.write_text("Swift license test fixture\n")
+        output = self.directory / "devspace.deb"
+        result = subprocess.run([
+            sys.executable, str(PACKAGE_SCRIPT), "--bundle", str(self.output),
+            "--copyright-file", str(copyright_file), "--swift-license", str(swift_license),
+            "--maintainer", "DevSpace test fixture <devspace@example.invalid>",
+            "--output", str(output),
+        ], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Debian copyright-format 1.0 manifest", result.stderr)
+        self.assertFalse(output.exists())
 
     def test_existing_output_is_not_overwritten(self):
         self.output.mkdir()
