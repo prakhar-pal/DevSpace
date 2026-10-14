@@ -113,7 +113,8 @@ workspace, pane, and connection generation so delayed events cannot target a
 replacement pane. Closing a terminal does not stop its workspace.
 
 The sidebar lists every DevPod as a selectable row without extra action
-buttons. Rows show a green dot for running DevPods and a grey dot for stopped
+buttons or a heading; the terminal area has no title or Close bar. Rows show a
+green dot for running DevPods and a grey dot for stopped
 or unresolved DevPods; selection is indicated by the row highlight. Status
 refresh runs automatically. Running DevPods connect on startup
 and retain their terminals and notification hooks in the background; the right
@@ -122,6 +123,10 @@ switches the displayed terminal without restarting its shell. The first running
 workspace is selected automatically; selecting a stopped workspace shows the
 empty terminal area. Reconnect remains available through Ctrl+Shift+R in a
 terminal.
+
+An SSH connection error clears when that workspace successfully opens a new
+terminal. Connecting another workspace does not clear the failed workspace's
+error.
 
 The first window is empty until a running workspace connects; it does not
 launch a local shell. Development and

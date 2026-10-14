@@ -23,7 +23,6 @@ struct WorkspaceWindowTests {
             window.onCommand = { kind, payload in commands.append((kind, payload)) }
             window.present()
             try expect(window.terminalCount == 0, "empty startup created a terminal")
-            try expect(window.workspacesHeadingCount == 1, "workspace sidebar heading is not unique")
 
             let workspace = WorkspaceView(
                 id: "fixture-pod", provider: "docker", source: "/tmp/project",
@@ -42,7 +41,7 @@ struct WorkspaceWindowTests {
                 try expect(!containsButton(title, in: root), "sidebar retains extra action: \(title)")
             }
             let sidebarWidget = gtk_widget_get_first_child(root)!
-            let rows = gtk_widget_get_next_sibling(gtk_widget_get_first_child(sidebarWidget))!
+            let rows = gtk_widget_get_first_child(sidebarWidget)!
             let firstRow = gtk_widget_get_first_child(rows)!
             let secondRow = gtk_widget_get_next_sibling(firstRow)!
             try expect(gtk_widget_get_next_sibling(secondRow) == nil, "sidebar did not show both workspaces")
@@ -53,6 +52,11 @@ struct WorkspaceWindowTests {
             let generation = UUID()
             let paneID = UUID()
             let identity = TerminalPaneIdentity(workspaceID: workspace.id, generation: generation, paneID: paneID)
+            window.apply(try terminalEffect(
+                kind: "terminal_error", workspace: otherWorkspace.id, generation: UUID(), pane: UUID(),
+                message: "SSH connection failed: readinessTimedOut"
+            ))
+            let status = gtk_widget_get_next_sibling(rows)!
             try window.apply(terminalEffect(
                 kind: "terminal_launch", workspace: workspace.id, generation: generation, pane: paneID,
                 executable: "/bin/sh",
@@ -63,6 +67,8 @@ struct WorkspaceWindowTests {
             guard let originalPane = window.pane(for: identity) else {
                 throw TestFailure("terminal pane was not retained")
             }
+            try expect(String(cString: gtk_label_get_text(OpaquePointer(status))) == "SSH connection failed: readinessTimedOut",
+                       "another workspace's successful connection erased the timeout")
             let otherIdentity = TerminalPaneIdentity(
                 workspaceID: otherWorkspace.id, generation: UUID(), paneID: UUID()
             )
@@ -74,6 +80,8 @@ struct WorkspaceWindowTests {
             try expect(pumpUntil { window.pane(for: otherIdentity)?.text.contains("background-ready") == true },
                        "background workspace terminal did not connect")
             let otherPane = window.pane(for: otherIdentity)!
+            try expect(String(cString: gtk_label_get_text(OpaquePointer(status))).isEmpty,
+                       "recovered workspace retains a stale SSH timeout in the sidebar")
             try expect(gtk_widget_get_mapped(originalPane.widget) != 0 && gtk_widget_get_mapped(otherPane.widget) == 0,
                        "multiple workspace terminals are visible at once")
             window.update(WorkspaceControllerSnapshot(

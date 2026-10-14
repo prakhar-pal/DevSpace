@@ -12,6 +12,7 @@ final class WorkspaceWindow {
     private var terminalPanes: [TerminalPaneIdentity: TerminalPane] = [:]
     private var terminalRoots: [TerminalPaneIdentity: UnsafeMutablePointer<GtkWidget>] = [:]
     private var actionsEnabled = true
+    private var terminalErrorWorkspace: String?
     private(set) var snapshot = WorkspaceControllerSnapshot(
         revision: 0, workspaces: [], selectedID: nil, layout: Layout(), terminalPanes: []
     )
@@ -39,13 +40,6 @@ final class WorkspaceWindow {
         gtk_widget_set_margin_start(sidebarWidget, 16)
         gtk_widget_set_margin_end(sidebarWidget, 16)
 
-        let workspaceHeader = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!)
-            .assumingMemoryBound(to: GtkBox.self)
-        let heading = gtk_label_new("Workspaces")!
-        gtk_label_set_xalign(OpaquePointer(heading), 0)
-        gtk_widget_set_hexpand(heading, 1)
-        gtk_box_append(workspaceHeader, heading)
-        gtk_box_append(sidebar, UnsafeMutableRawPointer(workspaceHeader).assumingMemoryBound(to: GtkWidget.self))
         workspaceRows = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 8)!)
             .assumingMemoryBound(to: GtkBox.self)
         gtk_box_append(sidebar, UnsafeMutableRawPointer(workspaceRows).assumingMemoryBound(to: GtkWidget.self))
@@ -85,11 +79,6 @@ final class WorkspaceWindow {
         return String(cString: title)
     }
 
-    var workspacesHeadingCount: Int {
-        guard let root = gtk_window_get_child(window) else { return 0 }
-        return countLabels(matching: "Workspaces", in: root)
-    }
-
     func update(_ next: WorkspaceControllerSnapshot) {
         guard next.revision >= snapshot.revision else { return }
         let selectionChanged = snapshot.selectedID != next.selectedID
@@ -111,6 +100,7 @@ final class WorkspaceWindow {
     func apply(_ effect: WorkspaceTerminalEffect) {
         if effect.kind == "terminal_error" {
             setStatus(effect.message ?? "SSH connection failed")
+            terminalErrorWorkspace = effect.workspaceID
             return
         }
         guard let paneID = effect.paneID else { return }
@@ -153,22 +143,13 @@ final class WorkspaceWindow {
 
         let root = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)!)
             .assumingMemoryBound(to: GtkBox.self)
-        let header = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6)!)
-            .assumingMemoryBound(to: GtkBox.self)
-        let title = gtk_label_new("\(pane.identity.workspaceID) · Terminal")!
-        gtk_label_set_xalign(OpaquePointer(title), 0)
-        gtk_widget_set_hexpand(title, 1)
-        gtk_box_append(header, title)
-        let close = gtk_button_new_with_label("Close")!
-        connectAction(close, context: WorkspaceActionContext(window: self, identity: pane.identity))
-        gtk_box_append(header, close)
-        gtk_box_append(root, UnsafeMutableRawPointer(header).assumingMemoryBound(to: GtkWidget.self))
         gtk_widget_set_vexpand(pane.widget, 1)
         gtk_box_append(root, pane.widget)
         let rootWidget = UnsafeMutableRawPointer(root).assumingMemoryBound(to: GtkWidget.self)
         gtk_widget_set_vexpand(rootWidget, 1)
         terminalRoots[pane.identity] = rootWidget
         gtk_box_append(terminalContainer, rootWidget)
+        if terminalErrorWorkspace == pane.identity.workspaceID { setStatus("") }
         revealSelectedTerminal(focus: pane.identity.workspaceID == snapshot.selectedID)
     }
 
@@ -204,6 +185,7 @@ final class WorkspaceWindow {
     }
 
     func setStatus(_ message: String) {
+        terminalErrorWorkspace = nil
         gtk_label_set_text(OpaquePointer(statusLabel), message)
     }
 
@@ -295,36 +277,16 @@ final class WorkspaceWindow {
         }
     }
 
-    private func countLabels(matching text: String, in widget: UnsafeMutablePointer<GtkWidget>) -> Int {
-        var count = 0
-        if String(cString: gtk_widget_get_css_name(widget)) == "label",
-           let label = gtk_label_get_text(OpaquePointer(widget)), String(cString: label) == text {
-            count += 1
-        }
-        var child = gtk_widget_get_first_child(widget)
-        while let current = child {
-            count += countLabels(matching: text, in: current)
-            child = gtk_widget_get_next_sibling(current)
-        }
-        return count
-    }
 }
 
 private final class WorkspaceActionContext {
     weak var window: WorkspaceWindow?
     let kind: String
     let payload: [String: String]
-    let identity: TerminalPaneIdentity?
-
-    init(window: WorkspaceWindow, kind: String, payload: [String: String], identity: TerminalPaneIdentity? = nil) {
+    init(window: WorkspaceWindow, kind: String, payload: [String: String]) {
         self.window = window
         self.kind = kind
         self.payload = payload
-        self.identity = identity
-    }
-
-    convenience init(window: WorkspaceWindow, identity: TerminalPaneIdentity) {
-        self.init(window: window, kind: "close_terminal", payload: [:], identity: identity)
     }
 }
 
@@ -332,10 +294,6 @@ private final class WorkspaceActionContext {
 private func devspaceLinuxWorkspaceAction(_ button: UnsafeMutableRawPointer?, _ data: UnsafeMutableRawPointer?) {
     guard let data else { return }
     let context = Unmanaged<WorkspaceActionContext>.fromOpaque(data).takeUnretainedValue()
-    if let identity = context.identity {
-        context.window?.closeTerminal(identity, reportExit: true)
-    } else {
-        context.window?.onCommand?(context.kind, context.payload)
-    }
+    context.window?.onCommand?(context.kind, context.payload)
     _ = button
 }
