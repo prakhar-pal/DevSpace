@@ -2,6 +2,25 @@ import XCTest
 @testable import DevSpaceCore
 
 final class WorkspaceControllerTests: XCTestCase {
+    func testForegroundNotificationsSuppressOnlyTheSelectedWorkspace() {
+        XCTAssertFalse(WorkspaceController.shouldPresentNotification(workspaceID: "a", selectedID: "a", applicationIsActive: true))
+        XCTAssertTrue(WorkspaceController.shouldPresentNotification(workspaceID: "b", selectedID: "a", applicationIsActive: true))
+        XCTAssertTrue(WorkspaceController.shouldPresentNotification(workspaceID: "a", selectedID: "a", applicationIsActive: false))
+        XCTAssertTrue(WorkspaceController.shouldPresentNotification(workspaceID: "a", selectedID: nil, applicationIsActive: true))
+    }
+
+    func testOwnedReadyMasterAllowsHooksDespiteTransientStatusButNeverForStoppedOrMissingPods() {
+        for state in ["Unknown", "Busy", "Loading"] {
+            let controller = WorkspaceController(workspaces: [workspace("pod", state: state)])
+            XCTAssertTrue(controller.canInstallIntegration(workspaceID: "pod", ownedControlPath: "/owned/socket"))
+            XCTAssertFalse(controller.canInstallIntegration(workspaceID: "pod", ownedControlPath: nil))
+        }
+        let stopped = WorkspaceController(workspaces: [workspace("pod", state: "Stopped")])
+        XCTAssertFalse(stopped.canInstallIntegration(workspaceID: "pod", ownedControlPath: "/owned/socket"))
+        XCTAssertFalse(stopped.canInstallIntegration(workspaceID: "missing", ownedControlPath: "/owned/socket"))
+        let running = WorkspaceController(workspaces: [workspace("pod", state: "Running")])
+        XCTAssertTrue(running.canInstallIntegration(workspaceID: "pod", ownedControlPath: nil))
+    }
     private func workspace(_ id: String, state: String = "Stopped") -> WorkspaceView {
         WorkspaceView(id: id, provider: "test", source: "", lastUsed: "", state: state, error: nil)
     }

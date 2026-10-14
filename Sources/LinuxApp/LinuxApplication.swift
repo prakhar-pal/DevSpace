@@ -257,6 +257,10 @@ final class LinuxApplicationController {
     private func sendNotification(_ payload: [String: String]) {
         guard let workspace = payload["workspace_id"],
               let title = payload["title"], let body = payload["message"] else { return }
+        guard WorkspaceController.shouldPresentNotification(
+            workspaceID: workspace, selectedID: window?.snapshot.selectedID,
+            applicationIsActive: window.map { gtk_window_is_active($0.window) != 0 } ?? false
+        ) else { return }
         let notification = g_notification_new(title)!
         g_notification_set_body(notification, body)
         g_notification_set_default_action_and_target_value(

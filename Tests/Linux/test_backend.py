@@ -87,6 +87,53 @@ class BackendIntegrationTests(unittest.TestCase):
         snapshot = json.loads(self.request("poll")["payload"]["json"])
         self.assertEqual(snapshot["workspaces"][0]["state"], "Stopped")
 
+    def test_external_stop_emits_one_lifecycle_notification_and_ignores_transient_status(self):
+        self.request("poll")
+        self.assertFalse(any(frame["kind"] == "platform_notify" for frame in self.frames))
+        (self.directory / "state").write_text("Busy")
+        self.request("poll")
+        self.assertFalse(any(frame["kind"] == "platform_notify" for frame in self.frames))
+        (self.directory / "state").write_text("Stopped")
+        self.request("poll")
+        self.request("poll")
+        events = [frame for frame in self.frames if frame["kind"] == "platform_notify"]
+        self.assertEqual(len(events), 1, "external shutdown must notify exactly once")
+        self.assertEqual(events[0]["payload"]["workspace_id"], "pod")
+        self.assertEqual(events[0]["payload"]["message"], "Workspace stopped")
+        self.assertEqual(events[0]["payload"]["event"], "stopped")
+
+    def test_start_command_does_not_announce_ready_without_ssh_output(self):
+        (self.directory / "state").write_text("Stopped")
+        self.request("poll")
+        self.assertEqual(self.request("start", workspace_id="pod")["kind"], "completed")
+        self.request("poll")
+        self.assertFalse(any(frame["kind"] == "platform_notify" for frame in self.frames),
+                         "provisioning completion is not terminal readiness")
+
+    def test_external_restart_notifies_without_waking_or_opening_another_session(self):
+        (self.directory / "state").write_text("Stopped")
+        self.request("poll")
+        (self.directory / "state").write_text("Running")
+        self.request("poll")
+        self.assertFalse(any(frame["kind"] == "platform_notify" for frame in self.frames),
+                         "first Running sample after stop is not confirmed")
+        self.request("poll")
+        events = [frame for frame in self.frames if frame["kind"] == "platform_notify"]
+        self.assertEqual(len(events), 1, "external restart must notify without an owned SSH session")
+        self.assertEqual(events[0]["payload"]["message"], "Workspace started")
+        self.assertEqual(events[0]["payload"]["event"], "started")
+        self.assertFalse(any(frame["kind"] == "terminal_launch" for frame in self.frames))
+
+    def test_single_running_blip_after_stop_does_not_announce_a_restart(self):
+        (self.directory / "state").write_text("Stopped")
+        self.request("poll")
+        (self.directory / "state").write_text("Running")
+        snapshot = self.snapshot_request("poll")
+        self.assertEqual(snapshot["workspaces"][0]["state"], "Loading")
+        (self.directory / "state").write_text("Stopped")
+        self.request("poll")
+        self.assertFalse(any(frame["kind"] == "platform_notify" for frame in self.frames))
+
     def test_selection_is_reflected_in_snapshot(self):
         self.request("poll")
         response = self.request("select", workspace_id="pod")

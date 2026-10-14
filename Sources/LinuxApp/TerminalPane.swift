@@ -165,7 +165,10 @@ final class TerminalPane {
     }
 
     fileprivate func contentsChanged() {
-        guard !isClosed, !outputReported else { return }
+        // VTE also emits this signal for map/resize changes on an empty grid.
+        // Only actual visible child content establishes terminal readiness.
+        guard !isClosed, !outputReported, childPID != nil,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         outputReported = true
         report("terminal_output")
     }

@@ -95,4 +95,15 @@ final class StateNotifyGateTests: XCTestCase {
         _ = g.observe([ws("a", "Running")])
         XCTAssertEqual(g.observe([ws("a", "Running"), ws("b", "Running")]).count, 0)
     }
+
+    func testRemovedWorkspaceDoesNotReusePreviousSSHConfirmation() {
+        var gate = StateNotifyGate()
+        _ = gate.observe([ws("a", "Running")])
+        XCTAssertFalse(gate.confirmSSH("a"))
+        gate.forget("a")
+        XCTAssertTrue(gate.observe([ws("a", "Stopped")]).isEmpty)
+        XCTAssertTrue(gate.observe([ws("a", "Running")]).isEmpty,
+                      "a recreated workspace must not inherit the old session's readiness")
+        XCTAssertTrue(gate.confirmSSH("a"))
+    }
 }

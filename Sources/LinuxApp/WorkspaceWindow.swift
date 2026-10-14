@@ -60,7 +60,7 @@ final class WorkspaceWindow {
         gtk_widget_set_hexpand(terminalWidget, 1)
         gtk_widget_set_vexpand(terminalWidget, 1)
 
-        emptyState = gtk_label_new("Select a running workspace to open its terminal.")!
+        emptyState = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12)!
         _ = g_object_ref_sink(UnsafeMutableRawPointer(emptyState))
         gtk_widget_set_hexpand(emptyState, 1)
         gtk_widget_set_vexpand(emptyState, 1)
@@ -70,6 +70,7 @@ final class WorkspaceWindow {
         gtk_box_append(root, separator)
         gtk_box_append(root, terminalWidget)
         gtk_window_set_child(window, rootWidget)
+        refreshLifecyclePanel()
     }
 
     func present() {
@@ -97,6 +98,7 @@ final class WorkspaceWindow {
                             alias: next.layout.aliases[workspace.id], badged: next.badges.contains(workspace.id))
         }
         revealSelectedTerminal(focus: selectionChanged)
+        refreshLifecyclePanel()
     }
 
     func apply(_ effect: WorkspaceTerminalEffect) {
@@ -154,6 +156,7 @@ final class WorkspaceWindow {
         gtk_box_append(terminalContainer, rootWidget)
         if terminalErrorWorkspace == pane.identity.workspaceID { setStatus("") }
         revealSelectedTerminal(focus: pane.identity.workspaceID == snapshot.selectedID)
+        refreshLifecyclePanel()
     }
 
     func pane(for identity: TerminalPaneIdentity) -> TerminalPane? {
@@ -175,6 +178,7 @@ final class WorkspaceWindow {
             retiredTerminalGenerations[identity.workspaceID, default: []].insert(identity.generation)
         }
         revealSelectedTerminal()
+        refreshLifecyclePanel()
     }
 
     private func revealSelectedTerminal(focus: Bool = false) {
@@ -182,7 +186,11 @@ final class WorkspaceWindow {
         for (identity, root) in terminalRoots {
             gtk_widget_set_visible(root, identity == selectedPane?.identity ? 1 : 0)
         }
-        gtk_widget_set_visible(emptyState, selectedPane == nil ? 1 : 0)
+        let operating = snapshot.operations.contains { $0.workspaceID == snapshot.selectedID }
+        gtk_widget_set_visible(emptyState, selectedPane == nil || operating ? 1 : 0)
+        if operating {
+            for root in terminalRoots.values { gtk_widget_set_visible(root, 0) }
+        }
         if focus, let selectedPane { _ = gtk_widget_grab_focus(selectedPane.widget) }
     }
 
@@ -204,7 +212,8 @@ final class WorkspaceWindow {
 
     func setActionsEnabled(_ enabled: Bool) {
         actionsEnabled = enabled
-        refreshActionSensitivity(in: UnsafeMutableRawPointer(workspaceRows).assumingMemoryBound(to: GtkWidget.self))
+        gtk_widget_set_sensitive(UnsafeMutableRawPointer(workspaceRows).assumingMemoryBound(to: GtkWidget.self), enabled ? 1 : 0)
+        gtk_widget_set_sensitive(emptyState, enabled ? 1 : 0)
     }
 
     deinit {
@@ -237,7 +246,70 @@ final class WorkspaceWindow {
         connectAction(button, context: WorkspaceActionContext(
             window: self, kind: "select", payload: ["workspace_id": workspace.id]
         ))
-        gtk_box_append(workspaceRows, button)
+        let container = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0)!)
+            .assumingMemoryBound(to: GtkBox.self)
+        gtk_widget_set_hexpand(button, 1)
+        gtk_box_append(container, button)
+        if workspace.state == "Running" {
+            let busy = snapshot.operations.contains { $0.workspaceID == workspace.id }
+            let stop = gtk_button_new_from_icon_name("media-playback-stop-symbolic")!
+            gtk_widget_set_name(stop, "stop-workspace")
+            gtk_widget_set_tooltip_text(stop, "Stop \(alias ?? workspace.id)")
+            gtk_widget_add_css_class(stop, "flat")
+            gtk_widget_set_sensitive(stop, actionsEnabled && !busy ? 1 : 0)
+            connectAction(stop, context: WorkspaceActionContext(
+                window: self, kind: "stop", payload: ["workspace_id": workspace.id]
+            ))
+            gtk_box_append(container, stop)
+        }
+        gtk_box_append(workspaceRows, UnsafeMutableRawPointer(container).assumingMemoryBound(to: GtkWidget.self))
+    }
+
+    private func refreshLifecyclePanel() {
+        let box = UnsafeMutableRawPointer(emptyState).assumingMemoryBound(to: GtkBox.self)
+        clear(box)
+        gtk_widget_set_margin_top(emptyState, 24)
+        gtk_widget_set_margin_start(emptyState, 24)
+        gtk_widget_set_margin_end(emptyState, 24)
+        guard let workspace = snapshot.workspaces.first(where: { $0.id == snapshot.selectedID }) else {
+            gtk_box_append(box, gtk_label_new("Select a workspace to open its terminal.")!)
+            return
+        }
+        if let operation = snapshot.operations.first(where: { $0.workspaceID == workspace.id }) {
+            gtk_box_append(box, gtk_label_new("\(operation.kind.capitalized): \(snapshot.layout.aliases[workspace.id] ?? workspace.id) — \(operation.state)")!)
+            let output = gtk_label_new(operation.output)!
+            gtk_label_set_xalign(OpaquePointer(output), 0)
+            gtk_label_set_yalign(OpaquePointer(output), 0)
+            gtk_label_set_wrap(OpaquePointer(output), 1)
+            gtk_label_set_wrap_mode(OpaquePointer(output), PANGO_WRAP_WORD_CHAR)
+            gtk_label_set_selectable(OpaquePointer(output), 1)
+            let scroll = gtk_scrolled_window_new()!
+            gtk_widget_set_vexpand(scroll, 1)
+            gtk_scrolled_window_set_child(OpaquePointer(scroll), output)
+            gtk_box_append(box, scroll)
+            if operation.kind == "start" {
+                let cancel = gtk_button_new_with_label(operation.state == "cancelling" ? "Cancelling…" : "Cancel")!
+                gtk_widget_set_name(cancel, "cancel-operation")
+                gtk_widget_set_sensitive(cancel, actionsEnabled && operation.state != "cancelling" ? 1 : 0)
+                connectAction(cancel, context: WorkspaceActionContext(
+                    window: self, kind: "cancel", payload: ["request_id": operation.id]
+                ))
+                gtk_box_append(box, cancel)
+            }
+        } else if workspace.state == "Stopped" {
+            gtk_box_append(box, gtk_label_new("Workspace stopped")!)
+            let start = gtk_button_new_with_label("Start")!
+            gtk_widget_set_name(start, "start-workspace")
+            gtk_widget_set_sensitive(start, actionsEnabled ? 1 : 0)
+            connectAction(start, context: WorkspaceActionContext(
+                window: self, kind: "start", payload: ["workspace_id": workspace.id]
+            ))
+            gtk_box_append(box, start)
+        } else {
+            gtk_box_append(box, gtk_label_new(workspace.state == "Running"
+                ? "Connecting to workspace…" : "Checking workspace status…")!)
+        }
+        revealSelectedTerminal()
     }
 
     private static func configureSidebarText(_ label: UnsafeMutablePointer<GtkWidget>) {
@@ -274,17 +346,6 @@ final class WorkspaceWindow {
          "pane_id": identity.paneID.uuidString.lowercased()]
     }
 
-    private func refreshActionSensitivity(in widget: UnsafeMutablePointer<GtkWidget>) {
-        if String(cString: gtk_widget_get_css_name(widget)) == "button" {
-            gtk_widget_set_sensitive(widget, actionsEnabled ? 1 : 0)
-        }
-        var child = gtk_widget_get_first_child(widget)
-        while let current = child {
-            refreshActionSensitivity(in: current)
-            child = gtk_widget_get_next_sibling(current)
-        }
-    }
-
 }
 
 private final class WorkspaceActionContext {
@@ -302,6 +363,7 @@ private final class WorkspaceActionContext {
 private func devspaceLinuxWorkspaceAction(_ button: UnsafeMutableRawPointer?, _ data: UnsafeMutableRawPointer?) {
     guard let data else { return }
     let context = Unmanaged<WorkspaceActionContext>.fromOpaque(data).takeUnretainedValue()
+    guard let button, gtk_widget_is_sensitive(button.assumingMemoryBound(to: GtkWidget.self)) != 0 else { return }
     context.window?.onCommand?(context.kind, context.payload)
     _ = button
 }

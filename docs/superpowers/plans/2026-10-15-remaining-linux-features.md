@@ -1,6 +1,6 @@
 # Remaining DevSpace Linux Port — Prioritized Milestone Plan
 
-> **For agentic workers:** Use superpowers:executing-plans to implement the explicitly requested milestone in the current checkout and main thread. Do not create worktrees or delegate implementation. Inspect macOS source before each milestone; ask only where genuine ambiguity remains. These milestone numbers supersede the original ordering; the earlier M01 execution request does not automatically authorize this revised plan.
+> **For agentic workers:** Use superpowers:executing-plans in the current checkout and main thread. Do not create worktrees or delegate implementation. Inspect macOS source before each milestone; ask only where genuine ambiguity remains. These milestone numbers supersede the original ordering. The user subsequently authorized continuing through all remaining milestones; release/installation and real-workspace mutation still require their separate approvals.
 
 ## Direction
 
@@ -9,6 +9,29 @@ Use macOS as the reference for feature behavior, action availability, dialogs an
 Reuse existing backend features rather than rebuilding them. Keep libghostty rendering parity and Ubuntu 24.04 validation deferred. Deliver usable, independently verified increments with small conventional commits. Later optional features must not block earlier delivery.
 
 ## User priorities
+
+### Execution checkpoint — 2026-10-15
+
+M01 implemented and independently reviewed. Start/Stop controls, operation output
+and targeted cancellation use the existing backend. Workspace notifications now
+reuse macOS state gating/debounce and foreground suppression. Review fixes retain
+hook cleanup eligibility after the last shell exits, close its frontend pane,
+allow ready-owned-master integration during transient status, and forget readiness
+when an ID is removed. Silent VTE map/resize no longer signals readiness.
+Verified: Core234 (one opt-in skip), backend38, native GTK7 (one live skip), and
+both development executable builds. No production replacement or real lifecycle
+mutation occurred. Live wc-1/hook/banner acceptance remains pending: its latest
+read-only status was Stopped. Current-head macOS CI has not yet run for this change.
+
+Ruling: external starts follow the macOS confirmed-status exception rather than
+waiting forever for SSH the app intentionally does not open. Intended connections
+still wait for output after failure. VTE readiness requires visible child content;
+silent/whitespace-only shells wait until visible text instead of reporting readiness
+from map/resize events. Cost: such custom shells may delay hook installation.
+Verification uses existing scratch caches and the plan/Git checkpoint rather than
+adding a new execution workspace or repeated full Linux/package suite runs.
+
+### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.
 
@@ -40,6 +63,7 @@ Pxx identifiers are stable and separate from historical Fxx identifiers. P06's f
 - Add state-appropriate Start/Stop actions, busy-state disabling, operation progress and retained errors using existing commands/snapshots. Keep compact rows; do not add provisioning dialogs or tabs.
 - Match macOS lifecycle notifications: distinguish confirmed Running/Stopped transitions from initial discovery and unknown/transient status. Announce becoming usable only after the owned SSH connection produces its first terminal output, not merely when Start returns.
 - Detect externally initiated stops, including provider inactivity shutdown, through polling without issuing lifecycle commands. Repeated snapshots must not repeat notifications. Match macOS foreground/selected-workspace suppression and badge behavior.
+- Match macOS's external-start exception: a workspace restarted outside DevSpace, with no intended app connection, announces its confirmed Running transition without opening SSH. Intended app connections still require first output, including after a failed connection awaiting explicit retry.
 - Finish/verify automatic Claude hooks once per live connection and safe removal on disconnect. Preserve unrelated settings and another live channel's integration. Hook success remains implicit; failures are nonfatal and actionable.
 - Finish/verify Claude finished/needs-input alerts, badges, clearing on selection and click-to-focus of the existing terminal.
 

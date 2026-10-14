@@ -23,6 +23,7 @@ public final class WorkspaceTerminalController {
         let transport: SSHTransportControlling
         var panes: [UUID: String?] = [:]
         var producedOutput: Set<UUID> = []
+        var hasProducedOutput = false
         var integrationStarted = false
         var stopping = false
         var reconnect = false
@@ -54,7 +55,7 @@ public final class WorkspaceTerminalController {
     public var openedWorkspaces: Set<String> { Set(connections.keys) }
 
     public func hasProducedOutput(_ workspace: String) -> Bool {
-        connections[workspace]?.producedOutput.isEmpty == false
+        connections[workspace]?.hasProducedOutput == true
     }
 
     /// Only definitive stop/removal withdraws terminal intent. Unknown status
@@ -174,6 +175,7 @@ public final class WorkspaceTerminalController {
         case "terminal_focus": onFocus?(workspace)
         case "terminal_output":
             connection.producedOutput.insert(pane)
+            connection.hasProducedOutput = true
             retryIntegration(workspace)
         case "terminal_directory": connection.panes[pane] = .some(directory)
         case "terminal_exit", "terminal_launch_failed":
@@ -182,6 +184,10 @@ public final class WorkspaceTerminalController {
             }
             connection.panes.removeValue(forKey: pane)
             connection.producedOutput.remove(pane)
+            if kind == "terminal_exit" {
+                emit(WorkspaceTerminalEffect(kind: "terminal_close", workspaceID: workspace,
+                    generation: generation, paneID: pane, executable: nil, arguments: [], message: nil))
+            }
             if connection.panes.isEmpty { disconnect(workspace) }
         default: return false
         }

@@ -398,7 +398,7 @@ private func countWidgets(_ widget: UnsafeMutablePointer<GtkWidget>, cssName: St
 
 private func countEnabledButtons(_ widget: UnsafeMutablePointer<GtkWidget>) -> Int {
     let isEnabledButton = String(cString: gtk_widget_get_css_name(widget)) == "button"
-        && gtk_widget_get_sensitive(widget) != 0
+        && gtk_widget_is_sensitive(widget) != 0
     var count = isEnabledButton ? 1 : 0
     var child = gtk_widget_get_first_child(widget)
     while let current = child {

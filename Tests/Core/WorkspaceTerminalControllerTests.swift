@@ -29,6 +29,31 @@ private final class TimeoutMasterScheduler: SSHTransportScheduling {
 }
 
 final class WorkspaceTerminalControllerTests: XCTestCase {
+    func testLastShellExitStillWaitsForHookCleanup() throws {
+        let master = ControlledMaster()
+        var effects: [WorkspaceTerminalEffect] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) })
+        var cleanup: (() -> Void)?
+        controller.beforeDisconnect = { _, _, _, completion in
+            if controller.hasProducedOutput("pod") { cleanup = completion }
+            else { completion() }
+        }
+        try controller.connect("pod")
+        master.ready()
+        let launch = try XCTUnwrap(effects.first)
+        let pane = try XCTUnwrap(launch.paneID)
+        XCTAssertTrue(controller.report(workspace: "pod", generation: launch.generation,
+            pane: pane, kind: "terminal_output"))
+        XCTAssertTrue(controller.report(workspace: "pod", generation: launch.generation,
+            pane: pane, kind: "terminal_exit"))
+        XCTAssertNotNil(cleanup, "last shell exit discarded evidence needed to remove its hooks")
+        XCTAssertEqual(effects.filter { $0.kind == "terminal_close" && $0.paneID == pane }.count, 1,
+                       "last shell exit must remove the departed frontend pane")
+        XCTAssertEqual(master.state, .ready, "master exited before hook cleanup could run")
+        cleanup?()
+        XCTAssertEqual(master.state, .stopping)
+    }
     func testFocusSelectsOnlyTheCurrentPaneGeneration() throws {
         let master = ControlledMaster()
         var effects: [WorkspaceTerminalEffect] = []

@@ -30,6 +30,12 @@ struct WorkspaceWindowTests {
                 throw TestFailure("GTK application registration failed")
             }
 
+            if CommandLine.arguments.dropFirst().contains("lifecycle") {
+                try testLifecycleControls(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
+
             let window = WorkspaceWindow(application: application)
             var commands: [(String, [String: String]?)] = []
             window.onCommand = { kind, payload in commands.append((kind, payload)) }
@@ -57,7 +63,7 @@ struct WorkspaceWindowTests {
             let firstRow = gtk_widget_get_first_child(rows)!
             let secondRow = gtk_widget_get_next_sibling(firstRow)!
             try expect(gtk_widget_get_next_sibling(secondRow) == nil, "sidebar did not show both workspaces")
-            _ = gtk_widget_activate(secondRow)
+            _ = gtk_widget_activate(gtk_widget_get_first_child(secondRow)!)
             try expect(pumpUntil { commands.contains { $0.0 == "select" && $0.1?["workspace_id"] == otherWorkspace.id } },
                        "clicking a workspace row did not select it")
             try expect(!commands.contains { $0.0 == "connect" }, "row selection opened another terminal")
@@ -268,6 +274,13 @@ struct WorkspaceWindowTests {
                 pane: replacement.paneID, executable: "/bin/sh", arguments: ["-c", "exec sleep 30"]
             ))
             try expect(window.terminalCount == 1, "a fresh connection generation could not launch")
+            let silentPane = window.pane(for: replacement)!
+            silentPane.resize(columns: 90, rows: 25)
+            _ = gtk_widget_grab_focus(silentPane.widget)
+            _ = pumpUntil(timeout: 0.2) { false }
+            try expect(!commands.contains {
+                $0.0 == "terminal_output" && $0.1?["pane_id"] == replacement.paneID.uuidString.lowercased()
+            }, "mapping/resizing a silent VTE child falsely confirmed SSH output")
             window.closeTerminal(replacement)
 
             gtk_window_destroy(window.window)
@@ -294,6 +307,76 @@ struct WorkspaceWindowTests {
         ]
         let data = try JSONSerialization.data(withJSONObject: object)
         return try JSONDecoder().decode(WorkspaceTerminalEffect.self, from: data)
+    }
+
+    private static func testLifecycleControls(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let window = WorkspaceWindow(application: application)
+        defer { gtk_window_destroy(window.window) }
+        var commands: [(String, [String: String]?)] = []
+        window.onCommand = { commands.append(($0, $1)) }
+        window.present()
+        func update(_ state: String, operations: String = "[]") throws {
+            let json = """
+            {"revision":1,"workspaces":[{"id":"pod","provider":"test","source":"/tmp","lastUsed":"","state":"\(state)"}],
+             "selectedID":"pod","layout":{},"terminalPanes":[],"badges":[],"operations":\(operations)}
+            """
+            window.update(try JSONDecoder().decode(WorkspaceControllerSnapshot.self, from: Data(json.utf8)))
+            while g_main_context_iteration(nil, 0) != 0 {}
+        }
+        let root = gtk_window_get_child(window.window)!
+        try update("Stopped")
+        try expect(commands.isEmpty, "selecting a stopped workspace issued a lifecycle command")
+        guard let start = namedWidget("start-workspace", in: root) else {
+            throw TestFailure("stopped workspace has no Start action")
+        }
+        _ = gtk_widget_activate(start)
+        try expect(pumpUntil { commands.contains { $0.0 == "start" && $0.1?["workspace_id"] == "pod" } },
+                   "Start did not target the selected workspace")
+        try update("Stopped", operations: """
+        [{"id":"request-42","kind":"start","workspaceID":"pod","state":"running","output":"Preparing λ界🙂"}]
+        """)
+        try expect(containsLabel("Preparing λ界🙂", in: root), "operation output is not visible")
+        try expect(namedWidget("start-workspace", in: root) == nil, "busy workspace offers another Start")
+        guard let cancel = namedWidget("cancel-operation", in: root) else { throw TestFailure("start has no Cancel") }
+        _ = gtk_widget_activate(cancel)
+        try expect(pumpUntil { commands.contains { $0.0 == "cancel" && $0.1?["request_id"] == "request-42" } },
+                   "Cancel did not identify its owned operation")
+        try update("Running")
+        guard let stop = namedWidget("stop-workspace", in: root) else { throw TestFailure("running workspace has no Stop") }
+        window.setActionsEnabled(false)
+        try expect(gtk_widget_is_sensitive(stop) == 0, "backend failure leaves Stop enabled")
+        window.setActionsEnabled(true)
+        _ = gtk_widget_activate(stop)
+        try expect(pumpUntil { commands.contains { $0.0 == "stop" && $0.1?["workspace_id"] == "pod" } },
+                   "Stop did not target the selected workspace")
+        window.setStatus("Provider rejected stop")
+        try update("Running")
+        try expect(containsLabel("Provider rejected stop", in: root), "polling erased the operation failure")
+        try update("Unknown")
+        try expect(namedWidget("start-workspace", in: root) == nil, "unknown state offers Start")
+        try expect(namedWidget("stop-workspace", in: root) == nil, "unknown state offers Stop")
+        print("start-stop=state-aware operation=visible cancellation=targeted")
+    }
+
+    private static func namedWidget(_ name: String, in widget: UnsafeMutablePointer<GtkWidget>) -> UnsafeMutablePointer<GtkWidget>? {
+        if String(cString: gtk_widget_get_name(widget)) == name { return widget }
+        var child = gtk_widget_get_first_child(widget)
+        while let current = child {
+            if let match = namedWidget(name, in: current) { return match }
+            child = gtk_widget_get_next_sibling(current)
+        }
+        return nil
+    }
+
+    private static func containsLabel(_ text: String, in widget: UnsafeMutablePointer<GtkWidget>) -> Bool {
+        if String(cString: gtk_widget_get_css_name(widget)) == "label",
+           String(cString: gtk_label_get_text(OpaquePointer(widget))).contains(text) { return true }
+        var child = gtk_widget_get_first_child(widget)
+        while let current = child {
+            if containsLabel(text, in: current) { return true }
+            child = gtk_widget_get_next_sibling(current)
+        }
+        return false
     }
 
     private static func pumpUntil(timeout: TimeInterval = 4, _ predicate: () -> Bool) -> Bool {

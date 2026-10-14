@@ -165,6 +165,17 @@ public final class WorkspaceController: @unchecked Sendable {
         lock.unlock()
     }
 
+    public static func shouldPresentNotification(
+        workspaceID: String, selectedID: String?, applicationIsActive: Bool
+    ) -> Bool {
+        !applicationIsActive || workspaceID != selectedID
+    }
+
+    public func canInstallIntegration(workspaceID: String, ownedControlPath: String?) -> Bool {
+        guard let workspace = snapshot.workspaces.first(where: { $0.id == workspaceID }) else { return false }
+        return workspace.state == "Running" || (ownedControlPath != nil && workspace.state != "Stopped")
+    }
+
     @discardableResult
     public func receiveNotification(workspaceID: String) -> Bool {
         lock.lock()

@@ -89,6 +89,8 @@ var pollGeneration: UInt64 = 0
 var seenDefinitive: Set<String> = []
 var autoConnect: Set<String> = []
 var starting: Set<String> = []
+var stateNotifyGate = StateNotifyGate()
+var statusDebouncer = RunningDebouncer()
 var notifyListener: NotifyListener?
 var notifyToken = ""
 private final class IntegrationJob {
@@ -139,6 +141,7 @@ workspaceCommands.onChange = {
 }
 
 terminals.onFirstOutput = { workspace, _ in
+    if stateNotifyGate.confirmSSH(workspace) { emitStateNotification(workspace, event: "started") }
     if integrationJobs.values.contains(where: { $0.workspace == workspace }) { return false }
     do { try installIntegration(workspace, requestID: nil) }
     catch { _ = send(BackendProtocolMessage(kind: "platform_error", payload: ["message": "Claude integration unavailable: \(error)"])) }
@@ -154,10 +157,21 @@ terminals.beforeDisconnect = { workspace, _, controlPath, completion in
 }
 terminals.onFocus = { workspace in controller.select(workspace) }
 
+private func emitStateNotification(_ workspace: String, event: String) {
+    guard !stopping, controller.receiveNotification(workspaceID: workspace) else { return }
+    _ = send(BackendProtocolMessage(kind: "platform_notify", payload: [
+        "workspace_id": workspace,
+        "title": controller.snapshot.layout.aliases[workspace] ?? workspace,
+        "message": "Workspace \(event)", "event": event,
+    ]))
+    _ = sendSnapshot(nil, from: controller)
+}
+
 private func installIntegration(_ workspace: String, requestID: String?) throws {
     try Devpod.validateId(workspace)
     guard !notifyToken.isEmpty, notifyListener != nil else { throw DevpodError("notification listener unavailable") }
-    guard controller.snapshot.workspaces.contains(where: { $0.id == workspace && $0.state == "Running" }) else {
+    let controlPath = terminals.controlPath(for: workspace)
+    guard controller.canInstallIntegration(workspaceID: workspace, ownedControlPath: controlPath) else {
         throw DevpodError("workspace is not running: \(workspace)")
     }
     guard !integrationJobs.values.contains(where: { $0.workspace == workspace }) else {
@@ -165,7 +179,6 @@ private func installIntegration(_ workspace: String, requestID: String?) throws 
     }
     // The first-output path always has a ready owned master. The explicit
     // installation command can also be used without an open terminal.
-    let controlPath = terminals.controlPath(for: workspace)
     let id = UUID(), job = IntegrationJob(workspace: workspace, controlPath: controlPath), token = notifyToken
     integrationJobs[id] = job
     DispatchQueue.global(qos: .utility).async {
@@ -420,7 +433,10 @@ private func handle(_ message: BackendProtocolMessage) {
         let requestID = message.id
         let submittedGeneration = pollGeneration
         operations.submit(
-            operation: { try Poller.pollOnce(devpod) },
+            operation: {
+                let workspaces = try Devpod.list(devpod)
+                return (workspaces, Poller.fetchStatuses(devpod, workspaces))
+            },
             completion: { result in
                 guard submittedGeneration == pollGeneration else {
                     // Re-read rather than acknowledging a pre-operation state.
@@ -429,9 +445,15 @@ private func handle(_ message: BackendProtocolMessage) {
                     return
                 }
                 switch result {
-                case let .success(views):
+                case let .success(fetched):
+                    let views = Poller.merge(fetched.0, statusDebouncer.filter(fetched.1))
+                    let previousIDs = Set(controller.snapshot.workspaces.map(\.id))
                     let revision = controller.snapshot.revision &+ 1
                     _ = controller.apply(PollUpdate(revision: revision, views: views))
+                    for removed in previousIDs.subtracting(views.map(\.id)) { stateNotifyGate.forget(removed) }
+                    for (workspace, event) in stateNotifyGate.observe(views) {
+                        emitStateNotification(workspace, event: event)
+                    }
                     if !views.contains(where: { $0.id == controller.snapshot.selectedID }) {
                         controller.select(views.first(where: { $0.state == "Running" })?.id ?? views.first?.id)
                     }
@@ -458,6 +480,12 @@ private func handle(_ message: BackendProtocolMessage) {
                             "message": "Could not connect to running workspace \(workspace): \(error)",
                         ])) }
                     }
+                    // Match macOS's no-auto-wake policy for external starts.
+                    // Intended connections still require first output, even
+                    // if their master failed and is waiting for explicit retry.
+                    for workspace in stateNotifyGate.releasePending(
+                        notIn: autoConnect.union(terminals.openedWorkspaces).union(starting)
+                    ) { emitStateNotification(workspace, event: "started") }
                     _ = sendSnapshot(requestID, from: controller)
                 case let .failure(error):
                     _ = send(BackendProtocolMessage(

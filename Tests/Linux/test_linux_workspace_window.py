@@ -105,6 +105,14 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("snapshot-identity=stable stale-generation=rejected close=workspace-preserved", result.stdout)
 
+    def test_start_stop_controls_follow_state_and_operation_lifecycle(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "lifecycle"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=12)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("start-stop=state-aware operation=visible cancellation=targeted", result.stdout)
+
     def test_backend_snapshot_effects_and_shutdown_reach_the_gtk_window(self):
         events = self.build / "linux-app-events.jsonl"
         environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none",
