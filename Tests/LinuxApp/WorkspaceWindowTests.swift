@@ -34,13 +34,18 @@ struct WorkspaceWindowTests {
                 id: "fixture-pod", provider: "docker", source: "/tmp/project",
                 lastUsed: "", state: "Running", error: nil
             )
+            let otherWorkspace = WorkspaceView(
+                id: "fixture-pod-2", provider: "docker", source: "/tmp/other",
+                lastUsed: "", state: "Running", error: nil
+            )
             window.update(WorkspaceControllerSnapshot(
-                revision: 1, workspaces: [workspace], selectedID: "fixture-pod",
+                revision: 1, workspaces: [workspace, otherWorkspace], selectedID: "fixture-pod",
                 layout: Layout(), terminalPanes: []
             ))
             guard let root = gtk_window_get_child(window.window), containsButton("Reconnect", in: root) else {
                 throw TestFailure("running workspace reconnect button is missing")
             }
+            try expect(countButtons("Open", in: root) == 2, "the sidebar did not display every running workspace")
             let generation = UUID()
             let paneID = UUID()
             let identity = TerminalPaneIdentity(workspaceID: workspace.id, generation: generation, paneID: paneID)
@@ -61,7 +66,7 @@ struct WorkspaceWindowTests {
             var baselineNatural: Int32 = 0
             gtk_widget_measure(sidebar, GTK_ORIENTATION_HORIZONTAL, -1, &baselineMinimum, &baselineNatural, nil, nil)
             window.update(WorkspaceControllerSnapshot(
-                revision: 1, workspaces: [workspace], selectedID: workspace.id,
+                revision: 2, workspaces: [workspace, otherWorkspace], selectedID: workspace.id,
                 layout: Layout(aliases: [workspace.id: String(repeating: "LongProject", count: 10)]), terminalPanes: []
             ))
             window.setStatus("Claude hooks installed for fixture-pod. Reload its terminal to enable ded and directory reporting in this shell.")
@@ -237,6 +242,21 @@ struct WorkspaceWindowTests {
             child = gtk_widget_get_next_sibling(current)
         }
         return false
+    }
+
+    private static func countButtons(_ title: String, in widget: UnsafeMutablePointer<GtkWidget>) -> Int {
+        let ownMatch = String(cString: gtk_widget_get_css_name(widget)) == "button"
+            && widget.withMemoryRebound(to: GtkButton.self, capacity: 1) { button in
+                guard let label = gtk_button_get_label(button) else { return false }
+                return String(cString: label) == title
+            }
+        var count = ownMatch ? 1 : 0
+        var child = gtk_widget_get_first_child(widget)
+        while let current = child {
+            count += countButtons(title, in: current)
+            child = gtk_widget_get_next_sibling(current)
+        }
+        return count
     }
 }
 

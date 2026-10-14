@@ -16,6 +16,7 @@ public struct WorkspaceTerminalEffect: Codable, Equatable, Sendable {
 public final class WorkspaceTerminalController {
     public var onFirstOutput: ((String, UUID) -> Bool)?
     public var onDisconnect: ((String, UUID) -> Void)?
+    public var beforeDisconnect: ((String, UUID, String, @escaping () -> Void) -> Void)?
     public var onFocus: ((String) -> Void)?
     private final class Connection {
         let generation = UUID()
@@ -50,6 +51,11 @@ public final class WorkspaceTerminalController {
     }
 
     public var hasOwnedTransports: Bool { !connections.isEmpty }
+    public var openedWorkspaces: Set<String> { Set(connections.keys) }
+
+    public func hasProducedOutput(_ workspace: String) -> Bool {
+        connections[workspace]?.producedOutput.isEmpty == false
+    }
 
     /// Only definitive stop/removal withdraws terminal intent. Unknown status
     /// must not destroy a working shell; a stale queued reload must not reopen it.
@@ -200,8 +206,16 @@ public final class WorkspaceTerminalController {
         guard !connection.stopping else { return }
         connection.stopping = true
         onDisconnect?(workspace, connection.generation)
-        closePanes(workspace, connection)
-        connection.transport.stop()
+        let finish = { [weak self, weak connection] in
+            guard let self, let connection, self.isCurrent(workspace, connection) else { return }
+            self.closePanes(workspace, connection)
+            connection.transport.stop()
+        }
+        if let beforeDisconnect {
+            beforeDisconnect(workspace, connection.generation, connection.transport.controlPath, finish)
+        } else {
+            finish()
+        }
     }
 
     private func closePanes(_ workspace: String, _ connection: Connection) {

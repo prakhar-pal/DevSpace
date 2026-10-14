@@ -235,6 +235,32 @@ final class HooksTests: XCTestCase {
         XCTAssertFalse(write[2].contains("chmod +x"))
     }
 
+    func testRemoveDeletesOnlyDevspaceHooksAndPreservesOtherSettings() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("claude-remove-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let runner = LocalShellRunner(directory: directory)
+        let settingsURL = directory.appendingPathComponent("settings.json")
+        let existing: [String: Any] = [
+            "permissions": ["allow": ["Bash(git:*)"]],
+            "hooks": [
+                "Notification": [
+                    ["hooks": [["type": "command", "command": "echo unrelated"]]],
+                ],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: existing).write(to: settingsURL)
+        try Hooks.inject(runner, podID: "wc-1", token: "tok", installManualHelper: false)
+
+        try Hooks.remove(runner, podID: "wc-1")
+
+        let result = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: settingsURL)) as? [String: Any])
+        XCTAssertEqual(result["permissions"] as? [String: [String]], ["allow": ["Bash(git:*)"]])
+        XCTAssertEqual(eventArray(result, "Notification")?.count, 1)
+        XCTAssertNil(eventArray(result, "Stop"))
+        XCTAssertNil(eventArray(result, "PreToolUse"))
+    }
+
     func testInjectPreservesExistingSettingsInWrittenPayload() throws {
         let existing: [String: Any] = [
             "permissions": ["allow": ["Bash(git:*)"]],

@@ -85,6 +85,9 @@ var handshaken = false
 var stopping = false
 var shutdownExitStatus: Int32 = 0
 var pollGeneration: UInt64 = 0
+var seenDefinitive: Set<String> = []
+var autoConnect: Set<String> = []
+var starting: Set<String> = []
 var notifyListener: NotifyListener?
 var notifyToken = ""
 private final class IntegrationJob {
@@ -144,6 +147,10 @@ terminals.onDisconnect = { workspace, _ in
     for job in integrationJobs.values where job.workspace == workspace { job.cancel() }
     for job in uploadJobs.values where job.workspace == workspace { job.cancel() }
 }
+terminals.beforeDisconnect = { workspace, _, controlPath, completion in
+    guard terminals.hasProducedOutput(workspace) else { completion(); return }
+    removeHooksWhenIntegrationSettles(workspace, controlPath: controlPath, completion: completion)
+}
 terminals.onFocus = { workspace in controller.select(workspace) }
 
 private func installIntegration(_ workspace: String, requestID: String?) throws {
@@ -185,6 +192,31 @@ private func installIntegration(_ workspace: String, requestID: String?) throws 
                 _ = send(BackendProtocolMessage(id: requestID, kind: requestID == nil ? "platform_error" : "error",
                     payload: ["message": "Claude integration could not be installed; existing invalid settings are left untouched"]))
             }
+        }
+    }
+}
+
+private func removeHooksWhenIntegrationSettles(
+    _ workspace: String,
+    controlPath: String,
+    completion: @escaping () -> Void
+) {
+    guard !integrationJobs.values.contains(where: { $0.workspace == workspace }) else {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            removeHooksWhenIntegrationSettles(workspace, controlPath: controlPath, completion: completion)
+        }
+        return
+    }
+    let runner = SSHWorkspaceCommandRunner(podID: workspace, controlPath: controlPath)
+    DispatchQueue.global(qos: .utility).async {
+        let result = Result { try Hooks.remove(runner, podID: workspace) }
+        DispatchQueue.main.async {
+            if case .failure = result, !stopping {
+                _ = send(BackendProtocolMessage(kind: "platform_error", payload: [
+                    "message": "Claude notification hooks could not be removed from \(workspace)",
+                ]))
+            }
+            completion()
         }
     }
 }
@@ -348,11 +380,13 @@ private func handle(_ message: BackendProtocolMessage) {
             let workspace = message.payload?["workspace_id"] ?? ""
             try Devpod.validateId(workspace)
             if message.kind == "disconnect" {
+                autoConnect.remove(workspace)
                 terminals.disconnect(workspace)
             } else {
                 guard controller.snapshot.workspaces.contains(where: { $0.id == workspace && $0.state == "Running" }) else {
                     throw DevpodError("workspace is not running: \(workspace)")
                 }
+                autoConnect.insert(workspace)
                 controller.select(workspace)
                 _ = sendSnapshot(nil, from: controller)
                 if message.kind == "reconnect" { try terminals.reconnect(workspace) }
@@ -392,7 +426,29 @@ private func handle(_ message: BackendProtocolMessage) {
                 case let .success(views):
                     let revision = controller.snapshot.revision &+ 1
                     _ = controller.apply(PollUpdate(revision: revision, views: views))
+                    let liveIDs = Set(views.map(\.id))
+                    autoConnect.formIntersection(liveIDs)
+                    starting.formIntersection(liveIDs)
+                    let plan = WorkspaceLifecycle.reconcile(
+                        workspaces: views,
+                        seenDefinitive: seenDefinitive,
+                        autoConnect: autoConnect,
+                        opened: terminals.openedWorkspaces,
+                        starting: starting,
+                        shuttingDown: []
+                    )
+                    seenDefinitive = plan.seenDefinitive
+                    autoConnect = plan.autoConnect
+                    for id in Array(starting) where views.contains(where: { $0.id == id && $0.state == "Running" }) {
+                        starting.remove(id)
+                    }
                     terminals.reconcile(views)
+                    for workspace in plan.connect where !terminals.openedWorkspaces.contains(workspace) {
+                        do { try terminals.connect(workspace) }
+                        catch { _ = send(BackendProtocolMessage(kind: "platform_error", payload: [
+                            "message": "Could not connect to running workspace \(workspace): \(error)",
+                        ])) }
+                    }
                     _ = sendSnapshot(requestID, from: controller)
                 case let .failure(error):
                     _ = send(BackendProtocolMessage(
@@ -406,11 +462,24 @@ private func handle(_ message: BackendProtocolMessage) {
 
     case "create", "start", "stop", "delete", "recreate":
         do {
+            let workspace = message.payload?["workspace_id"]
+            if let workspace, message.kind == "start" {
+                try Devpod.validateId(workspace)
+                autoConnect.insert(workspace)
+                starting.insert(workspace)
+            } else if let workspace, ["stop", "delete", "recreate"].contains(message.kind) {
+                autoConnect.remove(workspace)
+                starting.remove(workspace)
+            }
             try workspaceCommands.submit(message, prepare: { ready in
-                if ["stop", "delete", "recreate"].contains(message.kind), let workspace = message.payload?["workspace_id"] {
+                if ["stop", "delete", "recreate"].contains(message.kind), let workspace {
                     terminals.disconnect(workspace, completion: ready)
                 } else { ready() }
             }) { response in
+                if message.kind == "start", response.kind != "completed", let workspace {
+                    autoConnect.remove(workspace)
+                    starting.remove(workspace)
+                }
                 pollGeneration &+= 1
                 if let created = response.payload?["created_id"] { controller.select(created) }
                 _ = send(response)

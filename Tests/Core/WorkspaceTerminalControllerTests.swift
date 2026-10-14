@@ -105,7 +105,9 @@ final class WorkspaceTerminalControllerTests: XCTestCase {
         let launch = try XCTUnwrap(effects.first)
         let pane = try XCTUnwrap(launch.paneID)
         XCTAssertTrue(started.isEmpty, "integration must not delay terminal creation")
+        XCTAssertFalse(controller.hasProducedOutput("pod"))
         XCTAssertTrue(controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_output"))
+        XCTAssertTrue(controller.hasProducedOutput("pod"))
         XCTAssertTrue(controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_output"))
         XCTAssertEqual(started, [launch.generation])
         controller.disconnect("pod")
@@ -267,5 +269,27 @@ final class WorkspaceTerminalControllerTests: XCTestCase {
         master.stopped()
         XCTAssertFalse(effects.contains { $0.kind == "terminal_launch" })
         XCTAssertThrowsError(try controller.connect("pod"))
+    }
+
+    func testDisconnectWaitsForHookCleanupBeforeStoppingMaster() throws {
+        let master = ControlledMaster()
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { _ in })
+        var cleanup: (() -> Void)?
+        controller.beforeDisconnect = { workspace, _, controlPath, completion in
+            XCTAssertEqual(workspace, "pod")
+            XCTAssertEqual(controlPath, master.controlPath)
+            cleanup = completion
+        }
+        try controller.connect("pod")
+        XCTAssertEqual(controller.openedWorkspaces, ["pod"])
+        master.ready()
+
+        controller.disconnect("pod")
+
+        XCTAssertEqual(master.state, .ready, "the live SSH master must remain available while hooks are removed")
+        XCTAssertTrue(controller.openedWorkspaces.contains("pod"), "disconnect cleanup still owns the live master")
+        try XCTUnwrap(cleanup)()
+        XCTAssertEqual(master.state, .stopping)
     }
 }
