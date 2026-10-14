@@ -27,11 +27,14 @@ Tasks 1–4 are implemented and their host verification is recorded in the
 [completion audit](2026-10-13-linux-completion-audit.md). Verification uses the
 global Swift.org 6.4.1 Ubuntu 26.04 toolchain; no compiler is installed in the
 repository. The obsolete Linux Ghostty/Zig app pipeline has been retired.
-Automated current-host suites pass. The actual `wc-1` shell round-trip through
-the GTK/VTE app passed under Xvfb. Task 5 remains open for visual inspection on
-the unlocked host display and hook/notification/ded/image flows through the
-visible app, plus the explicitly deferred release/manual gates. DevSpaceDev is
-running, but the host display was locked during this check.
+Automated current-host suites pass. The actual text-only `wc-1` shell
+round-trip through the GTK/VTE app passed under Xvfb, with the workspace still
+running after terminal close. An unlocked-host inspection found the VTE widget
+was only using its natural height; the pane and VTE now expand, covered by an
+allocation regression test. The updated DevSpaceDev bundle rebuilt and
+launched. Task 5 remains open for post-fix visual review, close/reopen
+inspection, and hook/notification/ded/image paths through the visible app.
+Real clipboard/image upload remains unverified pending separate approval.
 
 ## File Boundaries
 
