@@ -113,7 +113,9 @@ workspace, pane, and connection generation so delayed events cannot target a
 replacement pane. Closing a terminal does not stop its workspace.
 
 The sidebar lists every DevPod as a selectable row without extra action
-buttons. Status refresh runs automatically. Running DevPods connect on startup
+buttons. Rows show a green dot for running DevPods and a grey dot for stopped
+or unresolved DevPods; selection is indicated by the row highlight. Status
+refresh runs automatically. Running DevPods connect on startup
 and retain their terminals and notification hooks in the background; the right
 pane displays only the selected workspace's terminal. Clicking a sidebar row
 switches the displayed terminal without restarting its shell. The first running

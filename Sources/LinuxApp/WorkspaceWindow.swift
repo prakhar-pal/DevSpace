@@ -226,7 +226,12 @@ final class WorkspaceWindow {
             .assumingMemoryBound(to: GtkBox.self)
         let title = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6)!)
             .assumingMemoryBound(to: GtkBox.self)
-        let label = gtk_label_new("\(alias ?? workspace.id) · \(workspace.state)\(selected ? " · Selected" : "")\(badged ? " · ●" : "")")!
+        let statusDot = gtk_label_new(nil)!
+        let statusColor = workspace.state == "Running" ? "#2e7d32" : "#808080"
+        gtk_label_set_markup(OpaquePointer(statusDot), "<span foreground=\"\(statusColor)\">●</span>")
+        gtk_widget_set_tooltip_text(statusDot, workspace.state)
+        gtk_box_append(title, statusDot)
+        let label = gtk_label_new("\(alias ?? workspace.id)\(badged ? " · ●" : "")")!
         Self.configureSidebarText(label)
         gtk_widget_set_hexpand(label, 1)
         gtk_box_append(title, label)
