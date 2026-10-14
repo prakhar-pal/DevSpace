@@ -21,6 +21,11 @@ final class HostSSHTransportTests: XCTestCase {
         wait(for: [ready], timeout: 25)
         XCTAssertNil(failure, "SSH failure: \(String(describing: failure)); stderr: \(transport.stderrTail)")
         guard failure == nil else { return }
+        let command = SSHWorkspaceCommandRunner(podID: workspace, controlPath: transport.controlPath)
+        try command.cancelNotificationForwarding(bundleIdentifier: "com.prakharp.devspace.dev")
+        XCTAssertEqual(try command.run([
+            "ssh", "--command", "printf 'devspace-master-live'", "--start-services=false", "--", workspace,
+        ]), "devspace-master-live", "cancelling the notification forward closed the owned master")
         let stopped = expectation(description: "real master stopped")
         transport.onStopped = { stopped.fulfill() }
         transport.stop()

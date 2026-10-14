@@ -334,6 +334,12 @@ private func verifyHostImage(_ context: TestContext, pane: TerminalPane,
 
 private func verifyHostIntegration(_ context: TestContext, pane: TerminalPane,
                                    window: WorkspaceWindow, controller: LinuxApplicationController) {
+    if context.notificationActivated {
+        guard window.snapshot.selectedID == context.fixture,
+              gtk_window_get_focus(window.window) == pane.widget else { return }
+        context.hostIntegrationVerified = true
+        return
+    }
     if !context.hostSelectionSent {
         guard let other = window.snapshot.workspaces.first(where: { $0.id != context.fixture }) else {
             context.failure = "notification badge check requires another listed workspace"
@@ -363,7 +369,7 @@ private func verifyHostIntegration(_ context: TestContext, pane: TerminalPane,
     g_action_group_activate_action(OpaquePointer(UnsafeMutableRawPointer(context.application)),
                                   "activate-workspace", target)
     g_variant_unref(target)
-    context.hostIntegrationVerified = true
+    context.notificationActivated = true
 }
 
 private func setPrivateClipboardImage() -> Bool {
