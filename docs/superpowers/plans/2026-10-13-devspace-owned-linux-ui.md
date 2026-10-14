@@ -100,7 +100,7 @@ notification, clipboard, or image acceptance.
 - [x] Run `python3 -B -m unittest Tests.Linux.test_linux_build -v`; build-contract tests cover the Swift UI target and system modules.
 - [x] Add system-library module maps and the minimal Swift GTK application entry. Keep headers limited to `<gtk/gtk.h>` and `<vte/vte.h>`.
 - [x] Run the targeted build-contract test and `swift build --product DevSpaceLinuxApp --scratch-path .tmp/swift-linux-tests` with global Swift 6.4.1 and installed GTK4/VTE dependencies.
-- [ ] Run `swift build --product DevSpaceApp` on macOS only when available; compare `Package.resolved` before/after and restore it unchanged if Linux SwiftPM modified it.
+- [x] macOS CI on c1b00f9 passed tests, development app assembly (including DevSpaceApp build), and release executable build. The local macOS Package.resolved remains unchanged after Linux verification.
 
 ### Task 2: Implement the Swift GTK window and VTE terminal pane
 

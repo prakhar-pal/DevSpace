@@ -137,6 +137,7 @@ class LinuxBuildTests(unittest.TestCase):
         obsolete = (
             ROOT / "scripts/prepare-linux-frontend.py",
             ROOT / "scripts/prepare-linux-ghostty.py",
+            ROOT / "Tests/Linux/test_frontend_install.py",
             ROOT / "Sources/Linux/backend_client.zig",
             ROOT / "Sources/Linux/gtk",
             ROOT / "Sources/Linux/patches",

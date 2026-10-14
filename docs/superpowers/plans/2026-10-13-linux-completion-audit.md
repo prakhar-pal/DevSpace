@@ -2,6 +2,20 @@
 
 ## Current checkpoint — 2026-10-14
 
+CI run38579941090 on c1b00f9 passed every Linux and macOS job, including
+container Core/protocol/integration/development bundle assembly and macOS
+tests/development assembly/release executable build. Both host release products
+rebuilt, optimized PTY verification passed five tests, and the separately staged
+production-bundle-next resolves dependencies and preserves the GPL and Swift
+license files byte-for-byte. The installed/running production app was not touched.
+
+The final migration cleanup removed two obsolete Ghostty-binary install tests,
+which exercised a historical artifact locally and skipped on clean CI rather
+than checking the GTK/VTE app. Existing native bundle relocation/dependency
+coverage remains. The retirement check failed before removal, then the full
+Linux suite passed73 tests with three opt-in skips in95.223 seconds. A smaller
+count here reflects removal of obsolete coverage, not removal of GTK/VTE checks.
+
 CI run38569596450 on `7841009` passed container Core226 (two skips), protocol4,
 and macOS tests/development assembly/release build. Linux integration's only
 failure was a test hard-coding package version0.7.1 instead of reading merged
