@@ -24,5 +24,7 @@ assembly requires `--icu-license` whenever the runtime contains
 distribution rights merely from a supplied filename.
 
 Swift runtime licenses are taken from the selected toolchain at assembly time.
-Artwork licensing and the complete Debian copyright inventory remain separate
-release requirements.
+The custom DevSpace icons are GPL-3.0-or-later, as confirmed by their creator.
+`packaging/debian/copyright` records the Linux binary inventory for the verified
+Swift.org 6.4.1 toolchain. It must be reviewed again when bundled components
+change; it does not relicense third-party libraries.

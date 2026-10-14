@@ -13,7 +13,7 @@ legacy tree lives in git history.
 
 ## License
 
-DevSpace-owned source code, documentation, and build scripts are licensed under
+DevSpace-owned source code, documentation, build scripts, and custom app icons are licensed under
 the GNU General Public License, version 3 or (at your option) any later version
 (`GPL-3.0-or-later`). See [LICENSE](LICENSE) for the complete terms.
 
@@ -23,9 +23,9 @@ of merchantability or fitness for a particular purpose.
 Third-party dependencies and copied materials retain their respective licenses;
 this declaration does not replace their copyright notices or license terms.
 In particular, the Apache-licensed `webapp-testing` skill retains its included
-license, and the Vercel `find-skills` material remains MIT-licensed. App icons
-are not included in this source-code license declaration pending confirmation
-of their artwork licensing. Binary releases must include applicable third-party
+license, and the Vercel `find-skills` material remains MIT-licensed. Both
+`Resources/DevSpace.icns` and `Resources/DevSpaceDev.icns` are custom DevSpace
+artwork covered by GPL-3.0-or-later. Binary releases must include applicable third-party
 notices and satisfy corresponding-source requirements.
 
 ## Features

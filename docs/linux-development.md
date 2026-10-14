@@ -79,16 +79,14 @@ data/third-party notices, for the verified Swift.org 6.4.1 runtime (ICU 76.1).
 Assembly and Debian packaging reject ICU-containing runtimes without a notice.
 With another toolchain, verify its ICU version and set `LINUX_ICU_LICENSE=` to
 the matching complete notice; direct assembly uses `--icu-license`.
-These files do not yet constitute a complete Debian copyright inventory.
-Supply a Debian-format copyright file and maintainer identity before building a package:
-The manifest must cover the project, artwork, and third-party code in the bundled runtime.
-The approved maintainer is `prakhar-pal <prakharpalpfdr+github@gmail.com>`;
-artwork licensing and the final copyright inventory remain open.
+`packaging/debian/copyright` records the project, creator-confirmed custom
+GPL-3.0-or-later artwork, and third-party code in the verified bundled runtime.
+The approved maintainer is `prakhar-pal <prakharpalpfdr+github@gmail.com>`.
 
 ```sh
 make linux-package \
-  LINUX_PACKAGE_COPYRIGHT=/path/to/debian/copyright \
-  LINUX_PACKAGE_MAINTAINER="Name <email>"
+  LINUX_PACKAGE_COPYRIGHT=packaging/debian/copyright \
+  LINUX_PACKAGE_MAINTAINER="prakhar-pal <prakharpalpfdr+github@gmail.com>"
 ```
 
 The result is `build/devspace_<version>_<architecture>.deb`. This target builds
