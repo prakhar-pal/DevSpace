@@ -34,7 +34,9 @@ paths with spaces or Unicode. Its `bin/devspace-dev` launcher selects the
 development channel and app identity, locates the sibling backend/runtime, and
 prepares PATH before starting the UI. It does not kill another DevSpace
 instance. Bundle replacement is limited to a generated bundle for the same
-channel and retains rollback/recovery behavior.
+channel and retains rollback/recovery behavior. Before `make linux-run`, verify
+no `DevSpaceDev` or `DevSpaceDevBackend` process is using that bundle; when one
+is active, stage to a separate `LINUX_DEV_BUNDLE` path instead.
 
 For direct toolchain selection:
 
