@@ -59,6 +59,7 @@ final class LinuxApplicationController {
         let window = WorkspaceWindow(application: application)
         self.window = window
         window.onCommand = { [weak self] kind, payload in self?.sendCommand(kind, payload: payload) }
+        registerNotificationAction()
         connectCloseRequest(window)
         window.present()
 
@@ -82,6 +83,7 @@ final class LinuxApplicationController {
         }
         do {
             let requestID = try backend.send(kind, payload: payload)
+            if ["connect", "reconnect", "start", "stop"].contains(kind) { window?.setStatus("") }
             if let imageSource { pendingImageSources[requestID] = imageSource }
         } catch {
             if let imageSource { try? FileManager.default.removeItem(at: imageSource) }
@@ -141,6 +143,9 @@ final class LinuxApplicationController {
     }
 
     deinit {
+        if started {
+            g_action_map_remove_action(OpaquePointer(UnsafeMutableRawPointer(application)), "activate-workspace")
+        }
         if pumpSource != 0 { _ = g_source_remove(pumpSource) }
         discardPendingImageSources()
         if backend.state != .stopped { backend.terminate() }
@@ -158,6 +163,7 @@ final class LinuxApplicationController {
         switch message.kind {
         case "ready":
             window?.setActionsEnabled(true)
+            if let warning = message.payload?["notify_error"] { window?.setNotificationWarning(warning) }
             if shutdownRequested { sendShutdownIfReady() } else { requestPoll() }
         case "snapshot":
             guard let json = message.payload?["json"] else {
@@ -243,11 +249,39 @@ final class LinuxApplicationController {
               let title = payload["title"], let body = payload["message"] else { return }
         let notification = g_notification_new(title)!
         g_notification_set_body(notification, body)
+        g_notification_set_default_action_and_target_value(
+            notification, "app.activate-workspace", g_variant_new_string(workspace)
+        )
         g_application_send_notification(
             UnsafeMutableRawPointer(application).assumingMemoryBound(to: GApplication.self),
             workspace, notification
         )
         g_object_unref(UnsafeMutableRawPointer(notification))
+    }
+
+    private func registerNotificationAction() {
+        let parameterType = g_variant_type_new("s")!
+        defer { g_variant_type_free(parameterType) }
+        let action = g_simple_action_new("activate-workspace", parameterType)!
+        let callback = unsafeBitCast(
+            devspaceLinuxActivateWorkspace as @convention(c)
+                (UnsafeMutableRawPointer?, OpaquePointer?, UnsafeMutableRawPointer?) -> Void,
+            to: GCallback.self
+        )
+        _ = g_signal_connect_data(
+            UnsafeMutableRawPointer(action), "activate", callback,
+            Unmanaged.passUnretained(self).toOpaque(), nil, GConnectFlags(rawValue: 0)
+        )
+        g_action_map_add_action(OpaquePointer(UnsafeMutableRawPointer(application)),
+                               OpaquePointer(UnsafeMutableRawPointer(action)))
+        g_object_unref(UnsafeMutableRawPointer(action))
+    }
+
+    fileprivate func activateWorkspace(_ workspaceID: String) {
+        guard let window, window.snapshot.workspaces.contains(where: { $0.id == workspaceID }) else { return }
+        window.present()
+        sendCommand("select", payload: ["workspace_id": workspaceID])
+        if let pane = window.pane(forWorkspace: workspaceID) { _ = gtk_widget_grab_focus(pane.widget) }
     }
 
     private func launchZed(_ url: String?) {
@@ -286,6 +320,14 @@ final class LinuxApplicationController {
         for source in pendingImageSources.values { try? FileManager.default.removeItem(at: source) }
         pendingImageSources.removeAll()
     }
+}
+
+@_cdecl("devspace_linux_activate_workspace")
+private func devspaceLinuxActivateWorkspace(_ action: UnsafeMutableRawPointer?, _ parameter: OpaquePointer?,
+                                            _ data: UnsafeMutableRawPointer?) {
+    guard let parameter, let data, let workspace = g_variant_get_string(parameter, nil) else { return }
+    Unmanaged<LinuxApplicationController>.fromOpaque(data).takeUnretainedValue()
+        .activateWorkspace(String(cString: workspace))
 }
 
 @_cdecl("devspace_linux_app_pump")

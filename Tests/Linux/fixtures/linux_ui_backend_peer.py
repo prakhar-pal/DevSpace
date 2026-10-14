@@ -40,6 +40,7 @@ for line in sys.stdin:
         send({"version": 1, "id": request["id"], "kind": "ready", "payload": {
             "channel": "development", "application_id": "com.prakharp.devspace.dev",
             "protocol_version": "1",
+            "notify_error": "fixture listener unavailable",
         }})
     elif kind == "poll":
         frame = snapshot(1)
@@ -56,6 +57,7 @@ for line in sys.stdin:
         send({"version": 1, "kind": "terminal_launch", "payload": {"json": json.dumps(effect)}})
         send({"version": 1, "id": request["id"], "kind": "completed"})
     elif kind == "terminal_output":
+        send({"version": 1, "kind": "platform_error", "payload": {"message": "fixture SSH error"}})
         stale = "00000000-0000-0000-0000-000000000003"
         for effect in (
             {"kind": "terminal_inject", "workspaceID": workspace, "generation": stale,
@@ -72,6 +74,10 @@ for line in sys.stdin:
             **json.loads(frame["payload"]["json"]),
             "terminalPanes": [{"id": pane, "workspaceID": workspace}],
         })
+        send(frame)
+    elif kind == "select":
+        frame = snapshot(2)
+        frame["id"] = request["id"]
         send(frame)
     elif kind == "terminal_exit":
         frame = snapshot(3)

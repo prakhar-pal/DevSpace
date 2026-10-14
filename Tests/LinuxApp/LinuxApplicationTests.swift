@@ -14,6 +14,7 @@ private final class TestContext {
     var terminalClosed = false
     var imagePasteSent = false
     var imagePastePath: String?
+    var notificationActivated = false
     var hostCommandSent = false
     var hostShellVerified = false
     var failure: String?
@@ -140,6 +141,34 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
     )
     if !context.terminalClosed,
        let pane = window.pane(for: identity), pane.text.contains("received:from-app") {
+        if !context.notificationActivated {
+            let actions = OpaquePointer(UnsafeMutableRawPointer(context.application))
+            guard g_action_group_has_action(actions, "activate-workspace") != 0 else {
+                context.failure = "notification workspace activation action is missing"
+                controller.requestShutdown()
+                return 1
+            }
+            for workspace in ["missing-pod", identity.workspaceID] {
+                let target = g_variant_ref_sink(g_variant_new_string(workspace))!
+                g_action_group_activate_action(actions, "activate-workspace", target)
+                g_variant_unref(target)
+            }
+            guard window.pane(for: identity) === pane, window.terminalCount == 1,
+                  gtk_window_get_focus(window.window) == pane.widget else {
+                context.failure = "notification activation failed to focus the existing terminal"
+                controller.requestShutdown()
+                return 1
+            }
+            guard let root = gtk_window_get_child(window.window),
+                  containsLabel(root, containing: "fixture listener unavailable"),
+                  containsLabel(root, containing: "fixture SSH error") else {
+                context.failure = "snapshot refresh erased an integration warning or operation error"
+                controller.requestShutdown()
+                return 1
+            }
+            context.notificationActivated = true
+            return 1
+        }
         if !context.imagePasteSent {
             let imageURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("devspace-paste-\(UUID().uuidString).png")

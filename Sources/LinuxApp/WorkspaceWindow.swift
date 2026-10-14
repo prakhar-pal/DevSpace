@@ -9,6 +9,7 @@ final class WorkspaceWindow {
     private let terminalContainer: UnsafeMutablePointer<GtkBox>
     private let emptyState: UnsafeMutablePointer<GtkWidget>
     private let statusLabel: UnsafeMutablePointer<GtkWidget>
+    private let notificationWarningLabel: UnsafeMutablePointer<GtkWidget>
     private var terminalPanes: [TerminalPaneIdentity: TerminalPane] = [:]
     private var terminalRoots: [TerminalPaneIdentity: UnsafeMutablePointer<GtkWidget>] = [:]
     private var actionsEnabled = true
@@ -52,7 +53,13 @@ final class WorkspaceWindow {
         gtk_box_append(sidebar, UnsafeMutableRawPointer(workspaceRows).assumingMemoryBound(to: GtkWidget.self))
         statusLabel = gtk_label_new("")!
         gtk_label_set_xalign(OpaquePointer(statusLabel), 0)
+        gtk_label_set_wrap(OpaquePointer(statusLabel), 1)
         gtk_box_append(sidebar, statusLabel)
+        notificationWarningLabel = gtk_label_new("")!
+        gtk_label_set_xalign(OpaquePointer(notificationWarningLabel), 0)
+        gtk_label_set_wrap(OpaquePointer(notificationWarningLabel), 1)
+        gtk_widget_set_visible(notificationWarningLabel, 0)
+        gtk_box_append(sidebar, notificationWarningLabel)
 
         let separator = gtk_separator_new(GTK_ORIENTATION_VERTICAL)!
         terminalContainer = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)!)
@@ -102,7 +109,6 @@ final class WorkspaceWindow {
             appendWorkspace(workspace, selected: workspace.id == next.selectedID,
                             alias: next.layout.aliases[workspace.id], badged: next.badges.contains(workspace.id))
         }
-        if !workspaces.isEmpty { gtk_label_set_text(OpaquePointer(statusLabel), "") }
     }
 
     func apply(_ effect: WorkspaceTerminalEffect) {
@@ -193,6 +199,11 @@ final class WorkspaceWindow {
 
     func setStatus(_ message: String) {
         gtk_label_set_text(OpaquePointer(statusLabel), message)
+    }
+
+    func setNotificationWarning(_ message: String) {
+        gtk_label_set_text(OpaquePointer(notificationWarningLabel), "Notifications unavailable: \(message)")
+        gtk_widget_set_visible(notificationWarningLabel, 1)
     }
 
     func setActionsEnabled(_ enabled: Bool) {

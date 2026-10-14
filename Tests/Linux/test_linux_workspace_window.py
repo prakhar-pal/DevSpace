@@ -117,10 +117,14 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("snapshot=received terminal=opened stale-effects=rejected shutdown=orderly", result.stdout)
-        requests = [json.loads(line)["kind"] for line in events.read_text().splitlines()]
+        frames = [json.loads(line) for line in events.read_text().splitlines()]
+        requests = [frame["kind"] for frame in frames]
         self.assertIn("terminal_output", requests)
         self.assertIn("terminal_exit", requests)
         self.assertIn("shutdown", requests)
+        self.assertEqual([frame["payload"]["workspace_id"] for frame in frames if frame["kind"] == "select"],
+                         ["fixture-pod"])
+        self.assertEqual(requests.count("connect"), 1)
         self.assertFalse(any(kind in {"stop", "delete", "recreate"} for kind in requests))
 
     def test_backend_crash_disables_actions_without_freezing_gtk(self):

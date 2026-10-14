@@ -37,8 +37,8 @@ launched. Task 5 remains open for post-fix visual review, close/reopen
 inspection, and hook/notification/ded/image paths through the visible app.
 The first real terminal output also triggered automatic DevSpace hook/shell
 integration. A read-only check confirmed managed markers in wc-1's configured
-Claude settings and shell rc files plus the development helper; whether to keep
-or remove those managed entries is awaiting user direction. Real clipboard/
+Claude settings and shell rc files plus the development helper. These managed
+entries remain installed as authorized by the user. Real clipboard/
 image upload remains unverified pending separate approval.
 
 The 2026-10-14 repeat host test was run with the development identity while
