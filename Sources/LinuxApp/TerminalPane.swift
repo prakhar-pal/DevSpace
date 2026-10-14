@@ -48,6 +48,7 @@ final class TerminalPane {
     private(set) var isClosed = false
     private var outputReported = false
     private var exitReported = false
+    private var signalConnections: [(UnsafeMutableRawPointer, gulong)] = []
 
     init?(launch: LinuxTerminalLaunch, onEvent: @escaping (String, [String: String]) -> Void = { _, _ in }) {
         self.launch = launch
@@ -63,10 +64,12 @@ final class TerminalPane {
         connectSignals()
 
         guard spawn(launch) else {
-            g_object_unref(UnsafeMutableRawPointer(widget))
+            dispose()
             return nil
         }
     }
+
+    deinit { dispose() }
 
     var text: String {
         guard let rawText = vte_terminal_get_text_format(terminal, VTE_FORMAT_TEXT) else { return "" }
@@ -117,6 +120,11 @@ final class TerminalPane {
     func dispose() {
         guard !isClosed else { return }
         isClosed = true
+        for (object, handler) in signalConnections {
+            g_signal_handler_disconnect(object, handler)
+            g_object_unref(object)
+        }
+        signalConnections.removeAll()
         g_object_unref(UnsafeMutableRawPointer(widget))
     }
 
@@ -197,7 +205,6 @@ final class TerminalPane {
     }
 
     private func connectSignals() {
-        let userData = Unmanaged.passUnretained(self).toOpaque()
         let contentsChanged = unsafeBitCast(
             devspaceLinuxVteContentsChanged as @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void,
             to: GCallback.self
@@ -206,10 +213,8 @@ final class TerminalPane {
             devspaceLinuxVteChildExited as @convention(c) (UnsafeMutableRawPointer?, Int32, UnsafeMutableRawPointer?) -> Void,
             to: GCallback.self
         )
-        _ = g_signal_connect_data(UnsafeMutableRawPointer(widget), "contents-changed", contentsChanged,
-                                  userData, nil, GConnectFlags(rawValue: 0))
-        _ = g_signal_connect_data(UnsafeMutableRawPointer(widget), "child-exited", childExited,
-                                  userData, nil, GConnectFlags(rawValue: 0))
+        connectSignal(UnsafeMutableRawPointer(widget), "contents-changed", contentsChanged)
+        connectSignal(UnsafeMutableRawPointer(widget), "child-exited", childExited)
 
         let focus = gtk_event_controller_focus_new()!
         gtk_widget_add_controller(widget, focus)
@@ -217,8 +222,7 @@ final class TerminalPane {
             devspaceLinuxVteFocusEntered as @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void,
             to: GCallback.self
         )
-        _ = g_signal_connect_data(UnsafeMutableRawPointer(focus), "enter", focusEntered,
-                                  userData, nil, GConnectFlags(rawValue: 0))
+        connectSignal(UnsafeMutableRawPointer(focus), "enter", focusEntered)
 
         let keyController = gtk_event_controller_key_new()!
         gtk_event_controller_set_propagation_phase(keyController, GTK_PHASE_CAPTURE)
@@ -228,8 +232,15 @@ final class TerminalPane {
                 (UnsafeMutableRawPointer?, UInt32, UInt32, UInt32, UnsafeMutableRawPointer?) -> Int32,
             to: GCallback.self
         )
-        _ = g_signal_connect_data(UnsafeMutableRawPointer(keyController), "key-pressed", keyPressed,
-                                  userData, nil, GConnectFlags(rawValue: 0))
+        connectSignal(UnsafeMutableRawPointer(keyController), "key-pressed", keyPressed)
+    }
+
+    private func connectSignal(_ object: UnsafeMutableRawPointer, _ name: String, _ callback: GCallback) {
+        _ = g_object_ref(object)
+        let handler = g_signal_connect_data(
+            object, name, callback, Unmanaged.passUnretained(self).toOpaque(), nil, GConnectFlags(rawValue: 0)
+        )
+        signalConnections.append((object, handler))
     }
 
     private func report(_ kind: String) {

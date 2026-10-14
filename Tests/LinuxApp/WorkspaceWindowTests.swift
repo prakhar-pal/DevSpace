@@ -140,7 +140,15 @@ struct WorkspaceWindowTests {
             try expect(pumpUntil { originalPane.text.contains("received:from-test") },
                        "a current inject did not reach the VTE child")
 
+            let callbackData = Unmanaged.passUnretained(originalPane).toOpaque()
+            let retainedWidget = UnsafeMutableRawPointer(originalWidget)
+            _ = g_object_ref(retainedWidget)
+            defer { g_object_unref(retainedWidget) }
+            try expect(g_signal_handler_find(retainedWidget, .SIGNAL_MATCH_DATA, 0, 0, nil, nil, callbackData) != 0,
+                       "terminal lifecycle callbacks were not registered")
             window.closeTerminal(identity, reportExit: true)
+            try expect(g_signal_handler_find(retainedWidget, .SIGNAL_MATCH_DATA, 0, 0, nil, nil, callbackData) == 0,
+                       "disposed terminal retains callbacks into its Swift pane")
             try expect(window.terminalCount == 0, "closing the terminal did not remove its widget")
             try expect(workspace.state == "Running", "closing a terminal changed workspace lifecycle state")
             try expect(commands.contains { $0.0 == "terminal_exit" }, "terminal close was not reported")
