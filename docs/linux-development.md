@@ -149,15 +149,24 @@ Channel coexistence can be checked with isolated X11 and D-Bus sessions after
 building the development bundle:
 
 ```sh
+# Stage debug binaries for both test identities; this is not a release build.
+test_prefix=$(mktemp -d "$PWD/.tmp/channel-debug.XXXXXX")
+cp -a build/linux-dev-bundle/bin build/linux-dev-bundle/lib "$test_prefix/"
+cp "$test_prefix/bin/DevSpaceDev" "$test_prefix/bin/DevSpace"
 env -u WAYLAND_DISPLAY GDK_BACKEND=x11 xvfb-run -a dbus-run-session -- \
-  env DEVSPACE_TEST_ISOLATED_GUI=1 \
-  DEVSPACE_TEST_FRONTEND_PREFIX="$PWD/build/linux-dev-bundle" \
+  env GTK_A11Y=none DEVSPACE_TEST_ISOLATED_GUI=1 \
+  DEVSPACE_TEST_FRONTEND_PREFIX="$test_prefix" \
   python3 -B -m unittest Tests.Linux.test_channel_identity -v
+rm -r -- "$test_prefix"
 ```
 
 This launches each channel against a temporary protocol peer, verifies one
 backend per channel, and cleans up its app/peer processes. Do not run it on the
 user's ordinary session bus.
+Both test executable names must exist; pointing this check at a normal
+development-only bundle skips it rather than proving coexistence. The staged
+executables are the same debug build; this verifies runtime channel isolation,
+not production package assembly or release compilation.
 
 The host SSH integration is opt-in and opens temporary shells only. Use a
 workspace expressly approved for temporary terminal checks; the test must not

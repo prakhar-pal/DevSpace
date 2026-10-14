@@ -53,6 +53,14 @@ The screenshot harness captures only its own GTK window. Close/reopen and
 physical input/notification acceptance remain open. PR111's successful macOS
 check is on an older head and does not verify the current shared Core changes.
 
+After rebuilding milestone836dd9c, the runtime coexistence check passed on
+private Xvfb/D-Bus with debug binaries staged under both channel executable
+names. Both application IDs had independent controlled backends, and repeat
+activation retained one backend per identity. A normal development bundle
+alone lacks the production executable name and skips this test; the documented
+command now stages the required debug test binaries explicitly. This is not
+verification of a compiled release or installed production package.
+
 | Area | Verified evidence | Still required |
 | --- | --- | --- |
 | GTK/VTE app | SwiftPM builds `DevSpaceLinuxApp` and `DevSpaceLinuxBackend` with global Swift.org 6.4.1 for Ubuntu 26.04. The fresh 2026-10-14 `make linux-test` run reported 69 tests and `OK` (three opt-in checks skipped); private-Xvfb coverage includes empty startup, VTE I/O, resize, copy/paste round-trip, private PNG creation for image paste, Ctrl+C passthrough, reconnect shortcut, stale effects, orderly close, and backend failure. A frontend/backend test verifies the generated image is removed after backend completion. The focused GTK test asserts the VTE allocation fills the pane. A real `wc-1` VTE shell round-trip and terminal close passed under Xvfb using the production test identity while DevSpaceDev continued owning the separate development listener; read-only status confirmed the workspace remained Running. The earlier same-channel attempt collided with the already-running DevSpaceDev listener on port 17866 and did not open a pane. | Review the updated bundle's visual layout and close/reopen behavior on the host display; do not repeat a same-channel `wc-1` test while DevSpaceDev owns it. |
