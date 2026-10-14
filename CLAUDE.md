@@ -101,6 +101,16 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
 
 ## Agent Rules
 
+- **Validate instead of assuming wherever possible.** Before diagnosing,
+  changing behavior, or claiming an outcome, inspect the relevant source code
+  and trace its dependencies up to two levels deep (direct dependencies and
+  their dependencies). Read the relevant project documentation and check it
+  against the implementation; resolve discrepancies using evidence rather
+  than treating either as automatically authoritative. Inspect the relevant
+  tests, run checks appropriate to the change, and confirm their actual output.
+  State what was verified, what remains unverified, and any assumptions that
+  could not be checked. Do not claim runtime behavior from source inspection
+  alone or claim tests pass without running them.
 - **Use conventional-commit-style branch names.** Prefix the branch with the
   change type, followed by a concise kebab-case description; for example,
   `feat/dide-zed-folder`, `fix/terminal-shortcut-routing`, or
