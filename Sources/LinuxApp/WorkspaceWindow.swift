@@ -5,7 +5,6 @@ import DevSpaceCore
 final class WorkspaceWindow {
     let window: UnsafeMutablePointer<GtkWindow>
     private let workspaceRows: UnsafeMutablePointer<GtkBox>
-    private let refreshButton: UnsafeMutablePointer<GtkWidget>
     private let terminalContainer: UnsafeMutablePointer<GtkBox>
     private let emptyState: UnsafeMutablePointer<GtkWidget>
     private let statusLabel: UnsafeMutablePointer<GtkWidget>
@@ -46,8 +45,6 @@ final class WorkspaceWindow {
         gtk_label_set_xalign(OpaquePointer(heading), 0)
         gtk_widget_set_hexpand(heading, 1)
         gtk_box_append(workspaceHeader, heading)
-        refreshButton = gtk_button_new_with_label("Refresh")!
-        gtk_box_append(workspaceHeader, refreshButton)
         gtk_box_append(sidebar, UnsafeMutableRawPointer(workspaceHeader).assumingMemoryBound(to: GtkWidget.self))
         workspaceRows = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 8)!)
             .assumingMemoryBound(to: GtkBox.self)
@@ -73,7 +70,6 @@ final class WorkspaceWindow {
         gtk_widget_set_vexpand(emptyState, 1)
         gtk_box_append(terminalContainer, emptyState)
 
-        connectAction(refreshButton, context: WorkspaceActionContext(window: self, kind: "refresh", payload: [:]))
         gtk_box_append(root, sidebarWidget)
         gtk_box_append(root, separator)
         gtk_box_append(root, terminalWidget)
@@ -96,6 +92,7 @@ final class WorkspaceWindow {
 
     func update(_ next: WorkspaceControllerSnapshot) {
         guard next.revision >= snapshot.revision else { return }
+        let selectionChanged = snapshot.selectedID != next.selectedID
         snapshot = next
         clear(workspaceRows)
         let ordered = next.layout.order.compactMap { id in next.workspaces.first { $0.id == id } }
@@ -108,6 +105,7 @@ final class WorkspaceWindow {
             appendWorkspace(workspace, selected: workspace.id == next.selectedID,
                             alias: next.layout.aliases[workspace.id], badged: next.badges.contains(workspace.id))
         }
+        revealSelectedTerminal(focus: selectionChanged)
     }
 
     func apply(_ effect: WorkspaceTerminalEffect) {
@@ -151,7 +149,6 @@ final class WorkspaceWindow {
 
     func openTerminal(_ pane: TerminalPane) {
         guard terminalPanes[pane.identity] == nil else { return }
-        if terminalPanes.isEmpty { gtk_box_remove(terminalContainer, emptyState) }
         terminalPanes[pane.identity] = pane
 
         let root = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)!)
@@ -172,6 +169,7 @@ final class WorkspaceWindow {
         gtk_widget_set_vexpand(rootWidget, 1)
         terminalRoots[pane.identity] = rootWidget
         gtk_box_append(terminalContainer, rootWidget)
+        revealSelectedTerminal(focus: pane.identity.workspaceID == snapshot.selectedID)
     }
 
     func pane(for identity: TerminalPaneIdentity) -> TerminalPane? {
@@ -187,7 +185,16 @@ final class WorkspaceWindow {
         if reportExit { pane.reportExit() }
         if let root = terminalRoots.removeValue(forKey: identity) { gtk_box_remove(terminalContainer, root) }
         pane.dispose()
-        if terminalPanes.isEmpty { gtk_box_append(terminalContainer, emptyState) }
+        revealSelectedTerminal()
+    }
+
+    private func revealSelectedTerminal(focus: Bool = false) {
+        let selectedPane = snapshot.selectedID.flatMap { pane(forWorkspace: $0) }
+        for (identity, root) in terminalRoots {
+            gtk_widget_set_visible(root, identity == selectedPane?.identity ? 1 : 0)
+        }
+        gtk_widget_set_visible(emptyState, selectedPane == nil ? 1 : 0)
+        if focus, let selectedPane { _ = gtk_widget_grab_focus(selectedPane.widget) }
     }
 
     // Retained for the controlled terminal smoke test in the Task 2 harness.
@@ -207,12 +214,7 @@ final class WorkspaceWindow {
 
     func setActionsEnabled(_ enabled: Bool) {
         actionsEnabled = enabled
-        gtk_widget_set_sensitive(refreshButton, enabled ? 1 : 0)
         refreshActionSensitivity(in: UnsafeMutableRawPointer(workspaceRows).assumingMemoryBound(to: GtkWidget.self))
-    }
-
-    func refreshWorkspaces() {
-        onCommand?("poll", nil)
     }
 
     deinit {
@@ -230,26 +232,17 @@ final class WorkspaceWindow {
         gtk_box_append(title, label)
         gtk_box_append(row, UnsafeMutableRawPointer(title).assumingMemoryBound(to: GtkWidget.self))
 
-        let actions = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4)!)
-            .assumingMemoryBound(to: GtkBox.self)
-        addCommandAction(actions, "Select", "select", ["workspace_id": workspace.id])
-        if workspace.state == "Running" {
-            addCommandAction(actions, "Open", "connect", ["workspace_id": workspace.id])
-            addCommandAction(actions, "Reconnect", "reconnect", ["workspace_id": workspace.id])
-            addCommandAction(actions, "Stop", "stop", ["workspace_id": workspace.id])
-        } else {
-            addCommandAction(actions, "Start", "start", ["workspace_id": workspace.id])
+        let button = gtk_button_new()!
+        button.withMemoryRebound(to: GtkButton.self, capacity: 1) {
+            gtk_button_set_child($0, UnsafeMutableRawPointer(row).assumingMemoryBound(to: GtkWidget.self))
         }
-        gtk_box_append(row, UnsafeMutableRawPointer(actions).assumingMemoryBound(to: GtkWidget.self))
-        gtk_box_append(workspaceRows, UnsafeMutableRawPointer(row).assumingMemoryBound(to: GtkWidget.self))
-    }
-
-    private func addCommandAction(_ box: UnsafeMutablePointer<GtkBox>, _ title: String,
-                                  _ kind: String, _ payload: [String: String]) {
-        let button = gtk_button_new_with_label(title)!
+        gtk_widget_add_css_class(button, "flat")
+        if selected { gtk_widget_add_css_class(button, "suggested-action") }
         gtk_widget_set_sensitive(button, actionsEnabled ? 1 : 0)
-        connectAction(button, context: WorkspaceActionContext(window: self, kind: kind, payload: payload))
-        gtk_box_append(box, button)
+        connectAction(button, context: WorkspaceActionContext(
+            window: self, kind: "select", payload: ["workspace_id": workspace.id]
+        ))
+        gtk_box_append(workspaceRows, button)
     }
 
     private static func configureSidebarText(_ label: UnsafeMutablePointer<GtkWidget>) {
@@ -336,8 +329,6 @@ private func devspaceLinuxWorkspaceAction(_ button: UnsafeMutableRawPointer?, _ 
     let context = Unmanaged<WorkspaceActionContext>.fromOpaque(data).takeUnretainedValue()
     if let identity = context.identity {
         context.window?.closeTerminal(identity, reportExit: true)
-    } else if context.kind == "refresh" {
-        context.window?.refreshWorkspaces()
     } else {
         context.window?.onCommand?(context.kind, context.payload)
     }

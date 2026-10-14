@@ -24,11 +24,6 @@ struct WorkspaceWindowTests {
             window.present()
             try expect(window.terminalCount == 0, "empty startup created a terminal")
             try expect(window.workspacesHeadingCount == 1, "workspace sidebar heading is not unique")
-            guard let root = gtk_window_get_child(window.window), containsButton("Refresh", in: root) else {
-                throw TestFailure("workspace refresh button is missing")
-            }
-            window.refreshWorkspaces()
-            try expect(commands.contains { $0.0 == "poll" }, "workspace refresh did not request a poll")
 
             let workspace = WorkspaceView(
                 id: "fixture-pod", provider: "docker", source: "/tmp/project",
@@ -42,10 +37,19 @@ struct WorkspaceWindowTests {
                 revision: 1, workspaces: [workspace, otherWorkspace], selectedID: "fixture-pod",
                 layout: Layout(), terminalPanes: []
             ))
-            guard let root = gtk_window_get_child(window.window), containsButton("Reconnect", in: root) else {
-                throw TestFailure("running workspace reconnect button is missing")
+            let root = gtk_window_get_child(window.window)!
+            for title in ["Refresh", "Select", "Open", "Reconnect", "Stop", "Start"] {
+                try expect(!containsButton(title, in: root), "sidebar retains extra action: \(title)")
             }
-            try expect(countButtons("Open", in: root) == 2, "the sidebar did not display every running workspace")
+            let sidebarWidget = gtk_widget_get_first_child(root)!
+            let rows = gtk_widget_get_next_sibling(gtk_widget_get_first_child(sidebarWidget))!
+            let firstRow = gtk_widget_get_first_child(rows)!
+            let secondRow = gtk_widget_get_next_sibling(firstRow)!
+            try expect(gtk_widget_get_next_sibling(secondRow) == nil, "sidebar did not show both workspaces")
+            _ = gtk_widget_activate(secondRow)
+            try expect(pumpUntil { commands.contains { $0.0 == "select" && $0.1?["workspace_id"] == otherWorkspace.id } },
+                       "clicking a workspace row did not select it")
+            try expect(!commands.contains { $0.0 == "connect" }, "row selection opened another terminal")
             let generation = UUID()
             let paneID = UUID()
             let identity = TerminalPaneIdentity(workspaceID: workspace.id, generation: generation, paneID: paneID)
@@ -59,6 +63,32 @@ struct WorkspaceWindowTests {
             guard let originalPane = window.pane(for: identity) else {
                 throw TestFailure("terminal pane was not retained")
             }
+            let otherIdentity = TerminalPaneIdentity(
+                workspaceID: otherWorkspace.id, generation: UUID(), paneID: UUID()
+            )
+            window.apply(try terminalEffect(
+                kind: "terminal_launch", workspace: otherWorkspace.id,
+                generation: otherIdentity.generation, pane: otherIdentity.paneID,
+                executable: "/bin/sh", arguments: ["-c", "printf 'background-ready\\n'; exec sleep 30"]
+            ))
+            try expect(pumpUntil { window.pane(for: otherIdentity)?.text.contains("background-ready") == true },
+                       "background workspace terminal did not connect")
+            let otherPane = window.pane(for: otherIdentity)!
+            try expect(gtk_widget_get_mapped(originalPane.widget) != 0 && gtk_widget_get_mapped(otherPane.widget) == 0,
+                       "multiple workspace terminals are visible at once")
+            window.update(WorkspaceControllerSnapshot(
+                revision: 1, workspaces: [workspace, otherWorkspace], selectedID: otherWorkspace.id,
+                layout: Layout(), terminalPanes: []
+            ))
+            try expect(pumpUntil { gtk_widget_get_mapped(otherPane.widget) != 0 },
+                       "selecting another workspace did not reveal its terminal")
+            try expect(gtk_widget_get_mapped(originalPane.widget) == 0 && window.pane(for: identity) === originalPane,
+                       "switching workspace did not preserve the hidden terminal")
+            window.closeTerminal(otherIdentity)
+            window.update(WorkspaceControllerSnapshot(
+                revision: 1, workspaces: [workspace, otherWorkspace], selectedID: workspace.id,
+                layout: Layout(), terminalPanes: []
+            ))
             try expect(gtk_widget_get_allocated_height(originalPane.widget) > 500,
                        "the VTE widget did not expand to fill the terminal pane")
             let sidebar = gtk_widget_get_first_child(gtk_window_get_child(window.window))!

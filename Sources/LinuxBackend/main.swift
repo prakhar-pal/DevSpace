@@ -390,7 +390,7 @@ private func handle(_ message: BackendProtocolMessage) {
                 controller.select(workspace)
                 _ = sendSnapshot(nil, from: controller)
                 if message.kind == "reconnect" { try terminals.reconnect(workspace) }
-                else { try terminals.connect(workspace) }
+                else if !terminals.openedWorkspaces.contains(workspace) { try terminals.connect(workspace) }
             }
             _ = send(BackendProtocolMessage(id: message.id, kind: "completed"))
         } catch {
@@ -426,6 +426,9 @@ private func handle(_ message: BackendProtocolMessage) {
                 case let .success(views):
                     let revision = controller.snapshot.revision &+ 1
                     _ = controller.apply(PollUpdate(revision: revision, views: views))
+                    if !views.contains(where: { $0.id == controller.snapshot.selectedID }) {
+                        controller.select(views.first(where: { $0.state == "Running" })?.id ?? views.first?.id)
+                    }
                     let liveIDs = Set(views.map(\.id))
                     autoConnect.formIntersection(liveIDs)
                     starting.formIntersection(liveIDs)

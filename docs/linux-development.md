@@ -112,7 +112,17 @@ are never sent through the backend control pipe. Terminal identities include
 workspace, pane, and connection generation so delayed events cannot target a
 replacement pane. Closing a terminal does not stop its workspace.
 
-The first window is empty; it does not launch a local shell. Development and
+The sidebar lists every DevPod as a selectable row without extra action
+buttons. Status refresh runs automatically. Running DevPods connect on startup
+and retain their terminals and notification hooks in the background; the right
+pane displays only the selected workspace's terminal. Clicking a sidebar row
+switches the displayed terminal without restarting its shell. The first running
+workspace is selected automatically; selecting a stopped workspace shows the
+empty terminal area. Reconnect remains available through Ctrl+Shift+R in a
+terminal.
+
+The first window is empty until a running workspace connects; it does not
+launch a local shell. Development and
 production have distinct application IDs. Linux feature parity with macOS
 libghostty remains a later effort; tabs/splits and a Ghostty-style settings
 surface are out of scope.

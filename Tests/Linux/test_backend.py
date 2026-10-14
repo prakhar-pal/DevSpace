@@ -368,7 +368,9 @@ class BackendIntegrationTests(unittest.TestCase):
         self.assertEqual(self.request("ping")["kind"], "pong")
 
     def test_authenticated_notification_sets_badge_and_emits_platform_effect(self):
-        self.request("poll")
+        (self.directory / "extra-pod").touch()
+        self.assertEqual(self.snapshot_request("poll")["selectedID"], "pod")
+        self.snapshot_request("select", workspace_id="other")
         port = int(self.ready_response["payload"].get("notify_port", "0"))
         self.assertGreater(port, 0, "backend did not start a notification listener")
         token_file = self.directory / "config/devspace/notify-token"
