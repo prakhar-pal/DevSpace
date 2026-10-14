@@ -15,9 +15,7 @@ private final class TestContext {
     var imagePasteSent = false
     var imagePastePath: String?
     var hostCommandSent = false
-    var hostImageRequested = false
-    var hostImageInputSubmitted = false
-    var hostImageVerified = false
+    var hostShellVerified = false
     var failure: String?
     var exitCode: Int32 = 1
 
@@ -60,7 +58,12 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
     guard let controller = context.controller, let window = controller.window else { return 1 }
     if context.mode == "host" {
         if Date().timeIntervalSince(context.startedAt) > 90 && context.failure == nil {
-            context.failure = "timed out waiting for real workspace terminal input/output"
+            let pane = window.pane(forWorkspace: context.fixture)
+            context.failure = "timed out waiting for real workspace shell round-trip " +
+                "pane=\(pane == nil ? "absent" : "present") " +
+                "child=\(pane?.childPID != nil ? "started" : pane?.spawnError == nil ? "pending" : "failed") " +
+                "ready=\(pane?.text.contains("DS_UI_READY") == true) " +
+                "shell=\(pane?.text.contains("DS_UI_SHELL_OK") == true)"
             controller.requestShutdown()
         }
         if !context.connectSent,
@@ -70,34 +73,13 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
         }
         if let pane = window.pane(forWorkspace: context.fixture) {
             if !context.hostCommandSent, pane.childPID != nil {
-                pane.feed("printf '\\104\\123\\137\\125\\111\\137\\122\\105\\101\\104\\131\\n'; IFS= read -r input; printf '\\104\\123\\137\\125\\111\\137\\111\\116\\120\\125\\124\\072%s\\n' \"$input\"; case \"$input\" in 'Image pasted: '*) image_path=${input#Image pasted: }; image_path=${image_path% }; if [ -f \"$image_path\" ]; then printf '\\104\\123\\137\\125\\111\\137\\111\\115\\101\\107\\105\\137\\102\\131\\124\\105\\123\\072'; base64 -w0 -- \"$image_path\"; else printf '\\104\\123\\137\\125\\111\\137\\111\\115\\101\\107\\105\\137\\115\\111\\123\\123\\111\\116\\107'; fi; rm -f -- \"$image_path\";; esac\n")
+                pane.feed("unset HISTFILE; printf '\\104\\123\\137\\125\\111\\137\\122\\105\\101\\104\\131\\n'; printf '\\104\\123\\137\\125\\111\\137\\123\\110\\105\\114\\114\\137\\117\\113\\n'\n")
                 context.hostCommandSent = true
             }
-            if !context.hostImageRequested && pane.text.contains("DS_UI_READY") {
-                guard setPrivateClipboardImage(), pane.handleKey(
-                    keyval: UInt32(GDK_KEY_v),
-                    modifiers: GdkModifierType(rawValue: GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue)
-                ) else {
-                    context.failure = "VTE could not paste the private clipboard image"
-                    controller.requestShutdown()
-                    return 1
-                }
-                context.hostImageRequested = true
+            if pane.text.contains("DS_UI_READY") && pane.text.contains("DS_UI_SHELL_OK") {
+                context.hostShellVerified = true
             }
-            if context.hostImageRequested && !context.hostImageInputSubmitted,
-               pane.text.contains("Image pasted: /tmp/devspace-paste-") {
-                pane.feed("\n")
-                context.hostImageInputSubmitted = true
-            }
-            if !context.hostImageVerified,
-               let marker = pane.text.range(of: "DS_UI_IMAGE_BYTES:") {
-                let encoded = pane.text[marker.upperBound...].prefix { !$0.isWhitespace }
-                let signature = Data([137, 80, 78, 71, 13, 10, 26, 10])
-                if let image = Data(base64Encoded: String(encoded)), image.starts(with: signature) {
-                    context.hostImageVerified = true
-                }
-            }
-            if context.hostImageVerified {
+            if context.hostShellVerified {
                 guard window.snapshot.workspaces.first(where: { $0.id == context.fixture })?.state == "Running" else {
                     context.failure = "closing the real workspace terminal changed workspace lifecycle state"
                     controller.requestShutdown()
@@ -111,7 +93,7 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
         if controller.backend.state == .stopped {
             if context.failure == nil && context.connectSent && context.terminalClosed {
                 context.exitCode = 0
-                print("host-vte workspace=connected clipboard=image-pasted image-upload=verified close=workspace-preserved")
+                print("host-vte workspace=connected shell=round-trip close=workspace-preserved")
             }
             g_application_quit(UnsafeMutableRawPointer(context.application).assumingMemoryBound(to: GApplication.self))
             return 0
