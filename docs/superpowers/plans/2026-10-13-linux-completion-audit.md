@@ -2,6 +2,20 @@
 
 ## Current checkpoint — 2026-10-14
 
+CI run38605694887 on03c3a9e passed every Linux and macOS job.
+A subsequent native-process audit reproduced SSH diagnostics being discarded
+before completion under sixteen concurrent local ssh-version commands. Linux
+SSH pipes now use blocking readers and deliver exit only after draining them;
+macOS's implementation remains unchanged. A local Match-helper fixture then
+reproduced inherited stderr remaining open after SSH exit. The Linux supervisor
+now signals its owned session group after natural exit, preserving SSH status
+and avoiding a positive-PID fallback after reaping the leader. Both failures
+were observed RED→GREEN. Core229 / one skip, Linux75 / three skips, and all three
+optimized native SSH checks passed. These probes made no remote connections.
+Read-only wc-1 status now reports Stopped; it was not started or stopped by the
+agent, and real-pod acceptance for this latest pipe change awaits a running
+approved workspace.
+
 CI run38581166318 on8ab145f passed every Linux and macOS job.
 The current runtime inventory also verified bundled ICU through its actual
 swift_u_getVersion export:76.1.0.0, matching the Swift6.4.1 release source.

@@ -626,7 +626,7 @@ private final class FoundationSSHConfigProcess: SSHTransportProcess {
     func terminate() { runner.cancel() }
 }
 
-private final class FoundationSSHTransportProcess: SSHTransportProcess {
+final class FoundationSSHTransportProcess: SSHTransportProcess {
     private let process = Process()
     private let stdout = Pipe()
     private let stderr = Pipe()
@@ -640,6 +640,42 @@ private final class FoundationSSHTransportProcess: SSHTransportProcess {
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = stdout
         process.standardError = stderr
+        #if os(Linux)
+        // Avoid Linux epoll read-source teardown races, and do not report exit
+        // until the diagnostic pipe has been drained through EOF.
+        // ponytail: two blocking readers per master; multiplex with poll if
+        // very large workspace counts exhaust dispatch workers.
+        let readers = DispatchGroup()
+        let output = stdout.fileHandleForReading
+        let errors = stderr.fileHandleForReading
+        readers.enter()
+        DispatchQueue.global(qos: .utility).async {
+            while !output.availableData.isEmpty {}
+            readers.leave()
+        }
+        readers.enter()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            while true {
+                let data = errors.availableData
+                guard !data.isEmpty else { break }
+                self?.appendStderr(data)
+            }
+            readers.leave()
+        }
+        process.terminationHandler = { process in
+            let status = process.terminationStatus
+            readers.notify(queue: .main) { onExit(status) }
+        }
+        do {
+            try runDesktopSSHMaster(process)
+        } catch {
+            // A failed spawn never closes the parent's write ends for us.
+            try? stdout.fileHandleForWriting.close()
+            try? stderr.fileHandleForWriting.close()
+            process.terminationHandler = nil
+            throw error
+        }
+        #else
         stdout.fileHandleForReading.readabilityHandler = { handle in
             _ = handle.availableData
         }
@@ -653,11 +689,14 @@ private final class FoundationSSHTransportProcess: SSHTransportProcess {
             DispatchQueue.main.async { onExit(process.terminationStatus) }
         }
         try runDesktopSSHMaster(process)
+        #endif
     }
 
     func terminate() {
+        #if !os(Linux)
         stdout.fileHandleForReading.readabilityHandler = nil
         stderr.fileHandleForReading.readabilityHandler = nil
+        #endif
         if process.isRunning { process.terminate() }
     }
 

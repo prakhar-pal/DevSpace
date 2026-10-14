@@ -42,6 +42,10 @@ func runDesktopSSHMaster(_ process: Process) throws {
         [ -z "$stopping" ] || stop_child
         wait "$child"
         status=$?
+        # The SSH leader can exit while Match/ProxyCommand descendants retain
+        # its pipes. Only signal the owned session group here: the leader has
+        # already been reaped, so a positive-PID fallback would risk PID reuse.
+        kill -TERM "-$child" 2>/dev/null || :
         if [ -n "$stopping" ]; then
             while kill -0 "$child" 2>/dev/null; do
                 wait "$child" 2>/dev/null
