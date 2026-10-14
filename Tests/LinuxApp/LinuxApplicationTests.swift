@@ -19,6 +19,8 @@ private final class TestContext {
     var hostCommandSent = false
     var hostShellVerified = false
     var hostShellVerifiedAt: Date?
+    var hostClosedIdentity: TerminalPaneIdentity?
+    var hostReopened = false
     var failure: String?
     var exitCode: Int32 = 1
 
@@ -75,6 +77,11 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
             controller.sendCommand("connect", payload: ["workspace_id": context.fixture])
         }
         if let pane = window.pane(forWorkspace: context.fixture) {
+            if pane.identity == context.hostClosedIdentity {
+                context.failure = "reconnect reused the closed terminal identity"
+                controller.requestShutdown()
+                return 1
+            }
             if !context.hostCommandSent, pane.childPID != nil {
                 pane.feed("unset HISTFILE; printf '\\104\\123\\137\\125\\111\\137\\122\\105\\101\\104\\131\\n'; printf '\\104\\123\\137\\125\\111\\137\\123\\110\\105\\114\\114\\137\\117\\113\\n'\n")
                 context.hostCommandSent = true
@@ -98,12 +105,21 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
                     return 1
                 }
                 window.closeTerminal(pane.identity, reportExit: true)
+                if context.hostClosedIdentity == nil {
+                    context.hostClosedIdentity = pane.identity
+                    context.hostCommandSent = false
+                    context.hostShellVerified = false
+                    context.hostShellVerifiedAt = nil
+                    controller.sendCommand("reconnect", payload: ["workspace_id": context.fixture])
+                    return 1
+                }
+                context.hostReopened = true
                 context.terminalClosed = true
                 controller.requestShutdown()
             }
         }
         if controller.backend.state == .stopped {
-            if context.failure == nil && context.connectSent && context.terminalClosed {
+            if context.failure == nil && context.connectSent && context.terminalClosed && context.hostReopened {
                 context.exitCode = 0
             }
             g_application_quit(UnsafeMutableRawPointer(context.application).assumingMemoryBound(to: GApplication.self))
@@ -352,7 +368,7 @@ struct LinuxApplicationTests {
         }
         if context.mode == "host", context.connectSent, context.terminalClosed,
            context.controller?.backend.state == .stopped {
-            print("host-vte workspace=connected shell=round-trip close=workspace-preserved")
+            print("host-vte workspace=connected shell=round-trip close=workspace-preserved reopen=new-pane-round-trip")
             exit(EXIT_SUCCESS)
         }
         if context.mode != "crash", context.connectSent, context.terminalClosed,

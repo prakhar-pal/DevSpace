@@ -33,8 +33,9 @@ round-trip through the GTK/VTE app passed under Xvfb, with the workspace still
 running after terminal close. An unlocked-host inspection found the VTE widget
 was only using its natural height; the pane and VTE now expand, covered by an
 allocation regression test. The updated DevSpaceDev bundle rebuilt and
-launched. Task 5 remains open for post-fix visual review, close/reopen
-inspection, and hook/notification/ded/image paths through the visible app.
+launched. A subsequent host Wayland screenshot and distinct-pane
+close/reconnect/reopen check passed. Task 5 remains open for
+hook/notification/ded/image paths through the visible app.
 The first real terminal output also triggered automatic DevSpace hook/shell
 integration. A read-only check confirmed managed markers in wc-1's configured
 Claude settings and shell rc files plus the development helper. These managed
@@ -170,7 +171,7 @@ notification, clipboard, or image acceptance.
 - [x] Run Core/backend/protocol/UI/package suites on the current Ubuntu host; outcomes and skips are recorded in the completion audit.
 - [x] With private Xvfb, test controlled output/input/resize/disposal and copy/paste using the private test clipboard, without touching the physical clipboard.
 - [x] Run an actual `wc-1` shell round-trip through the GTK/VTE app under Xvfb, verifying output, input and terminal close while the workspace remains running.
-- [ ] With the unlocked host display, verify visual GTK layout and close/reopen using the approved workspace; do not test clipboard replacement without separate approval.
+- [x] With the unlocked host display, verify visual GTK layout and close/reopen using the approved workspace; the Swift Wayland probe closed its original pane, requested reconnect, verified I/O through a distinct replacement pane, and closed it. Read-only DevPod status remained Running. Physical clipboard replacement was not tested.
 - [ ] Verify these hook/notification/ded/image paths through the visible Swift frontend; the wc-1 backend/SSH integration passed without workspace lifecycle/project-file changes.
 - [x] Record manual/deferred checks (IME, physical clipboard, notification banner/click, Ubuntu 24.04, package signing/CI) as unverified rather than inferring them from unit tests.
 - [x] Run a final `git diff --check` and inspect the macOS lockfile comparison; commit verified milestones per `AGENTS.md`, without publishing.

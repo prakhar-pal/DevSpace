@@ -189,5 +189,7 @@ dbus-run-session -- python3 -B -m unittest \
 Use an unoccupied test channel and create the screenshot's parent directory
 first. Omit the screenshot variable to disable capture. The test captures only
 its own GTK window, not the desktop; it sends shell markers and closes its
-temporary terminal without stopping the workspace. This does not verify
-close/reopen, physical clipboard, input methods, or banner interaction.
+temporary terminal, requests reconnect, and checks I/O in a distinct replacement
+pane before closing it without stopping the workspace. This does not verify
+app restart, repeated Open-button reuse, physical clipboard, input methods, or
+banner interaction.
