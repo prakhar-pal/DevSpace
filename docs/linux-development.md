@@ -193,3 +193,11 @@ temporary terminal, requests reconnect, and checks I/O in a distinct replacement
 pane before closing it without stopping the workspace. This does not verify
 app restart, repeated Open-button reuse, physical clipboard, input methods, or
 banner interaction.
+
+With explicit authorization for a temporary remote PNG, add
+`DEVSPACE_HOST_UI_IMAGE=1` to that command. This creates a private local fixture,
+sends it through the Swift frontend's existing image-upload command, verifies
+the injected remote path and exact PNG bytes through VTE, and removes that
+specific generated `/tmp/devspace-paste-*.png` file. It checks local-source
+cleanup too. It does not read or replace the physical clipboard, so it is not
+proof of the desktop clipboard-image handoff.

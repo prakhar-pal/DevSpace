@@ -21,6 +21,8 @@ private final class TestContext {
     var hostShellVerifiedAt: Date?
     var hostClosedIdentity: TerminalPaneIdentity?
     var hostReopened = false
+    var hostImageCheckSent = false
+    var hostImageVerified = false
     var failure: String?
     var exitCode: Int32 = 1
 
@@ -91,6 +93,11 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
                 if context.hostShellVerifiedAt == nil { context.hostShellVerifiedAt = Date() }
             }
             if context.hostShellVerified {
+                if ProcessInfo.processInfo.environment["DEVSPACE_HOST_UI_IMAGE"] == "1",
+                   !context.hostImageVerified {
+                    verifyHostImage(context, pane: pane, controller: controller)
+                    return 1
+                }
                 if let path = ProcessInfo.processInfo.environment["DEVSPACE_HOST_UI_SCREENSHOT"] {
                     guard Date().timeIntervalSince(context.hostShellVerifiedAt ?? Date()) >= 0.2 else { return 1 }
                     guard captureWindow(window.window, at: path) else {
@@ -275,6 +282,44 @@ private func captureWindow(_ window: UnsafeMutablePointer<GtkWindow>, at path: S
     return true
 }
 
+private func verifyHostImage(_ context: TestContext, pane: TerminalPane,
+                             controller: LinuxApplicationController) {
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII="
+    if !context.imagePasteSent {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("devspace-paste-\(UUID().uuidString).png")
+        guard FileManager.default.createFile(atPath: url.path, contents: Data(base64Encoded: png),
+                                             attributes: [.posixPermissions: 0o600]) else {
+            context.failure = "could not create private host image fixture"
+            controller.requestShutdown()
+            return
+        }
+        context.imagePastePath = url.path
+        context.imagePasteSent = true
+        controller.sendCommand("paste_image", payload: [
+            "workspace_id": pane.identity.workspaceID,
+            "generation": pane.identity.generation.uuidString.lowercased(),
+            "pane_id": pane.identity.paneID.uuidString.lowercased(),
+            "source_path": url.path,
+        ])
+        return
+    }
+    if !context.hostImageCheckSent {
+        guard let range = pane.text.range(of: "/tmp/devspace-paste-[A-Fa-f0-9-]+\\.png",
+                                         options: .regularExpression) else { return }
+        let path = String(pane.text[range])
+        // The allowlisted generated filename contains no shell metacharacters.
+        // Ctrl+U clears the injected prompt text before the verification command.
+        pane.feed("\u{15}[ \"$(base64 -w0 \(path))\" = '\(png)' ] && printf '\\104\\123\\137\\125\\111\\137\\111\\115\\101\\107\\105\\137\\117\\113\\n'; rm -f -- \(path); [ ! -e \(path) ] && printf '\\104\\123\\137\\125\\111\\137\\111\\115\\101\\107\\105\\137\\103\\114\\105\\101\\116\\n'\n")
+        context.hostImageCheckSent = true
+        return
+    }
+    if pane.text.contains("DS_UI_IMAGE_OK"), pane.text.contains("DS_UI_IMAGE_CLEAN"),
+       let source = context.imagePastePath, !FileManager.default.fileExists(atPath: source) {
+        context.hostImageVerified = true
+    }
+}
+
 private func setPrivateClipboardImage() -> Bool {
     guard let display = gdk_display_get_default(),
           let clipboard = gdk_display_get_clipboard(display) else { return false }
@@ -369,6 +414,7 @@ struct LinuxApplicationTests {
         if context.mode == "host", context.connectSent, context.terminalClosed,
            context.controller?.backend.state == .stopped {
             print("host-vte workspace=connected shell=round-trip close=workspace-preserved reopen=new-pane-round-trip")
+            if context.hostImageVerified { print("image=uploaded-verified-cleaned") }
             exit(EXIT_SUCCESS)
         }
         if context.mode != "crash", context.connectSent, context.terminalClosed,

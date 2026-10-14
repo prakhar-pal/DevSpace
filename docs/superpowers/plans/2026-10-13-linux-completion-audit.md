@@ -80,6 +80,16 @@ The subsequent full Linux suite passed74 tests with three opt-in skips in
 120.655 seconds. The real host probe ran separately rather than being counted
 as a skipped-suite pass. `Package.resolved` was restored unchanged.
 
+The explicit host image opt-in then passed on Wayland in53.058 seconds:
+a private PNG was sent through the Swift frontend, its remote path was
+injected into the real VTE pane, the remote shell compared exact file bytes
+and deleted that allowlisted generated file, and the local source disappeared.
+Close/reconnect/reopen still passed afterward. The test did not read or replace
+the physical clipboard. Its upload/injection acceptance therefore does not
+prove desktop clipboard-image handoff; that remains a separate manual gate.
+The following full Linux run passed74 tests with three opt-in skips in
+119.607 seconds, with the macOS lockfile restored unchanged.
+
 | Area | Verified evidence | Still required |
 | --- | --- | --- |
 | GTK/VTE app | SwiftPM builds `DevSpaceLinuxApp` and `DevSpaceLinuxBackend` with global Swift.org 6.4.1 for Ubuntu 26.04. The fresh 2026-10-14 `make linux-test` run reported 69 tests and `OK` (three opt-in checks skipped); private-Xvfb coverage includes empty startup, VTE I/O, resize, copy/paste round-trip, private PNG creation for image paste, Ctrl+C passthrough, reconnect shortcut, stale effects, orderly close, and backend failure. A frontend/backend test verifies the generated image is removed after backend completion. The focused GTK test asserts the VTE allocation fills the pane. A real `wc-1` VTE shell round-trip and terminal close passed under Xvfb using the production test identity while DevSpaceDev continued owning the separate development listener; read-only status confirmed the workspace remained Running. The earlier same-channel attempt collided with the already-running DevSpaceDev listener on port 17866 and did not open a pane. | Review the updated bundle's visual layout and close/reopen behavior on the host display; do not repeat a same-channel `wc-1` test while DevSpaceDev owns it. |

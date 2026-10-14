@@ -180,6 +180,8 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         self.assertIn("host-vte workspace=connected shell=round-trip close=workspace-preserved",
                       result.stdout)
         self.assertIn("reopen=new-pane-round-trip", result.stdout)
+        if os.environ.get("DEVSPACE_HOST_UI_IMAGE") == "1":
+            self.assertIn("image=uploaded-verified-cleaned", result.stdout)
 
     def test_existing_python_backend_regression_suite(self):
         environment = dict(os.environ, DEVSPACE_TEST_BACKEND=str(self.backend_binary))
