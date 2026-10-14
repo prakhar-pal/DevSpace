@@ -332,6 +332,28 @@ private func handle(_ message: BackendProtocolMessage) {
     }
 
     switch message.kind {
+    case "open_zed":
+        do {
+            let workspace = message.payload?["workspace_id"] ?? ""
+            try Devpod.validateId(workspace)
+            guard controller.snapshot.workspaces.contains(where: { $0.id == workspace && $0.state == "Running" }),
+                  !controller.snapshot.operations.contains(where: { $0.workspaceID == workspace }) else {
+                throw DevpodError("workspace is not available for the editor")
+            }
+            let directory = message.payload?["directory"]
+            guard directory == nil || (directory!.hasPrefix("/") && !directory!.contains("\0")) else {
+                throw DevpodError("editor folder must be an absolute path")
+            }
+            _ = send(BackendProtocolMessage(kind: "platform_open_zed", payload: [
+                "workspace_id": workspace,
+                "url": SSH.zedRemoteURL(podID: workspace,
+                    workdir: SSH.zedWorkdir(currentDirectory: directory, fallback: SSH.workdir(podID: workspace))),
+                "explicit_directory": directory == nil ? "false" : "true",
+            ]))
+            _ = send(BackendProtocolMessage(id: message.id, kind: "completed"))
+        } catch {
+            _ = send(BackendProtocolMessage(id: message.id, kind: "error", payload: ["message": String(describing: error)]))
+        }
     case "paste_image":
         do { try pasteImage(message) }
         catch { _ = send(BackendProtocolMessage(id: message.id, kind: "error", payload: ["message": String(describing: error)])) }

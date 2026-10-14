@@ -140,6 +140,18 @@ class BackendIntegrationTests(unittest.TestCase):
         self.assertEqual(response["kind"], "snapshot")
         self.assertEqual(json.loads(response["payload"]["json"])["selectedID"], "pod")
 
+    def test_editor_request_preserves_explicit_folder_and_rejects_stopped_or_unknown_workspace(self):
+        self.request("poll")
+        self.assertEqual(self.request("open_zed", workspace_id="pod", directory="/tmp/a b/α")["kind"], "completed")
+        events = [frame for frame in self.frames if frame["kind"] == "platform_open_zed"]
+        self.assertEqual(events[-1]["payload"]["url"], "ssh://pod.devpod/tmp/a%20b/%CE%B1")
+        self.assertEqual(events[-1]["payload"]["explicit_directory"], "true")
+        self.assertEqual(self.request("open_zed", workspace_id="pod", directory="relative")["kind"], "error")
+        self.assertEqual(self.request("open_zed", workspace_id="unknown")["kind"], "error")
+        (self.directory / "state").write_text("Stopped")
+        self.request("poll")
+        self.assertEqual(self.request("open_zed", workspace_id="pod")["kind"], "error")
+
     def test_path_probe_repairs_login_path_without_protocol_frames(self):
         visible = self.directory / "visible-bin"
         visible.mkdir()

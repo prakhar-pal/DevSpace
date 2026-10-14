@@ -39,6 +39,17 @@ multiline text, byte-exact bracketed framing, selection copy, and callbacks afte
 hide/disposal. GTK7 passed (one live skip); the Swift app product rebuilt.
 The physical host clipboard was not read or replaced. M03 is next.
 
+M03 first increment implemented: Ctrl+Shift+1–9/B/O/R route through a native
+window key controller without swallowing ordinary terminal Ctrl keys; editable
+controls retain their input. VTE OSC 7 reports generation-bound decoded paths,
+and validated open_zed requests preserve Unicode/space-containing folders and
+reject stopped/unknown/busy workspaces and relative paths. GTK7 (one live skip),
+backend39, and both development product builds passed. M03 is NOT complete:
+frontend image-size limits, editor discovery/fallback parity and latest live
+integration acceptance remain. M04–M10 remain unimplemented.
+The goal controller was queried and still reports paused; direct turn work is
+authorized, but automatic continuation requires resuming the goal in the UI.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

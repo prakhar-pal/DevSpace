@@ -71,10 +71,69 @@ final class WorkspaceWindow {
         gtk_box_append(root, terminalWidget)
         gtk_window_set_child(window, rootWidget)
         refreshLifecyclePanel()
+        let keys = gtk_event_controller_key_new()!
+        gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE)
+        gtk_widget_add_controller(rootWidget, keys)
+        let callback = unsafeBitCast(
+            devspaceLinuxWindowKeyPressed as @convention(c)
+                (UnsafeMutableRawPointer?, UInt32, UInt32, UInt32, UnsafeMutableRawPointer?) -> Int32,
+            to: GCallback.self
+        )
+        let destroy: GClosureNotify = { data, _ in
+            if let data { Unmanaged<WorkspaceActionContext>.fromOpaque(data).release() }
+        }
+        _ = g_signal_connect_data(UnsafeMutableRawPointer(keys), "key-pressed", callback,
+            Unmanaged.passRetained(WorkspaceActionContext(window: self, kind: "shortcut", payload: [:])).toOpaque(),
+            destroy, GConnectFlags(rawValue: 0))
     }
 
     func present() {
         gtk_window_present(window)
+    }
+
+    @discardableResult
+    func handleShortcut(keyval: UInt32, modifiers: GdkModifierType) -> Bool {
+        let allowed = GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue
+        let relevant = allowed | GDK_ALT_MASK.rawValue | GDK_SUPER_MASK.rawValue
+        guard modifiers.rawValue & relevant == allowed, actionsEnabled else { return false }
+        if let focus = gtk_window_get_focus(window),
+           g_type_check_instance_is_a(UnsafeMutableRawPointer(focus).assumingMemoryBound(to: GTypeInstance.self), gtk_editable_get_type()) != 0 {
+            return false
+        }
+        let key = gdk_keyval_to_lower(keyval)
+        if key == UInt32(GDK_KEY_b), let root = gtk_window_get_child(window),
+           let sidebar = gtk_widget_get_first_child(root) {
+            let visible: Int32 = gtk_widget_get_visible(sidebar) == 0 ? 1 : 0
+            gtk_widget_set_visible(sidebar, visible)
+            if let separator = gtk_widget_get_next_sibling(sidebar) { gtk_widget_set_visible(separator, visible) }
+            return true
+        }
+        let shiftedNumbers: [UInt32] = [UInt32(GDK_KEY_exclam), UInt32(GDK_KEY_at), UInt32(GDK_KEY_numbersign),
+            UInt32(GDK_KEY_dollar), UInt32(GDK_KEY_percent), UInt32(GDK_KEY_asciicircum),
+            UInt32(GDK_KEY_ampersand), UInt32(GDK_KEY_asterisk), UInt32(GDK_KEY_parenleft)]
+        let index = (UInt32(GDK_KEY_1)...UInt32(GDK_KEY_9)).contains(key)
+            ? Int(key - UInt32(GDK_KEY_1)) : shiftedNumbers.firstIndex(of: key)
+        if let index {
+            let hidden = Set(snapshot.layout.hidden)
+            let ids = SidebarLayout.displayIDs(order: snapshot.layout.order, workspaces: snapshot.workspaces)
+                .filter { !hidden.contains($0) }
+            guard ids.indices.contains(index) else { return false }
+            onCommand?("select", ["workspace_id": ids[index]])
+            return true
+        }
+        guard key == UInt32(GDK_KEY_r) || key == UInt32(GDK_KEY_o),
+              let workspace = snapshot.workspaces.first(where: { $0.id == snapshot.selectedID }),
+              workspace.state == "Running",
+              !snapshot.operations.contains(where: { $0.workspaceID == workspace.id }) else { return false }
+        if key == UInt32(GDK_KEY_r) {
+            guard pane(forWorkspace: workspace.id) != nil else { return false }
+            onCommand?("reconnect", ["workspace_id": workspace.id])
+        } else {
+            var payload = ["workspace_id": workspace.id]
+            if let directory = pane(forWorkspace: workspace.id)?.currentDirectory { payload["directory"] = directory }
+            onCommand?("open_zed", payload)
+        }
+        return true
     }
 
     var titleText: String {
@@ -366,4 +425,12 @@ private func devspaceLinuxWorkspaceAction(_ button: UnsafeMutableRawPointer?, _ 
     guard let button, gtk_widget_is_sensitive(button.assumingMemoryBound(to: GtkWidget.self)) != 0 else { return }
     context.window?.onCommand?(context.kind, context.payload)
     _ = button
+}
+
+@_cdecl("devspace_linux_window_key_pressed")
+private func devspaceLinuxWindowKeyPressed(_ controller: UnsafeMutableRawPointer?, _ keyval: UInt32,
+                                          _ keycode: UInt32, _ state: UInt32, _ data: UnsafeMutableRawPointer?) -> Int32 {
+    guard let data else { return 0 }
+    let context = Unmanaged<WorkspaceActionContext>.fromOpaque(data).takeUnretainedValue()
+    return context.window?.handleShortcut(keyval: keyval, modifiers: GdkModifierType(rawValue: state)) == true ? 1 : 0
 }

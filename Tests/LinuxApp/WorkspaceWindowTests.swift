@@ -78,13 +78,35 @@ struct WorkspaceWindowTests {
             try window.apply(terminalEffect(
                 kind: "terminal_launch", workspace: workspace.id, generation: generation, pane: paneID,
                 executable: "/bin/sh",
-                arguments: ["-c", "printf 'ready\\n'; while IFS= read -r input; do printf 'received:%s\\n' \"$input\"; done; exec sleep 30"]
+                arguments: ["-c", "printf 'ready\\n\\033]7;file://remote/tmp/a%%20b/%%CE%%B1\\007'; while IFS= read -r input; do printf 'received:%s\\n' \"$input\"; done; exec sleep 30"]
             ))
             try expect(pumpUntil { window.pane(for: identity)?.text.contains("ready") == true },
                        "the validated terminal launch did not render output")
             guard let originalPane = window.pane(for: identity) else {
                 throw TestFailure("terminal pane was not retained")
             }
+            let appModifiers = GdkModifierType(rawValue: GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue)
+            try expect(pumpUntil { originalPane.currentDirectory == "/tmp/a b/α" },
+                       "OSC 7 directory was not decoded for editor targeting")
+            try expect(commands.contains { $0.0 == "terminal_directory" && $0.1?["directory"] == "/tmp/a b/α" },
+                       "directory change was not reported with its pane identity")
+            try expect(!window.handleShortcut(keyval: UInt32(GDK_KEY_c), modifiers: GDK_CONTROL_MASK),
+                       "app shortcut routing swallowed terminal Ctrl+C")
+            try expect(window.handleShortcut(keyval: UInt32(GDK_KEY_2), modifiers: appModifiers),
+                       "workspace keyboard selection is missing")
+            try expect(commands.last?.0 == "select" && commands.last?.1?["workspace_id"] == otherWorkspace.id,
+                       "workspace shortcut selected the wrong id")
+            try expect(window.handleShortcut(keyval: UInt32(GDK_KEY_o), modifiers: appModifiers),
+                       "Open in Zed shortcut is missing")
+            try expect(commands.last?.0 == "open_zed" && commands.last?.1?["workspace_id"] == workspace.id,
+                       "editor shortcut did not target the selected workspace")
+            try expect(commands.last?.1?["directory"] == "/tmp/a b/α", "editor shortcut lost the active folder")
+            try expect(window.handleShortcut(keyval: UInt32(GDK_KEY_b), modifiers: appModifiers),
+                       "sidebar toggle shortcut is missing")
+            let shortcutSidebar = gtk_widget_get_first_child(gtk_window_get_child(window.window))!
+            try expect(gtk_widget_get_visible(shortcutSidebar) == 0, "sidebar toggle did not hide it")
+            _ = window.handleShortcut(keyval: UInt32(GDK_KEY_b), modifiers: appModifiers)
+            try expect(gtk_widget_get_visible(shortcutSidebar) != 0, "sidebar toggle did not restore it")
             var background = GdkRGBA()
             vte_terminal_get_color_background_for_draw(
                 UnsafeMutableRawPointer(originalPane.widget).assumingMemoryBound(to: VteTerminal.self), &background

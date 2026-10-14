@@ -78,6 +78,14 @@ final class TerminalPane {
         return String(cString: rawText)
     }
 
+    var currentDirectory: String? {
+        guard !isClosed, let uri = vte_terminal_get_current_directory_uri(terminal),
+              let components = URLComponents(string: String(cString: uri)), components.scheme == "file",
+              let path = components.percentEncodedPath.removingPercentEncoding,
+              path.hasPrefix("/"), !path.contains("\0") else { return nil }
+        return path
+    }
+
     func feed(_ text: String) {
         guard !isClosed else { return }
         text.withCString { vte_terminal_feed_child(terminal, $0, Int(text.utf8.count)) }
@@ -178,6 +186,15 @@ final class TerminalPane {
         report("terminal_focus")
     }
 
+    fileprivate func directoryChanged() {
+        guard !isClosed else { return }
+        var payload = ["workspace_id": identity.workspaceID,
+            "generation": identity.generation.uuidString.lowercased(),
+            "pane_id": identity.paneID.uuidString.lowercased()]
+        if let directory = currentDirectory { payload["directory"] = directory }
+        onEvent("terminal_directory", payload)
+    }
+
     fileprivate func childExited() {
         reportExit()
     }
@@ -263,6 +280,11 @@ final class TerminalPane {
         )
         connectSignal(UnsafeMutableRawPointer(widget), "contents-changed", contentsChanged)
         connectSignal(UnsafeMutableRawPointer(widget), "child-exited", childExited)
+        let directoryChanged = unsafeBitCast(
+            devspaceLinuxVteDirectoryChanged as @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void,
+            to: GCallback.self
+        )
+        connectSignal(UnsafeMutableRawPointer(widget), "current-directory-uri-changed", directoryChanged)
 
         let focus = gtk_event_controller_focus_new()!
         gtk_widget_add_controller(widget, focus)
@@ -449,4 +471,10 @@ private func devspaceLinuxClipboardTextReady(
     let context = Unmanaged<ClipboardImageContext>.fromOpaque(data).takeRetainedValue()
     guard let pane = context.pane, let source, let result else { return }
     pane.clipboardTextReady(OpaquePointer(source), OpaquePointer(result))
+}
+
+@_cdecl("devspace_linux_vte_directory_changed")
+private func devspaceLinuxVteDirectoryChanged(_ terminal: UnsafeMutableRawPointer?, _ data: UnsafeMutableRawPointer?) {
+    guard let data else { return }
+    Unmanaged<TerminalPane>.fromOpaque(data).takeUnretainedValue().directoryChanged()
 }
