@@ -18,6 +18,29 @@ PACKAGE_SCRIPT = ROOT / "scripts/package-linux.py"
 
 
 class AssembleLinuxTests(unittest.TestCase):
+    def test_icu_notice_is_required_before_replacing_an_existing_bundle(self):
+        self.assertEqual(self.assemble().returncode, 0)
+        original = (self.output / "bin/DevSpaceDevBackend").read_bytes()
+        (self.runtime / "lib_FoundationICU.so").write_text("controlled ICU artifact")
+        self.backend.write_text("replacement backend")
+        result = self.assemble(replace=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ICU runtime requires", result.stderr)
+        self.assertEqual((self.output / "bin/DevSpaceDevBackend").read_bytes(), original)
+
+    def test_bundle_preserves_selected_icu_notice(self):
+        (self.runtime / "lib_FoundationICU.so").write_text("controlled ICU artifact")
+        notice = self.directory / "icu-notice.txt"
+        notice.write_text("Controlled ICU license and attribution fixture\n")
+        result = subprocess.run([
+            sys.executable, str(SCRIPT), "--frontend", str(self.frontend),
+            "--backend", str(self.backend), "--swift-runtime", str(self.runtime),
+            "--icu-license", str(notice), "--channel", "production",
+            "--output", str(self.output),
+        ], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.output / "share/doc/devspace/icu-LICENSE.txt").read_bytes(), notice.read_bytes())
+
     def test_bundle_preserves_project_and_selected_toolchain_license(self):
         swift_license = self.directory / "swift-LICENSE.txt"
         swift_license.write_text("Selected toolchain license fixture\n")
@@ -70,11 +93,12 @@ class AssembleLinuxTests(unittest.TestCase):
         notice.write_text("Swift toolchain license fixture\n")
         self.output = self.directory / "installed bundle α"
 
-    def assemble(self, channel="development", replace=False):
+    def assemble(self, channel="development", replace=False, icu_license=None):
         return subprocess.run([sys.executable, str(SCRIPT), "--frontend", str(self.frontend),
                                "--backend", str(self.backend), "--swift-runtime", str(self.runtime),
                                "--channel", channel, "--output", str(self.output)] +
-                              (["--replace"] if replace else []),
+                              (["--replace"] if replace else []) +
+                              (["--icu-license", str(icu_license)] if icu_license else []),
                               capture_output=True, text=True)
 
     def test_launcher_uses_relocated_bundle_and_preserves_arguments(self):
@@ -119,7 +143,10 @@ class AssembleLinuxTests(unittest.TestCase):
         ], input="extern void xmlCheckVersion(int); void probe(void) { xmlCheckVersion(0); }\n",
             capture_output=True, text=True)
         self.assertEqual(probe.returncode, 0, probe.stderr)
-        self.assertEqual(self.assemble("production").returncode, 0)
+        (self.runtime / "lib_FoundationICU.so").write_text("controlled ICU artifact")
+        icu_notice = self.directory / "icu-notice.txt"
+        icu_notice.write_text("ICU license fixture only\n")
+        self.assertEqual(self.assemble("production", icu_license=icu_notice).returncode, 0)
         copyright_file = self.directory / "debian-copyright"
         copyright_text = (
             "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n"
@@ -173,6 +200,8 @@ class AssembleLinuxTests(unittest.TestCase):
         self.assertEqual((extracted / "usr/share/doc/devspace/copyright").read_text(), copyright_text)
         self.assertEqual((extracted / "usr/share/doc/devspace/swift-runtime-LICENSE.txt").read_text(),
                          "Swift runtime license test fixture\n")
+        self.assertEqual((extracted / "usr/share/doc/devspace/icu-LICENSE.txt").read_bytes(),
+                         icu_notice.read_bytes())
 
         environment = dict(os.environ, PATH="/usr/bin:/bin", HOME=str(self.directory / "home"))
         run = subprocess.run([str(launcher), "arg with spaces"], env=environment,
@@ -182,6 +211,13 @@ class AssembleLinuxTests(unittest.TestCase):
         self.assertEqual(launched["channel"], "production")
         self.assertEqual(launched["backend"], str(prefix / "bin/DevSpaceBackend"))
         self.assertEqual(launched["args"], ["arg with spaces"])
+        (self.output / "share/doc/devspace/icu-LICENSE.txt").unlink()
+        missing_notice_package = self.directory / "missing-icu-notice.deb"
+        result = subprocess.run(package_command[:-1] + [str(missing_notice_package)],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ICU runtime license notice is missing", result.stderr)
+        self.assertFalse(missing_notice_package.exists())
 
     def test_deb_requires_project_copyright_and_does_not_overwrite_output(self):
         self.assertEqual(self.assemble("production").returncode, 0)

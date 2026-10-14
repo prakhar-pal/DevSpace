@@ -2,6 +2,18 @@
 
 ## Current checkpoint — 2026-10-14
 
+CI run38581166318 on8ab145f passed every Linux and macOS job.
+The current runtime inventory also verified bundled ICU through its actual
+swift_u_getVersion export:76.1.0.0, matching the Swift6.4.1 release source.
+LICENSES/ICU-76.1.txt is the complete upstream notice (Git blob
+180db98fcc66ca7797940b7fad5a7f3987d9f145), including third-party data notices.
+Assembly now rejects ICU-containing runtimes without an explicit matching
+notice before replacing an existing bundle. Debian packaging preserves the
+notice under usr/share/doc/devspace and rejects older notice-less ICU bundles.
+Both rejection paths and actual notice copying were observed RED→GREEN.
+The full Linux suite passed75 tests with three opt-in skips in98.261 seconds.
+Artwork licensing and the final Debian copyright inventory remain open.
+
 CI run38579941090 on c1b00f9 passed every Linux and macOS job, including
 container Core/protocol/integration/development bundle assembly and macOS
 tests/development assembly/release executable build. Both host release products

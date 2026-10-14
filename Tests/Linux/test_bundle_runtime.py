@@ -23,7 +23,8 @@ class BundleRuntimeTests(unittest.TestCase):
             output = directory / "original bundle"
             result = subprocess.run([sys.executable, str(ROOT / "scripts/assemble-linux.py"),
                 "--frontend", str(PREFIX), "--backend", str(PREFIX / "bin/DevSpaceLinuxBackend"),
-                "--swift-runtime", str(RUNTIME), "--channel", "development", "--output", str(output)],
+                "--swift-runtime", str(RUNTIME), "--icu-license", str(ROOT / "LICENSES/ICU-76.1.txt"),
+                "--channel", "development", "--output", str(output)],
                 capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             moved = directory / "relocated bundle α"

@@ -39,6 +39,8 @@ def main():
     parser.add_argument("--swift-runtime", required=True, type=Path)
     parser.add_argument("--swift-license", type=Path,
                         help="LICENSE.txt from the selected Swift toolchain (default: its usr/share/swift)")
+    parser.add_argument("--icu-license", type=Path,
+                        help="complete notice for the ICU version embedded in the selected Swift runtime")
     parser.add_argument("--channel", choices=("development", "production"), required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--replace", action="store_true",
@@ -64,6 +66,9 @@ def main():
     swift_license = args.swift_license or args.swift_runtime.absolute().parents[2] / "share/swift/LICENSE.txt"
     if not swift_license.is_file() or swift_license.stat().st_size == 0:
         parser.exit(1, f"Swift toolchain license notice is missing: {swift_license}\n")
+    if (args.swift_runtime / "lib_FoundationICU.so").is_file():
+        if not args.icu_license or not args.icu_license.is_file() or args.icu_license.stat().st_size == 0:
+            parser.exit(1, "ICU runtime requires a nonempty --icu-license notice matching its version\n")
     development = args.channel == "development"
     name = "DevSpaceDev" if development else "DevSpace"
     command = "devspace-dev" if development else "devspace"
@@ -89,11 +94,14 @@ def main():
         documentation.mkdir(parents=True)
         shutil.copyfile(ROOT / "LICENSE", documentation / "LICENSE")
         shutil.copyfile(swift_license, documentation / "swift-runtime-LICENSE.txt")
+        if args.icu_license:
+            shutil.copyfile(args.icu_license, documentation / "icu-LICENSE.txt")
         (documentation / "licensing.txt").write_text(
             "DevSpace-owned source code: GPL-3.0-or-later. See LICENSE.\n"
             "Third-party components retain their own licenses. The Swift toolchain\n"
             "license is provided separately; it is not a complete third-party inventory.\n"
-            "Artwork licensing and embedded ICU notices require separate coverage.\n"
+            "Supplied ICU notices are preserved separately in icu-LICENSE.txt.\n"
+            "Artwork licensing requires separate coverage.\n"
         )
         launcher = bundle / "bin" / command
         launcher.write_text(f'''#!/bin/sh

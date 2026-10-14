@@ -69,6 +69,10 @@ def main():
     for file in (args.copyright_file, args.swift_license):
         if not file.is_file() or file.stat().st_size == 0:
             parser.error(f"required nonempty license notice is missing: {file}")
+    icu_notice = bundle / "share/doc/devspace/icu-LICENSE.txt"
+    if (bundle / "lib/lib_FoundationICU.so").is_file():
+        if not icu_notice.is_file() or icu_notice.stat().st_size == 0:
+            parser.error("ICU runtime license notice is missing from the bundle")
     try:
         copyright_text = args.copyright_file.read_text()
     except (OSError, UnicodeError) as error:
@@ -127,6 +131,10 @@ def main():
         documentation.mkdir(parents=True)
         shutil.copyfile(args.copyright_file, documentation / "copyright")
         shutil.copyfile(args.swift_license, documentation / "swift-runtime-LICENSE.txt")
+        for name in ("LICENSE", "licensing.txt", "icu-LICENSE.txt"):
+            notice = bundle / "share/doc/devspace" / name
+            if notice.is_file():
+                shutil.copyfile(notice, documentation / name)
 
         control = root / "DEBIAN/control"
         control.parent.mkdir()

@@ -74,11 +74,16 @@ user-installed executable.
 DevSpace-owned source is GPL-3.0-or-later (see the root LICENSE and README).
 Bundles include that license and the selected Swift toolchain's license under
 `share/doc/devspace`; pass `LINUX_SWIFT_LICENSE=` for a nonstandard toolchain
-layout. These files do not yet constitute a complete third-party notice inventory.
+layout. `LICENSES/ICU-76.1.txt` supplies the full upstream ICU notice, including
+data/third-party notices, for the verified Swift.org 6.4.1 runtime (ICU 76.1).
+Assembly and Debian packaging reject ICU-containing runtimes without a notice.
+With another toolchain, verify its ICU version and set `LINUX_ICU_LICENSE=` to
+the matching complete notice; direct assembly uses `--icu-license`.
+These files do not yet constitute a complete Debian copyright inventory.
 Supply a Debian-format copyright file and maintainer identity before building a package:
 The manifest must cover the project, artwork, and third-party code in the bundled runtime.
 The approved maintainer is `prakhar-pal <prakharpalpfdr+github@gmail.com>`;
-artwork licensing and embedded ICU notice coverage remain open.
+artwork licensing and the final copyright inventory remain open.
 
 ```sh
 make linux-package \

@@ -67,8 +67,10 @@ must cover the project and bundled third-party runtime code.
 This target builds release artifacts and requires confirmation before use. A
 complete Debian copyright manifest is not yet present in the repository.
 DevSpace-owned source is GPL-3.0-or-later; bundles carry the project GPL text
-and the selected Swift toolchain license, but embedded ICU/artwork attribution
-still needs separate coverage before distribution.
+and the selected Swift toolchain license plus the complete ICU 76.1 notice.
+The default ICU notice matches the verified global Swift.org 6.4.1 toolchain;
+override `LINUX_ICU_LICENSE` after verifying a different runtime version.
+Artwork attribution and the final Debian inventory remain open before distribution.
 
 On the current Ubuntu 26.04 development host, use the globally installed
 Swift.org 6.4.1 toolchain (`swift`/`swiftc` on `PATH`). Its SwiftPM runner is

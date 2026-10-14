@@ -23,6 +23,7 @@ class LinuxBuildTests(unittest.TestCase):
         shutil.copytree(ROOT / "Resources", self.directory / "Resources")
         shutil.copyfile(ROOT / "Info.plist", self.directory / "Info.plist")
         shutil.copyfile(ROOT / "LICENSE", self.directory / "LICENSE")
+        shutil.copytree(ROOT / "LICENSES", self.directory / "LICENSES")
         if (ROOT / "Package.resolved").exists():
             shutil.copyfile(ROOT / "Package.resolved", self.directory / "Package.resolved")
 
