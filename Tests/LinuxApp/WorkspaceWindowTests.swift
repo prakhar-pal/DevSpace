@@ -54,6 +54,8 @@ struct WorkspaceWindowTests {
             guard let originalPane = window.pane(for: identity) else {
                 throw TestFailure("terminal pane was not retained")
             }
+            try expect(gtk_widget_get_allocated_height(originalPane.widget) > 500,
+                       "the VTE widget did not expand to fill the terminal pane")
             let originalWidget = originalPane.widget
             originalPane.resize(columns: 100, rows: 30)
             try expect(pumpUntil {

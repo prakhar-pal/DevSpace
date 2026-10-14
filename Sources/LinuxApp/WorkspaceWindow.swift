@@ -161,8 +161,10 @@ final class WorkspaceWindow {
         connectAction(close, context: WorkspaceActionContext(window: self, identity: pane.identity))
         gtk_box_append(header, close)
         gtk_box_append(root, UnsafeMutableRawPointer(header).assumingMemoryBound(to: GtkWidget.self))
+        gtk_widget_set_vexpand(pane.widget, 1)
         gtk_box_append(root, pane.widget)
         let rootWidget = UnsafeMutableRawPointer(root).assumingMemoryBound(to: GtkWidget.self)
+        gtk_widget_set_vexpand(rootWidget, 1)
         terminalRoots[pane.identity] = rootWidget
         gtk_box_append(terminalContainer, rootWidget)
     }
