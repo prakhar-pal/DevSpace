@@ -172,16 +172,28 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         command = [str(self.app_runner), str(self.backend_binary), workspace, "host"]
         if not display_backend:
             command = ["xvfb-run", "-a", *command]
-        result = subprocess.run(
-            command,
-            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=120,
-        )
+        with tempfile.TemporaryDirectory(dir=self.build) as temporary:
+            if os.environ.get("DEVSPACE_HOST_UI_INTEGRATION") == "1":
+                self.assertEqual(channel, "development", "helper installation is development-only")
+                tools = Path(temporary)
+                record = tools / "zed-argument"
+                executable = tools / "zed"
+                executable.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$DEVSPACE_HOST_UI_ZED_RECORD"\n')
+                executable.chmod(0o755)
+                environment["PATH"] = f"{tools}:{environment.get('PATH', '/usr/bin:/bin')}"
+                environment["DEVSPACE_HOST_UI_ZED_RECORD"] = str(record)
+            result = subprocess.run(
+                command,
+                cwd=ROOT, env=environment, capture_output=True, text=True, timeout=120,
+            )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("host-vte workspace=connected shell=round-trip close=workspace-preserved",
                       result.stdout)
         self.assertIn("reopen=new-pane-round-trip", result.stdout)
         if os.environ.get("DEVSPACE_HOST_UI_IMAGE") == "1":
             self.assertIn("image=uploaded-verified-cleaned", result.stdout)
+        if os.environ.get("DEVSPACE_HOST_UI_INTEGRATION") == "1":
+            self.assertIn("integration=helper-badge-ded-routed", result.stdout)
 
     def test_existing_python_backend_regression_suite(self):
         environment = dict(os.environ, DEVSPACE_TEST_BACKEND=str(self.backend_binary))

@@ -201,3 +201,13 @@ the injected remote path and exact PNG bytes through VTE, and removes that
 specific generated `/tmp/devspace-paste-*.png` file. It checks local-source
 cleanup too. It does not read or replace the physical clipboard, so it is not
 proof of the desktop clipboard-image handoff.
+
+For authorized installed-helper/`ded` acceptance, set
+`DEVSPACE_TEST_CHANNEL=development DEVSPACE_HOST_UI_INTEGRATION=1` instead.
+First verify that no existing development app owns its listener or workspace
+lease. The probe selects another listed workspace without connecting to it,
+sends the real helper notification and checks the sidebar badge, then calls
+`ded /tmp` through the reopened VTE shell. A temporary controlled Zed executable
+records the resulting SSH URL; the user's editor is not launched. This verifies
+authenticated routing and launcher arguments, not a physical banner click or
+the real Zed UI. Managed integration remains installed as authorized.

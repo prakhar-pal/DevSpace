@@ -23,6 +23,10 @@ private final class TestContext {
     var hostReopened = false
     var hostImageCheckSent = false
     var hostImageVerified = false
+    var hostSelectionSent = false
+    var hostNotificationSent = false
+    var hostDedSent = false
+    var hostIntegrationVerified = false
     var failure: String?
     var exitCode: Int32 = 1
 
@@ -70,7 +74,10 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
                 "pane=\(pane == nil ? "absent" : "present") " +
                 "child=\(pane?.childPID != nil ? "started" : pane?.spawnError == nil ? "pending" : "failed") " +
                 "ready=\(pane?.text.contains("DS_UI_READY") == true) " +
-                "shell=\(pane?.text.contains("DS_UI_SHELL_OK") == true)"
+                "shell=\(pane?.text.contains("DS_UI_SHELL_OK") == true) " +
+                "workspace=\(window.snapshot.workspaces.first(where: { $0.id == context.fixture })?.state ?? "absent") " +
+                "connect=\(context.connectSent) reopen=\(context.hostClosedIdentity != nil) " +
+                "selection=\(context.hostSelectionSent) notify=\(context.hostNotificationSent) ded=\(context.hostDedSent)"
             controller.requestShutdown()
         }
         if !context.connectSent,
@@ -93,6 +100,11 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
                 if context.hostShellVerifiedAt == nil { context.hostShellVerifiedAt = Date() }
             }
             if context.hostShellVerified {
+                if ProcessInfo.processInfo.environment["DEVSPACE_HOST_UI_INTEGRATION"] == "1",
+                   context.hostClosedIdentity != nil, !context.hostIntegrationVerified {
+                    verifyHostIntegration(context, pane: pane, window: window, controller: controller)
+                    return 1
+                }
                 if ProcessInfo.processInfo.environment["DEVSPACE_HOST_UI_IMAGE"] == "1",
                    !context.hostImageVerified {
                     verifyHostImage(context, pane: pane, controller: controller)
@@ -320,6 +332,40 @@ private func verifyHostImage(_ context: TestContext, pane: TerminalPane,
     }
 }
 
+private func verifyHostIntegration(_ context: TestContext, pane: TerminalPane,
+                                   window: WorkspaceWindow, controller: LinuxApplicationController) {
+    if !context.hostSelectionSent {
+        guard let other = window.snapshot.workspaces.first(where: { $0.id != context.fixture }) else {
+            context.failure = "notification badge check requires another listed workspace"
+            controller.requestShutdown()
+            return
+        }
+        controller.sendCommand("select", payload: ["workspace_id": other.id])
+        context.hostSelectionSent = true
+        return
+    }
+    if !context.hostNotificationSent {
+        guard window.snapshot.selectedID != context.fixture else { return }
+        pane.feed("DEVSPACE_PROD_POD_FORWARD_PORT=1 ~/.devspace-notify Stop\n")
+        context.hostNotificationSent = true
+        return
+    }
+    guard window.snapshot.badges.contains(context.fixture) else { return }
+    if !context.hostDedSent {
+        pane.feed("DEVSPACE_PROD_POD_FORWARD_PORT=1 bash -ic 'ded /tmp'\n")
+        context.hostDedSent = true
+        return
+    }
+    guard let record = ProcessInfo.processInfo.environment["DEVSPACE_HOST_UI_ZED_RECORD"],
+          let argument = try? String(contentsOfFile: record, encoding: .utf8),
+          argument == "ssh://\(context.fixture).devpod/tmp\n" else { return }
+    let target = g_variant_ref_sink(g_variant_new_string(context.fixture))!
+    g_action_group_activate_action(OpaquePointer(UnsafeMutableRawPointer(context.application)),
+                                  "activate-workspace", target)
+    g_variant_unref(target)
+    context.hostIntegrationVerified = true
+}
+
 private func setPrivateClipboardImage() -> Bool {
     guard let display = gdk_display_get_default(),
           let clipboard = gdk_display_get_clipboard(display) else { return false }
@@ -415,6 +461,7 @@ struct LinuxApplicationTests {
            context.controller?.backend.state == .stopped {
             print("host-vte workspace=connected shell=round-trip close=workspace-preserved reopen=new-pane-round-trip")
             if context.hostImageVerified { print("image=uploaded-verified-cleaned") }
+            if context.hostIntegrationVerified { print("integration=helper-badge-ded-routed") }
             exit(EXIT_SUCCESS)
         }
         if context.mode != "crash", context.connectSent, context.terminalClosed,

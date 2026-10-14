@@ -90,6 +90,19 @@ prove desktop clipboard-image handoff; that remains a separate manual gate.
 The following full Linux run passed74 tests with three opt-in skips in
 119.607 seconds, with the macOS lockfile restored unchanged.
 
+The development-channel helper/`ded` opt-in initially timed out with no pane;
+read-only checks found `wc-1` Running and no DevSpace app/master or notification
+listener still active. No definitive cause was established. The next run,
+with phase-specific timeout diagnostics, passed in53.944 seconds: the real
+installed helper sent an authenticated notification through the reverse tunnel,
+the frontend snapshot gained a badge while another workspace was selected,
+and `ded /tmp` reached a controlled local Zed executable with the exact remote
+SSH URL. The notification action was invoked programmatically. This is real
+routing/launcher-boundary acceptance, not proof of physical banner interaction
+or the real editor GUI. Both the failure and successful rerun are retained.
+The full Linux suite afterward passed74 tests with three opt-in skips in
+118.862 seconds; `Package.resolved` remained unchanged after restoration.
+
 | Area | Verified evidence | Still required |
 | --- | --- | --- |
 | GTK/VTE app | SwiftPM builds `DevSpaceLinuxApp` and `DevSpaceLinuxBackend` with global Swift.org 6.4.1 for Ubuntu 26.04. The fresh 2026-10-14 `make linux-test` run reported 69 tests and `OK` (three opt-in checks skipped); private-Xvfb coverage includes empty startup, VTE I/O, resize, copy/paste round-trip, private PNG creation for image paste, Ctrl+C passthrough, reconnect shortcut, stale effects, orderly close, and backend failure. A frontend/backend test verifies the generated image is removed after backend completion. The focused GTK test asserts the VTE allocation fills the pane. A real `wc-1` VTE shell round-trip and terminal close passed under Xvfb using the production test identity while DevSpaceDev continued owning the separate development listener; read-only status confirmed the workspace remained Running. The earlier same-channel attempt collided with the already-running DevSpaceDev listener on port 17866 and did not open a pane. | Review the updated bundle's visual layout and close/reopen behavior on the host display; do not repeat a same-channel `wc-1` test while DevSpaceDev owns it. |

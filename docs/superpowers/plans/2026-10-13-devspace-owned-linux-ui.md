@@ -34,8 +34,9 @@ running after terminal close. An unlocked-host inspection found the VTE widget
 was only using its natural height; the pane and VTE now expand, covered by an
 allocation regression test. The updated DevSpaceDev bundle rebuilt and
 launched. A subsequent host Wayland screenshot and distinct-pane
-close/reconnect/reopen check passed. Task 5 remains open for
-hook/notification/ded/image paths through the visible app.
+close/reconnect/reopen check passed. Host helper/badge, authenticated `ded`
+launcher-boundary and programmatic image upload routes subsequently passed;
+physical clipboard/banner/IME and real editor GUI checks remain unverified.
 The first real terminal output also triggered automatic DevSpace hook/shell
 integration. A read-only check confirmed managed markers in wc-1's configured
 Claude settings and shell rc files plus the development helper. These managed
@@ -172,7 +173,7 @@ notification, clipboard, or image acceptance.
 - [x] With private Xvfb, test controlled output/input/resize/disposal and copy/paste using the private test clipboard, without touching the physical clipboard.
 - [x] Run an actual `wc-1` shell round-trip through the GTK/VTE app under Xvfb, verifying output, input and terminal close while the workspace remains running.
 - [x] With the unlocked host display, verify visual GTK layout and close/reopen using the approved workspace; the Swift Wayland probe closed its original pane, requested reconnect, verified I/O through a distinct replacement pane, and closed it. Read-only DevPod status remained Running. Physical clipboard replacement was not tested.
-- [ ] Verify these hook/notification/ded/image paths through the visible Swift frontend; the wc-1 backend/SSH integration passed without workspace lifecycle/project-file changes.
+- [x] Verify authorized integration routes through the host Swift frontend: existing managed helper notification produced a badge; authenticated `ded /tmp` reached a controlled local Zed executable with the correct SSH URL; private PNG upload/injection/byte verification and exact-file cleanup passed through VTE. Physical clipboard handoff, real Zed GUI and physical notification-banner clicks remain manual/unverified; an initial helper probe timeout is retained alongside its successful rerun.
 - [x] Record manual/deferred checks (IME, physical clipboard, notification banner/click, Ubuntu 24.04, package signing/CI) as unverified rather than inferring them from unit tests.
 - [x] Run a final `git diff --check` and inspect the macOS lockfile comparison; commit verified milestones per `AGENTS.md`, without publishing.
 
