@@ -153,6 +153,27 @@ final class SSHTransportSessionTests: XCTestCase {
         XCTAssertEqual(session.state, .exited)
     }
 
+    func testCompletedConfigurationCannotShortenMasterReadinessDeadline() throws {
+        let resolver = ManualProcess()
+        let master = ManualProcess()
+        let scheduler = ManualScheduler()
+        var completion: ((String?) -> Void)?
+        var checkCompletion: ((Bool) -> Void)?
+        let session = SSHTransportSession(podID: "wc-1", proxyCommand: nil,
+            controlPath: "/tmp/devspace-test/socket", launch: { _, _ in master },
+            check: { _, callback in checkCompletion = callback }, scheduler: scheduler,
+            prepare: { callback in completion = callback; return resolver })
+        session.start()
+        let configurationDeadline = try XCTUnwrap(scheduler.scheduled.first).action
+        completion?("devpod ssh --stdio wc-1")
+
+        configurationDeadline()
+        XCTAssertEqual(master.terminateCount, 0, "completed configuration timer terminated the new master")
+        XCTAssertEqual(session.state, .starting)
+        checkCompletion?(true)
+        XCTAssertEqual(session.state, .ready)
+    }
+
     func testReadinessDeadlineTerminatesUnreadyMasterOnce() {
         let harness = Harness()
         harness.checks = [false]

@@ -439,7 +439,8 @@ public final class SSHTransportSession {
                 self.launchMaster(generation: newGeneration)
             }
             scheduler.schedule(after: 15) { [weak self] in
-                self?.readinessDeadlineReached(generation: newGeneration)
+                guard let self, self.preparationGeneration == newGeneration else { return }
+                self.readinessDeadlineReached(generation: newGeneration)
             }
             return
         }
