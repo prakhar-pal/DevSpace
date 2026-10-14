@@ -33,21 +33,22 @@ final class WorkspaceWindow {
             .assumingMemoryBound(to: GtkBox.self)
         let rootWidget = UnsafeMutableRawPointer(root).assumingMemoryBound(to: GtkWidget.self)
         let sidebarWidget = UnsafeMutableRawPointer(sidebar).assumingMemoryBound(to: GtkWidget.self)
-        gtk_widget_set_size_request(sidebarWidget, 280, -1)
         gtk_widget_set_hexpand(sidebarWidget, 0)
         gtk_widget_set_margin_top(sidebarWidget, 16)
         gtk_widget_set_margin_bottom(sidebarWidget, 16)
-        gtk_widget_set_margin_start(sidebarWidget, 16)
-        gtk_widget_set_margin_end(sidebarWidget, 16)
+        gtk_widget_set_margin_start(sidebarWidget, 8)
+        gtk_widget_set_margin_end(sidebarWidget, 8)
 
         workspaceRows = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 8)!)
             .assumingMemoryBound(to: GtkBox.self)
         gtk_box_append(sidebar, UnsafeMutableRawPointer(workspaceRows).assumingMemoryBound(to: GtkWidget.self))
         statusLabel = gtk_label_new("")!
         Self.configureSidebarText(statusLabel)
+        gtk_label_set_max_width_chars(OpaquePointer(statusLabel), 0)
         gtk_box_append(sidebar, statusLabel)
         notificationWarningLabel = gtk_label_new("")!
         Self.configureSidebarText(notificationWarningLabel)
+        gtk_label_set_max_width_chars(OpaquePointer(notificationWarningLabel), 0)
         gtk_widget_set_visible(notificationWarningLabel, 0)
         gtk_box_append(sidebar, notificationWarningLabel)
 

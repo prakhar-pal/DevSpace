@@ -113,7 +113,10 @@ workspace, pane, and connection generation so delayed events cannot target a
 replacement pane. Closing a terminal does not stop its workspace.
 
 The sidebar lists every DevPod as a selectable row without extra action
-buttons or a heading; the terminal area has no title or Close bar. Rows show a
+buttons or a heading; the terminal area has no title or Close bar.
+The sidebar sizes to its workspace names, with long names capped at 24
+characters of natural width; status messages wrap within that width.
+Rows show a
 green dot for running DevPods and a grey dot for stopped
 or unresolved DevPods; selection is indicated by the row highlight. Status
 refresh runs automatically. Running DevPods connect on startup

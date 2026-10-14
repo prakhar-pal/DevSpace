@@ -139,16 +139,20 @@ struct WorkspaceWindowTests {
             var baselineMinimum: Int32 = 0
             var baselineNatural: Int32 = 0
             gtk_widget_measure(sidebar, GTK_ORIENTATION_HORIZONTAL, -1, &baselineMinimum, &baselineNatural, nil, nil)
+            try expect(baselineNatural < 220, "short workspace names still reserve a wide sidebar: \(baselineNatural)")
             window.update(WorkspaceControllerSnapshot(
                 revision: 2, workspaces: [workspace, otherWorkspace], selectedID: workspace.id,
                 layout: Layout(aliases: [workspace.id: String(repeating: "LongProject", count: 10)]), terminalPanes: []
             ))
-            window.setStatus("Claude hooks installed for fixture-pod. Reload its terminal to enable ded and directory reporting in this shell.")
+            var nameMinimum: Int32 = 0
+            var nameNatural: Int32 = 0
+            gtk_widget_measure(sidebar, GTK_ORIENTATION_HORIZONTAL, -1, &nameMinimum, &nameNatural, nil, nil)
+            window.setStatus("SSH connection failed for fixture-pod. Check the workspace connection and try again.")
             var minimumWidth: Int32 = 0
             var naturalWidth: Int32 = 0
             gtk_widget_measure(sidebar, GTK_ORIENTATION_HORIZONTAL, -1, &minimumWidth, &naturalWidth, nil, nil)
-            try expect(minimumWidth <= baselineMinimum && naturalWidth <= baselineNatural,
-                       "long sidebar text widened minimum=\(minimumWidth)/\(baselineMinimum) natural=\(naturalWidth)/\(baselineNatural)")
+            try expect(naturalWidth < 280 && minimumWidth <= nameMinimum && naturalWidth <= nameNatural,
+                       "long sidebar text widened minimum=\(minimumWidth)/\(nameMinimum) natural=\(naturalWidth)/\(nameNatural)")
             try expect(pumpUntil {
                 gtk_widget_get_allocated_width(originalPane.widget) >=
                     gtk_widget_get_width(gtk_window_get_child(window.window)) - naturalWidth - 2
