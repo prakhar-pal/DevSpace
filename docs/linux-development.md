@@ -21,6 +21,12 @@ The app links against the system GTK4 and VTE GTK4 runtime libraries. It also
 uses OpenSSH, `setsid` from `util-linux`, and the user's `devpod` CLI. The
 development bundle carries Swift runtime libraries, not GTK/VTE or DevPod.
 
+For the test suites, also install the shell and private-display tools:
+
+```sh
+sudo apt-get install -y python3 zsh xvfb xauth dbus openssh-client util-linux
+```
+
 ## Build and launch
 
 ```sh
@@ -91,14 +97,17 @@ different artifact path when rebuilding.
 The Linux job in `.github/workflows/ci.yml` uses the official
 [`swift:6.4.1-resolute` image](https://www.swift.org/install/linux/ubuntu/26_04/)
 on the [Ubuntu 26.04 runner](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2604-Readme.md).
-It installs GTK/VTE headers and test tools, runs Core XCTest, the Swift protocol
+It installs GTK/VTE headers and test tools (including Bash and Zsh), runs Core XCTest, the Swift protocol
 client, Linux integration and synthetic package assembly checks, then assembles a
 development bundle. GUI checks use private Xvfb displays with accessibility
 disabled for test processes. Real workspaces, physical clipboard/IME, and
 notification banner clicks remain opt-in host acceptance.
 
-The workflow definition is locally validated; its GitHub execution is pending
-publication. It does not produce a production `.deb` while project/runtime
+The permission-denial Core test requires an unprivileged user and explicitly
+skips under root, which can bypass Unix file read permissions. Other hook
+preservation tests still run in the CI container.
+
+The workflow does not produce a production `.deb` while project/runtime
 copyright coverage and maintainer metadata are missing. The existing macOS
 job remains in the same workflow.
 

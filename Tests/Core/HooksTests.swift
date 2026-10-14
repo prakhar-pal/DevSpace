@@ -1,5 +1,10 @@
 import Foundation
 import XCTest
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 @testable import DevSpaceCore
 
 // Mirrors hooks.rs tests.
@@ -78,6 +83,7 @@ final class HooksTests: XCTestCase {
     }
 
     func testUnreadableButWritableSettingsAreNotReplacedWithEmptySettings() throws {
+        try XCTSkipIf(geteuid() == 0, "Root bypasses file read permissions; run this test as an unprivileged user")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("claude-settings-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }

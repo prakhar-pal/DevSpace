@@ -351,8 +351,10 @@ final class ShellIntegrationTests: XCTestCase {
 
     private func shellSpecs() throws -> [ShellSpec] {
         let bashCandidates = ["/opt/homebrew/bin/bash", "/bin/bash"]
-        let bash = try XCTUnwrap(bashCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }))
-        let zsh = try XCTUnwrap(["/bin/zsh"].first(where: { FileManager.default.isExecutableFile(atPath: $0) }))
+        let bash = try XCTUnwrap(bashCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }),
+                                 "Bash must be installed to verify shell integration")
+        let zsh = try XCTUnwrap(["/bin/zsh"].first(where: { FileManager.default.isExecutableFile(atPath: $0) }),
+                                "Zsh must be installed to verify shell integration")
         return [
             ShellSpec(name: "bash", path: bash),
             ShellSpec(name: "zsh", path: zsh),
