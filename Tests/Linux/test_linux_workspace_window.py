@@ -163,11 +163,17 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
     def test_real_workspace_shell_round_trips_through_the_vte_widget(self):
         workspace = os.environ["DEVSPACE_HOST_UI_WORKSPACE"]
         channel = os.environ.get("DEVSPACE_TEST_CHANNEL", "production")
-        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none",
+        display_backend = os.environ.get("DEVSPACE_HOST_UI_DISPLAY", "")
+        self.assertIn(display_backend, ("", "wayland", "x11"))
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND=display_backend or "x11", GTK_A11Y="none",
                            DEVSPACE_TEST_CHANNEL=channel)
-        environment.pop("WAYLAND_DISPLAY", None)
+        if display_backend != "wayland":
+            environment.pop("WAYLAND_DISPLAY", None)
+        command = [str(self.app_runner), str(self.backend_binary), workspace, "host"]
+        if not display_backend:
+            command = ["xvfb-run", "-a", *command]
         result = subprocess.run(
-            ["xvfb-run", "-a", str(self.app_runner), str(self.backend_binary), workspace, "host"],
+            command,
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=120,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

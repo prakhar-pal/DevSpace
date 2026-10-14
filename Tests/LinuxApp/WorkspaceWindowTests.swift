@@ -56,6 +56,24 @@ struct WorkspaceWindowTests {
             }
             try expect(gtk_widget_get_allocated_height(originalPane.widget) > 500,
                        "the VTE widget did not expand to fill the terminal pane")
+            let sidebar = gtk_widget_get_first_child(gtk_window_get_child(window.window))!
+            var baselineMinimum: Int32 = 0
+            var baselineNatural: Int32 = 0
+            gtk_widget_measure(sidebar, GTK_ORIENTATION_HORIZONTAL, -1, &baselineMinimum, &baselineNatural, nil, nil)
+            window.update(WorkspaceControllerSnapshot(
+                revision: 1, workspaces: [workspace], selectedID: workspace.id,
+                layout: Layout(aliases: [workspace.id: String(repeating: "LongProject", count: 10)]), terminalPanes: []
+            ))
+            window.setStatus("Claude hooks installed for fixture-pod. Reload its terminal to enable ded and directory reporting in this shell.")
+            var minimumWidth: Int32 = 0
+            var naturalWidth: Int32 = 0
+            gtk_widget_measure(sidebar, GTK_ORIENTATION_HORIZONTAL, -1, &minimumWidth, &naturalWidth, nil, nil)
+            try expect(minimumWidth <= baselineMinimum && naturalWidth <= baselineNatural,
+                       "long sidebar text widened minimum=\(minimumWidth)/\(baselineMinimum) natural=\(naturalWidth)/\(baselineNatural)")
+            try expect(pumpUntil {
+                gtk_widget_get_allocated_width(originalPane.widget) >=
+                    gtk_widget_get_width(gtk_window_get_child(window.window)) - naturalWidth - 2
+            }, "the sidebar consumed expansion space intended for the terminal")
             let originalWidget = originalPane.widget
             originalPane.resize(columns: 100, rows: 30)
             try expect(pumpUntil {

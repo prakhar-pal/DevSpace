@@ -166,3 +166,19 @@ clipboard, or image-upload acceptance require separate authorization. Manual
 desktop checks still include visual layout, IME, copy/paste behavior, banner
 clicks, app restart/recovery, and a native GTK/VTE host run. None should be
 inferred from Xvfb or controlled backend tests.
+
+For an authorized workspace check on the host Wayland display, run:
+
+```sh
+DEVSPACE_HOST_UI_WORKSPACE=wc-1 DEVSPACE_TEST_CHANNEL=production \
+DEVSPACE_HOST_UI_DISPLAY=wayland \
+DEVSPACE_HOST_UI_SCREENSHOT="$PWD/.tmp/linux-migration/host-vte.png" \
+dbus-run-session -- python3 -B -m unittest \
+  Tests.Linux.test_linux_workspace_window.LinuxWorkspaceWindowTests.test_real_workspace_shell_round_trips_through_the_vte_widget -v
+```
+
+Use an unoccupied test channel and create the screenshot's parent directory
+first. Omit the screenshot variable to disable capture. The test captures only
+its own GTK window, not the desktop; it sends shell markers and closes its
+temporary terminal without stopping the workspace. This does not verify
+close/reopen, physical clipboard, input methods, or banner interaction.

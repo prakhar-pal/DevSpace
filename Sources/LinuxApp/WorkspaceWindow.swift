@@ -34,6 +34,7 @@ final class WorkspaceWindow {
         let rootWidget = UnsafeMutableRawPointer(root).assumingMemoryBound(to: GtkWidget.self)
         let sidebarWidget = UnsafeMutableRawPointer(sidebar).assumingMemoryBound(to: GtkWidget.self)
         gtk_widget_set_size_request(sidebarWidget, 280, -1)
+        gtk_widget_set_hexpand(sidebarWidget, 0)
         gtk_widget_set_margin_top(sidebarWidget, 16)
         gtk_widget_set_margin_bottom(sidebarWidget, 16)
         gtk_widget_set_margin_start(sidebarWidget, 16)
@@ -52,12 +53,10 @@ final class WorkspaceWindow {
             .assumingMemoryBound(to: GtkBox.self)
         gtk_box_append(sidebar, UnsafeMutableRawPointer(workspaceRows).assumingMemoryBound(to: GtkWidget.self))
         statusLabel = gtk_label_new("")!
-        gtk_label_set_xalign(OpaquePointer(statusLabel), 0)
-        gtk_label_set_wrap(OpaquePointer(statusLabel), 1)
+        Self.configureSidebarText(statusLabel)
         gtk_box_append(sidebar, statusLabel)
         notificationWarningLabel = gtk_label_new("")!
-        gtk_label_set_xalign(OpaquePointer(notificationWarningLabel), 0)
-        gtk_label_set_wrap(OpaquePointer(notificationWarningLabel), 1)
+        Self.configureSidebarText(notificationWarningLabel)
         gtk_widget_set_visible(notificationWarningLabel, 0)
         gtk_box_append(sidebar, notificationWarningLabel)
 
@@ -226,7 +225,7 @@ final class WorkspaceWindow {
         let title = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6)!)
             .assumingMemoryBound(to: GtkBox.self)
         let label = gtk_label_new("\(alias ?? workspace.id) · \(workspace.state)\(selected ? " · Selected" : "")\(badged ? " · ●" : "")")!
-        gtk_label_set_xalign(OpaquePointer(label), 0)
+        Self.configureSidebarText(label)
         gtk_widget_set_hexpand(label, 1)
         gtk_box_append(title, label)
         gtk_box_append(row, UnsafeMutableRawPointer(title).assumingMemoryBound(to: GtkWidget.self))
@@ -251,6 +250,13 @@ final class WorkspaceWindow {
         gtk_widget_set_sensitive(button, actionsEnabled ? 1 : 0)
         connectAction(button, context: WorkspaceActionContext(window: self, kind: kind, payload: payload))
         gtk_box_append(box, button)
+    }
+
+    private static func configureSidebarText(_ label: UnsafeMutablePointer<GtkWidget>) {
+        gtk_label_set_xalign(OpaquePointer(label), 0)
+        gtk_label_set_wrap(OpaquePointer(label), 1)
+        gtk_label_set_wrap_mode(OpaquePointer(label), PANGO_WRAP_WORD_CHAR)
+        gtk_label_set_max_width_chars(OpaquePointer(label), 24)
     }
 
     private func connectAction(_ button: UnsafeMutablePointer<GtkWidget>, context: WorkspaceActionContext) {

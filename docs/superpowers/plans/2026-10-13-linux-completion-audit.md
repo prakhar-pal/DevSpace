@@ -40,6 +40,19 @@ the authorized `wc-1` shell. Launch process exits are observed by the existing
 GTK pump; running editors are not terminated when DevSpace closes. Real `ded`
 opening the user's editor remains host acceptance.
 
+The host Wayland screenshot exposed an expanding sidebar. Sidebar text now
+wraps even long unbroken aliases, and the sidebar does not inherit horizontal
+expansion from its children. The Swift sizing regression measures against the
+same theme's normal sidebar and verifies the terminal receives remaining space;
+it failed with expansion/unbounded text restored and passed after the fix.
+The final rerun passed all six controlled GTK/entry-point checks, but its
+opt-in `wc-1` check timed out before creating a pane. A subsequent read-only
+`devpod status wc-1 --output json` reported `Stopped`. No start/stop command was
+issued. Earlier host screenshots are historical evidence, not a new host pass.
+The screenshot harness captures only its own GTK window. Close/reopen and
+physical input/notification acceptance remain open. PR111's successful macOS
+check is on an older head and does not verify the current shared Core changes.
+
 | Area | Verified evidence | Still required |
 | --- | --- | --- |
 | GTK/VTE app | SwiftPM builds `DevSpaceLinuxApp` and `DevSpaceLinuxBackend` with global Swift.org 6.4.1 for Ubuntu 26.04. The fresh 2026-10-14 `make linux-test` run reported 69 tests and `OK` (three opt-in checks skipped); private-Xvfb coverage includes empty startup, VTE I/O, resize, copy/paste round-trip, private PNG creation for image paste, Ctrl+C passthrough, reconnect shortcut, stale effects, orderly close, and backend failure. A frontend/backend test verifies the generated image is removed after backend completion. The focused GTK test asserts the VTE allocation fills the pane. A real `wc-1` VTE shell round-trip and terminal close passed under Xvfb using the production test identity while DevSpaceDev continued owning the separate development listener; read-only status confirmed the workspace remained Running. The earlier same-channel attempt collided with the already-running DevSpaceDev listener on port 17866 and did not open a pane. | Review the updated bundle's visual layout and close/reopen behavior on the host display; do not repeat a same-channel `wc-1` test while DevSpaceDev owns it. |

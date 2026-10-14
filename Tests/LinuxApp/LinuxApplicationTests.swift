@@ -18,6 +18,7 @@ private final class TestContext {
     var editorProbeSent = false
     var hostCommandSent = false
     var hostShellVerified = false
+    var hostShellVerifiedAt: Date?
     var failure: String?
     var exitCode: Int32 = 1
 
@@ -80,8 +81,17 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
             }
             if pane.text.contains("DS_UI_READY") && pane.text.contains("DS_UI_SHELL_OK") {
                 context.hostShellVerified = true
+                if context.hostShellVerifiedAt == nil { context.hostShellVerifiedAt = Date() }
             }
             if context.hostShellVerified {
+                if let path = ProcessInfo.processInfo.environment["DEVSPACE_HOST_UI_SCREENSHOT"] {
+                    guard Date().timeIntervalSince(context.hostShellVerifiedAt ?? Date()) >= 0.2 else { return 1 }
+                    guard captureWindow(window.window, at: path) else {
+                        context.failure = "could not capture the owned GTK window"
+                        controller.requestShutdown()
+                        return 1
+                    }
+                }
                 guard window.snapshot.workspaces.first(where: { $0.id == context.fixture })?.state == "Running" else {
                     context.failure = "closing the real workspace terminal changed workspace lifecycle state"
                     controller.requestShutdown()
@@ -228,6 +238,25 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
         controller.requestShutdown()
     }
     return 1
+}
+
+private func captureWindow(_ window: UnsafeMutablePointer<GtkWindow>, at path: String) -> Bool {
+    let widget = UnsafeMutableRawPointer(window).assumingMemoryBound(to: GtkWidget.self)
+    let width = gtk_widget_get_width(widget)
+    let height = gtk_widget_get_height(widget)
+    guard width > 0, height > 0,
+          let renderer = gtk_native_get_renderer(OpaquePointer(UnsafeMutableRawPointer(window))) else { return false }
+    let paintable = gtk_widget_paintable_new(widget)!
+    defer { g_object_unref(UnsafeMutableRawPointer(paintable)) }
+    let snapshot = gtk_snapshot_new()!
+    gdk_paintable_snapshot(paintable, snapshot, Double(width), Double(height))
+    guard let node = gtk_snapshot_free_to_node(snapshot) else { return false }
+    defer { gsk_render_node_unref(node) }
+    guard let texture = gsk_renderer_render_texture(renderer, node, nil) else { return false }
+    defer { g_object_unref(UnsafeMutableRawPointer(texture)) }
+    guard gdk_texture_save_to_png(texture, path) != 0 else { return false }
+    try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+    return true
 }
 
 private func setPrivateClipboardImage() -> Bool {
