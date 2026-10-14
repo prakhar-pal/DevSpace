@@ -40,6 +40,16 @@ Claude settings and shell rc files plus the development helper; whether to keep
 or remove those managed entries is awaiting user direction. Real clipboard/
 image upload remains unverified pending separate approval.
 
+The 2026-10-14 repeat host test was run with the development identity while
+the user's DevSpaceDev instance already owned `wc-1` and its development
+notification listener. It could not create a second terminal pane; the
+backend's `notify socket bind failed` is explained by the active listener, and
+the existing SSH control lease prevents a duplicate session. A read-only
+DevPod status query confirmed `wc-1` is Running. Neither the app nor workspace
+was stopped or changed by this attempt. Do not rerun this same-channel test
+against the active instance; use its existing session for visual inspection or
+arrange a separately isolated test identity/workspace before another live run.
+
 ## File Boundaries
 
 | File | Responsibility |
