@@ -1,6 +1,7 @@
 import Foundation
 import Glibc
 import CGTK
+import DevSpaceCore
 
 @_cdecl("devspace_linux_activate")
 private func devspaceLinuxActivate(_ application: UnsafeMutableRawPointer?, _ data: UnsafeMutableRawPointer?) {
@@ -22,6 +23,7 @@ guard let channel = ProcessInfo.processInfo.environment["DEVSPACE_BUILD_CHANNEL"
     exit(EXIT_FAILURE)
 }
 
+Log.write("Linux GTK application starting")
 let application = gtk_application_new(applicationIdentifier, GApplicationFlags(rawValue: 0))!
 let backendExecutable = LinuxApplicationChannel.backendExecutableURL(
     URL(fileURLWithPath: CommandLine.arguments[0]),

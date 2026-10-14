@@ -92,6 +92,15 @@ with `devspace`. The package requires DevPod to be installed separately. The
 builder preserves an existing output file; use `LINUX_PACKAGE_OUTPUT=` for a
 different artifact path when rebuilding.
 
+## Diagnostics
+
+Debug development builds append diagnostics to
+`${XDG_STATE_HOME:-$HOME/.local/state}/devspace-dev/devspace.log`.
+The directory is private (0700) and the file is owner-only (0600); unsafe
+directories and symlink log files are rejected. The app and backend share this
+append-only log. Production channels and release binaries do not write it.
+Logging never uses the backend's protocol stdout.
+
 ## Continuous integration
 
 The Linux job in `.github/workflows/ci.yml` uses the official

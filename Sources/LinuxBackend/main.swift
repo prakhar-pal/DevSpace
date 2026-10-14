@@ -76,6 +76,7 @@ private func sendSnapshot(_ id: String?, from controller: WorkspaceController) -
 }
 
 let identity = requestedIdentity()
+Log.write("Linux backend starting")
 let paths = DevSpacePaths(platform: .linux, channel: identity.channel)
 let controller = WorkspaceController(layout: LayoutStore.load(paths: paths))
 let operations = WorkspaceOperationGate()
