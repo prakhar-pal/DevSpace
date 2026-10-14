@@ -113,7 +113,7 @@ work; no full-port or installed-package completion is claimed.
 ## Task 5: Package and Release
 
 - [ ] Add Linux build, test, run, and package targets while preserving the macOS commands.
-- [ ] Produce an Ubuntu `.deb` containing the frontend, backend, required Swift runtime libraries, Ghostty resources, desktop entries, and license notices. Declare system GTK dependencies.
+- [ ] Produce an Ubuntu `.deb` containing the Linux frontend/backend, required Swift runtime libraries, desktop entries/icons, and license notices. Declare GTK4 and VTE GTK4 as system dependencies; do not bundle Ghostty resources because Linux uses VTE.
 - [ ] Build against Ubuntu 24.04 with baseline CPU settings; validate installation on a clean machine without developer toolchains.
 - [ ] Add Linux core/protocol tests and package builds to CI alongside macOS tests and development builds.
 - [ ] Record the architecture decision, dependency pins, build prerequisites, patch-update procedure, and Linux installation instructions.
