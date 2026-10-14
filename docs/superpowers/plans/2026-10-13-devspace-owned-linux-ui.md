@@ -34,7 +34,11 @@ was only using its natural height; the pane and VTE now expand, covered by an
 allocation regression test. The updated DevSpaceDev bundle rebuilt and
 launched. Task 5 remains open for post-fix visual review, close/reopen
 inspection, and hook/notification/ded/image paths through the visible app.
-Real clipboard/image upload remains unverified pending separate approval.
+The first real terminal output also triggered automatic DevSpace hook/shell
+integration. A read-only check confirmed managed markers in wc-1's configured
+Claude settings and shell rc files plus the development helper; whether to keep
+or remove those managed entries is awaiting user direction. Real clipboard/
+image upload remains unverified pending separate approval.
 
 ## File Boundaries
 
