@@ -18,4 +18,12 @@ public final class SSHWorkspaceCommandRunner: CommandRunning, @unchecked Sendabl
         return try runner.run(SSH.workspaceCommandArgs(podID: podID, controlPath: controlPath, command: args[2]))
     }
     public func cancel() { runner.cancel() }
+
+    public func cancelNotificationForwarding(bundleIdentifier: String) throws {
+        let ports = SSH.ports(bundleIdentifier: bundleIdentifier)
+        _ = try runner.run([
+            "-S", controlPath, "-O", "cancel", "-R",
+            "\(ports.podForwardPort):localhost:\(ports.listenerPort)", "\(podID).devpod",
+        ])
+    }
 }

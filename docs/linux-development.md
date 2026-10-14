@@ -24,7 +24,7 @@ development bundle carries Swift runtime libraries, not GTK/VTE or DevPod.
 For the test suites, also install the shell and private-display tools:
 
 ```sh
-sudo apt-get install -y python3 zsh xvfb xauth dbus openssh-client util-linux
+sudo apt-get install -y python3 zsh curl xvfb xauth dbus openssh-client util-linux
 ```
 
 ## Build and launch
@@ -161,6 +161,11 @@ settings/hooks and publishes validated settings atomically. Development and
 production keep separate layout, application identity, and SSH state while
 sharing the owner-only notification token. The development helper is
 `~/.devspace-notify`; it is not installed in production.
+
+Disconnect cleanup cancels only that channel's owned reverse notification
+forward before removing managed Claude hooks. When the other channel's tunnel
+is still reachable, shared hooks remain installed for it. The last disconnect
+removes managed notification hooks while preserving unrelated settings.
 
 ## Tests
 

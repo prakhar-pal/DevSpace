@@ -207,7 +207,14 @@ private func removeHooksWhenIntegrationSettles(
     }
     let runner = SSHWorkspaceCommandRunner(podID: workspace, controlPath: controlPath)
     DispatchQueue.global(qos: .utility).async {
-        let result = Result { try Hooks.remove(runner, podID: workspace) }
+        let result = Result {
+            // Withdraw our forward before checking the peer. Concurrent
+            // disconnects then agree on whether any notification tunnel remains.
+            try runner.cancelNotificationForwarding(bundleIdentifier: identity.channel.applicationIdentifier)
+            let otherPort = identity.channel == .development
+                ? PodPortRouting.productionPort : PodPortRouting.developmentPort
+            try Hooks.remove(runner, podID: workspace, preservingTunnelOnPort: otherPort)
+        }
         DispatchQueue.main.async {
             if case .failure = result, !stopping {
                 _ = send(BackendProtocolMessage(kind: "platform_error", payload: [

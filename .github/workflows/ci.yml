@@ -29,7 +29,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             build-essential dpkg-dev pkg-config libgtk-4-dev \
-            libvte-2.91-gtk4-dev xvfb xauth dbus python3 openssh-client util-linux zsh
+            libvte-2.91-gtk4-dev xvfb xauth dbus python3 openssh-client util-linux zsh curl
 
       - name: Show toolchain and native libraries
         run: |

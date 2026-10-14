@@ -97,14 +97,22 @@ public enum Hooks {
 
     /// Remove DevSpace's Claude hooks from a pod without disturbing other
     /// tools' hooks or settings. Used when the app disconnects from a pod.
-    public static func remove(_ runner: CommandRunning, podID: String) throws {
+    public static func remove(_ runner: CommandRunning, podID: String, preservingTunnelOnPort: UInt16? = nil) throws {
         try Devpod.validateId(podID)
+        let probe = preservingTunnelOnPort.map {
+            "curl --noproxy '*' -fsS --max-time 1 -o /dev/null http://127.0.0.1:\($0)/ 2>/dev/null"
+        }
+        let settingsRead = "if [ -e \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\" ]; then cat \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\"; else printf '{}'; fi"
+        let readCommand = probe.map {
+            "if \($0); then printf '__DEVSPACE_OTHER_TUNNEL_ACTIVE__'; else \(settingsRead); fi"
+        } ?? settingsRead
         let read = try runner.run([
             "ssh", "--command",
-            "if [ -e \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\" ]; then cat \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\"; else printf '{}'; fi",
+            readCommand,
             "--start-services=false",
             "--", podID,
         ])
+        if read == "__DEVSPACE_OTHER_TUNNEL_ACTIVE__" { return }
         guard let existing = try JSONSerialization.jsonObject(
             with: Data(read.trimmingCharacters(in: .whitespacesAndNewlines).utf8)
         ) as? [String: Any] else {
@@ -118,6 +126,7 @@ public enum Hooks {
             + "&& mkdir -p \"$CLAUDE_DIR\" "
             + "&& lock_dir=\"$CLAUDE_DIR/.devspace-settings.lock\" && mkdir \"$lock_dir\" "
             + "&& trap 'rmdir -- \"$lock_dir\"' EXIT && trap 'exit 1' HUP INT TERM "
+            + (probe.map { "&& if \($0); then exit 0; fi " } ?? "")
             + "&& settings_tmp=$(mktemp \"$CLAUDE_DIR/.devspace-settings-XXXXXX\") "
             + "&& trap 'rm -f -- \"$settings_tmp\"; rmdir -- \"$lock_dir\"' EXIT "
             + "&& echo \(settingsB64) | base64 -d > \"$settings_tmp\" "

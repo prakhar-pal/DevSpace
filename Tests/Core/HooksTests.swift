@@ -283,6 +283,33 @@ final class HooksTests: XCTestCase {
         XCTAssertEqual(eventArray(written, "Notification")?.count, 2)
     }
 
+    #if os(Linux)
+    func testRemovalPreservesHooksUntilTheOtherTunnelDisconnects() throws {
+        let listener = NotifyListener(expectedToken: "tok", port: 0) { _, _ in }
+        try listener.start()
+        defer { listener.stop() }
+        let port = try XCTUnwrap(listener.listeningPort)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("claude-other-tunnel-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let runner = LocalShellRunner(directory: directory)
+        let settings = directory.appendingPathComponent("settings.json")
+        try #"{"permissions":{"allow":["Bash(git:*)"]}}"#.write(to: settings, atomically: true, encoding: .utf8)
+        try Hooks.inject(runner, podID: "pod", token: "tok", installManualHelper: false)
+        let installed = try Data(contentsOf: settings)
+
+        try Hooks.remove(runner, podID: "pod", preservingTunnelOnPort: port)
+        XCTAssertEqual(try Data(contentsOf: settings), installed,
+                       "disconnecting one channel removed hooks used by another live channel")
+
+        listener.stop()
+        try Hooks.remove(runner, podID: "pod", preservingTunnelOnPort: port)
+        let cleaned = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: settings)) as? [String: Any])
+        XCTAssertNil(cleaned["hooks"], "last channel disconnect did not remove managed hooks")
+        XCTAssertEqual(cleaned["permissions"] as? [String: [String]], ["allow": ["Bash(git:*)"]])
+    }
+    #endif
+
     func testBakesLiteralPodIdTokenEventNoEnv() {
         let merged = Hooks.mergeSettings(nil, podID: "wc-7", token: "deadbeef")
         let arr = eventArray(merged, "PreToolUse")!
