@@ -256,6 +256,20 @@ struct WorkspaceWindowTests {
             try expect(!commands.contains { ["stop", "delete", "recreate"].contains($0.0) },
                        "closing a terminal issued a workspace lifecycle action")
 
+            window.apply(try terminalEffect(
+                kind: "terminal_launch", workspace: workspace.id, generation: generation, pane: UUID(),
+                executable: "/bin/sh", arguments: ["-c", "exec sleep 30"]
+            ))
+            try expect(window.terminalCount == 0, "a launch from a retired connection generation spawned a shell")
+
+            let replacement = TerminalPaneIdentity(workspaceID: workspace.id, generation: UUID(), paneID: UUID())
+            window.apply(try terminalEffect(
+                kind: "terminal_launch", workspace: workspace.id, generation: replacement.generation,
+                pane: replacement.paneID, executable: "/bin/sh", arguments: ["-c", "exec sleep 30"]
+            ))
+            try expect(window.terminalCount == 1, "a fresh connection generation could not launch")
+            window.closeTerminal(replacement)
+
             gtk_window_destroy(window.window)
             print("workspace-window snapshot-identity=stable stale-generation=rejected close=workspace-preserved")
             g_object_unref(UnsafeMutableRawPointer(application))

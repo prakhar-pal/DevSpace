@@ -11,6 +11,7 @@ final class WorkspaceWindow {
     private let notificationWarningLabel: UnsafeMutablePointer<GtkWidget>
     private var terminalPanes: [TerminalPaneIdentity: TerminalPane] = [:]
     private var terminalRoots: [TerminalPaneIdentity: UnsafeMutablePointer<GtkWidget>] = [:]
+    private var retiredTerminalGenerations: [String: Set<UUID>] = [:]
     private var actionsEnabled = true
     private var terminalErrorWorkspace: String?
     private(set) var snapshot = WorkspaceControllerSnapshot(
@@ -111,6 +112,7 @@ final class WorkspaceWindow {
         switch effect.kind {
         case "terminal_launch":
             guard terminalPanes[identity] == nil else { return }
+            guard retiredTerminalGenerations[effect.workspaceID]?.contains(effect.generation) != true else { return }
             guard let launch = LinuxTerminalLaunch(
                 kind: effect.kind, workspaceID: effect.workspaceID, paneID: paneID,
                 generation: effect.generation, executable: effect.executable,
@@ -167,6 +169,11 @@ final class WorkspaceWindow {
         if reportExit { pane.reportExit() }
         if let root = terminalRoots.removeValue(forKey: identity) { gtk_box_remove(terminalContainer, root) }
         pane.dispose()
+        if !terminalPanes.keys.contains(where: {
+            $0.workspaceID == identity.workspaceID && $0.generation == identity.generation
+        }) {
+            retiredTerminalGenerations[identity.workspaceID, default: []].insert(identity.generation)
+        }
         revealSelectedTerminal()
     }
 
