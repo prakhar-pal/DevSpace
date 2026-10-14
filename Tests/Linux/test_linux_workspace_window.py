@@ -96,7 +96,7 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
             cls.temporary.cleanup()
 
     def test_snapshot_and_terminal_effect_lifecycle(self):
-        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11")
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
         environment.pop("WAYLAND_DISPLAY", None)
         result = subprocess.run(
             ["xvfb-run", "-a", str(self.workspace_runner)], cwd=ROOT, env=environment,
@@ -107,7 +107,7 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
 
     def test_backend_snapshot_effects_and_shutdown_reach_the_gtk_window(self):
         events = self.build / "linux-app-events.jsonl"
-        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11",
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none",
                            DEVSPACE_TEST_EVENTS=str(events))
         environment.pop("WAYLAND_DISPLAY", None)
         result = subprocess.run(
@@ -124,7 +124,7 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         self.assertFalse(any(kind in {"stop", "delete", "recreate"} for kind in requests))
 
     def test_backend_crash_disables_actions_without_freezing_gtk(self):
-        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11")
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
         environment.pop("WAYLAND_DISPLAY", None)
         result = subprocess.run(
             ["xvfb-run", "-a", str(self.app_runner), shutil.which("python3") or "/usr/bin/python3",
@@ -140,7 +140,7 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
     def test_real_workspace_shell_round_trips_through_the_vte_widget(self):
         workspace = os.environ["DEVSPACE_HOST_UI_WORKSPACE"]
         channel = os.environ.get("DEVSPACE_TEST_CHANNEL", "production")
-        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11",
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none",
                            DEVSPACE_TEST_CHANNEL=channel)
         environment.pop("WAYLAND_DISPLAY", None)
         result = subprocess.run(
