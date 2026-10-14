@@ -317,16 +317,17 @@ final class TerminalPane {
     }
 
     fileprivate func clipboardTextureReady(_ clipboard: OpaquePointer, _ result: OpaquePointer) {
-        guard !isClosed else { return }
         var error: UnsafeMutablePointer<GError>?
-        guard let texture = gdk_clipboard_read_texture_finish(clipboard, result, &error) else {
-            if let error { g_error_free(error) }
-            vte_terminal_paste_clipboard(terminal)
+        let texture = gdk_clipboard_read_texture_finish(clipboard, result, &error)
+        if let error { g_error_free(error) }
+        defer { if let texture { g_object_unref(UnsafeMutableRawPointer(texture)) } }
+        guard !isClosed, gtk_widget_get_mapped(widget) != 0 else { return }
+        guard let texture else {
+            pasteClipboardText(clipboard)
             return
         }
-        defer { g_object_unref(UnsafeMutableRawPointer(texture)) }
         guard let sourcePath = privatePNG(from: texture) else {
-            vte_terminal_paste_clipboard(terminal)
+            pasteClipboardText(clipboard)
             return
         }
         onEvent("paste_image", [
@@ -335,6 +336,25 @@ final class TerminalPane {
             "pane_id": identity.paneID.uuidString.lowercased(),
             "source_path": sourcePath,
         ])
+    }
+
+    private func pasteClipboardText(_ clipboard: OpaquePointer) {
+        let callback = unsafeBitCast(
+            devspaceLinuxClipboardTextReady as @convention(c)
+                (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void,
+            to: GAsyncReadyCallback.self
+        )
+        gdk_clipboard_read_text_async(clipboard, nil, callback,
+            Unmanaged.passRetained(ClipboardImageContext(self)).toOpaque())
+    }
+
+    fileprivate func clipboardTextReady(_ clipboard: OpaquePointer, _ result: OpaquePointer) {
+        var error: UnsafeMutablePointer<GError>?
+        let content = gdk_clipboard_read_text_finish(clipboard, result, &error)
+        if let error { g_error_free(error) }
+        defer { if let content { g_free(UnsafeMutableRawPointer(content)) } }
+        guard !isClosed, gtk_widget_get_mapped(widget) != 0, let content else { return }
+        vte_terminal_paste_text(terminal, content)
     }
 
     private func privatePNG(from texture: OpaquePointer) -> String? {
@@ -419,4 +439,14 @@ private func devspaceLinuxClipboardTextureReady(
     let context = Unmanaged<ClipboardImageContext>.fromOpaque(data).takeRetainedValue()
     guard let pane = context.pane, let source, let result else { return }
     pane.clipboardTextureReady(OpaquePointer(source), OpaquePointer(result))
+}
+
+@_cdecl("devspace_linux_clipboard_text_ready")
+private func devspaceLinuxClipboardTextReady(
+    _ source: UnsafeMutableRawPointer?, _ result: UnsafeMutableRawPointer?, _ data: UnsafeMutableRawPointer?
+) {
+    guard let data else { return }
+    let context = Unmanaged<ClipboardImageContext>.fromOpaque(data).takeRetainedValue()
+    guard let pane = context.pane, let source, let result else { return }
+    pane.clipboardTextReady(OpaquePointer(source), OpaquePointer(result))
 }

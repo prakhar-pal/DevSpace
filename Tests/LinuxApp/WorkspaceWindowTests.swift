@@ -183,12 +183,53 @@ struct WorkspaceWindowTests {
                        "Ctrl+Shift+V was not handled by the terminal")
             try expect(pumpUntil { originalPane.text.contains("received:from-shortcut") },
                        "Ctrl+Shift+V did not paste private clipboard text into the VTE child")
+            gdk_clipboard_set_text(clipboard, "must-not-paste-hidden\n")
+            _ = originalPane.handleKey(keyval: UInt32(GDK_KEY_v), modifiers: copyPasteModifiers)
+            window.update(WorkspaceControllerSnapshot(
+                revision: 2, workspaces: [workspace, otherWorkspace], selectedID: otherWorkspace.id,
+                layout: Layout(), terminalPanes: []
+            ))
+            _ = pumpUntil(timeout: 0.3) { false }
+            try expect(!originalPane.text.contains("must-not-paste-hidden"),
+                       "late clipboard callback pasted into the hidden workspace")
+            window.update(WorkspaceControllerSnapshot(
+                revision: 2, workspaces: [workspace, otherWorkspace], selectedID: workspace.id,
+                layout: Layout(), terminalPanes: []
+            ))
+            gdk_clipboard_set_text(clipboard, "λ界🙂\nsecond-line\n")
+            _ = originalPane.handleKey(keyval: UInt32(GDK_KEY_v), modifiers: copyPasteModifiers)
+            try expect(pumpUntil { originalPane.text.contains("received:λ界🙂") && originalPane.text.contains("received:second-line") },
+                       "Unicode/multiline clipboard text was not pasted intact")
             vte_terminal_select_all(UnsafeMutableRawPointer(originalPane.widget).assumingMemoryBound(to: VteTerminal.self))
             try expect(originalPane.handleKey(keyval: UInt32(GDK_KEY_c), modifiers: copyPasteModifiers),
                        "Ctrl+Shift+C was not handled by the terminal")
             let copiedText = try readClipboardText(clipboard)
             try expect(copiedText.contains("received:from-shortcut"),
                        "Ctrl+Shift+C did not copy the VTE selection to the private clipboard")
+
+            let bracketed = TerminalPaneIdentity(workspaceID: otherWorkspace.id, generation: UUID(), paneID: UUID())
+            window.update(WorkspaceControllerSnapshot(
+                revision: 2, workspaces: [workspace, otherWorkspace], selectedID: otherWorkspace.id,
+                layout: Layout(), terminalPanes: []
+            ))
+            window.apply(try terminalEffect(
+                kind: "terminal_launch", workspace: otherWorkspace.id, generation: bracketed.generation,
+                pane: bracketed.paneID, executable: "/bin/sh", arguments: ["-c",
+                    "stty raw -echo; printf '\\033[?2004hBRACKET_READY\\n'; dd bs=1 count=14 2>/dev/null | od -An -tx1; exec sleep 30"]
+            ))
+            guard let bracketedPane = window.pane(for: bracketed) else { throw TestFailure("bracketed-paste probe failed to launch") }
+            try expect(pumpUntil { bracketedPane.text.contains("BRACKET_READY") }, "bracketed-paste probe was not ready")
+            gdk_clipboard_set_text(clipboard, "λ")
+            _ = bracketedPane.handleKey(keyval: UInt32(GDK_KEY_v), modifiers: copyPasteModifiers)
+            try expect(pumpUntil {
+                bracketedPane.text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+                    .contains("1b 5b 32 30 30 7e ce bb 1b 5b 32 30 31 7e")
+            }, "clipboard text did not retain VTE bracketed-paste framing")
+            window.closeTerminal(bracketed)
+            window.update(WorkspaceControllerSnapshot(
+                revision: 2, workspaces: [workspace, otherWorkspace], selectedID: workspace.id,
+                layout: Layout(), terminalPanes: []
+            ))
 
             let pixel = Data([255, 0, 0, 255])
             let imageBytes = pixel.withUnsafeBytes { g_bytes_new($0.baseAddress, gsize($0.count)) }!
@@ -253,7 +294,12 @@ struct WorkspaceWindowTests {
             defer { g_object_unref(retainedWidget) }
             try expect(g_signal_handler_find(retainedWidget, .SIGNAL_MATCH_DATA, 0, 0, nil, nil, callbackData) != 0,
                        "terminal lifecycle callbacks were not registered")
+            gdk_clipboard_set_text(clipboard, "must-not-paste-closed\n")
+            _ = originalPane.handleKey(keyval: UInt32(GDK_KEY_v), modifiers: copyPasteModifiers)
             window.closeTerminal(identity, reportExit: true)
+            _ = pumpUntil(timeout: 0.3) { false }
+            try expect(!originalPane.text.contains("must-not-paste-closed"),
+                       "late clipboard callback pasted into a disposed terminal")
             try expect(g_signal_handler_find(retainedWidget, .SIGNAL_MATCH_DATA, 0, 0, nil, nil, callbackData) == 0,
                        "disposed terminal retains callbacks into its Swift pane")
             try expect(window.terminalCount == 0, "closing the terminal did not remove its widget")

@@ -31,6 +31,14 @@ from map/resize events. Cost: such custom shells may delay hook installation.
 Verification uses existing scratch caches and the plan/Git checkpoint rather than
 adding a new execution workspace or repeated full Linux/package suite runs.
 
+M02 implemented: a real private-clipboard race reproduced text paste into a
+hidden workspace before the fix. Image-to-text fallback now performs its own
+asynchronous text read and rechecks the live/mapped pane at each completion,
+then uses VTE paste_text to preserve bracketed mode. Native checks verify Unicode,
+multiline text, byte-exact bracketed framing, selection copy, and callbacks after
+hide/disposal. GTK7 passed (one live skip); the Swift app product rebuilt.
+The physical host clipboard was not read or replaced. M03 is next.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.
