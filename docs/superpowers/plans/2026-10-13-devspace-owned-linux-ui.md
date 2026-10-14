@@ -51,6 +51,12 @@ was stopped or changed by this attempt. Do not rerun this same-channel test
 against the active instance; use its existing session for visual inspection or
 arrange a separately isolated test identity/workspace before another live run.
 
+A follow-up real VTE shell round-trip used the production test identity and its
+separate listener port under private Xvfb/D-Bus. The shell markers were received,
+the temporary terminal closed, and `wc-1` remained Running while the existing
+development listener stayed active. This does not replace visible-host UI,
+notification, clipboard, or image acceptance.
+
 ## File Boundaries
 
 | File | Responsibility |
