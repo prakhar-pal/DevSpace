@@ -8,6 +8,18 @@ struct WorkspaceWindowTests {
     static func main() {
         do {
             gtk_init()
+            let themeProvider = gtk_css_provider_new()!
+            let display = gdk_display_get_default()!
+            gtk_css_provider_load_from_string(themeProvider,
+                "@define-color theme_base_color #112233; @define-color theme_text_color #eeeeee;")
+            gtk_style_context_add_provider_for_display(
+                display, OpaquePointer(UnsafeMutableRawPointer(themeProvider)),
+                guint(GTK_STYLE_PROVIDER_PRIORITY_APPLICATION)
+            )
+            defer {
+                gtk_style_context_remove_provider_for_display(display, OpaquePointer(UnsafeMutableRawPointer(themeProvider)))
+                g_object_unref(UnsafeMutableRawPointer(themeProvider))
+            }
             let application = gtk_application_new("com.prakharp.devspace.test", GApplicationFlags(rawValue: 0))!
             var registrationError: UnsafeMutablePointer<GError>?
             guard g_application_register(
@@ -67,6 +79,30 @@ struct WorkspaceWindowTests {
             guard let originalPane = window.pane(for: identity) else {
                 throw TestFailure("terminal pane was not retained")
             }
+            var background = GdkRGBA()
+            vte_terminal_get_color_background_for_draw(
+                UnsafeMutableRawPointer(originalPane.widget).assumingMemoryBound(to: VteTerminal.self), &background
+            )
+            try expect(abs(background.red - 17.0 / 255) < 0.01 && abs(background.blue - 51.0 / 255) < 0.01,
+                       "VTE background does not follow the GTK theme")
+            let terminalPID = originalPane.childPID
+            gtk_css_provider_load_from_string(themeProvider,
+                "@define-color theme_base_color #fafafa; @define-color theme_text_color #202020;")
+            let settings = UnsafeMutableRawPointer(gtk_settings_get_default()!).assumingMemoryBound(to: GObject.self)
+            var preference = GValue()
+            _ = g_value_init(&preference, g_type_from_name("gboolean"))
+            g_object_get_property(settings, "gtk-application-prefer-dark-theme", &preference)
+            g_value_set_boolean(&preference, g_value_get_boolean(&preference) == 0 ? 1 : 0)
+            g_object_set_property(settings, "gtk-application-prefer-dark-theme", &preference)
+            g_value_unset(&preference)
+            try expect(pumpUntil {
+                vte_terminal_get_color_background_for_draw(
+                    UnsafeMutableRawPointer(originalPane.widget).assumingMemoryBound(to: VteTerminal.self), &background
+                )
+                return abs(background.red - 250.0 / 255) < 0.01
+            }, "theme change did not update the existing terminal")
+            try expect(originalPane.childPID == terminalPID && originalPane.text.contains("ready"),
+                       "theme change restarted the terminal or erased its contents")
             try expect(String(cString: gtk_label_get_text(OpaquePointer(status))) == "SSH connection failed: readinessTimedOut",
                        "another workspace's successful connection erased the timeout")
             let otherIdentity = TerminalPaneIdentity(

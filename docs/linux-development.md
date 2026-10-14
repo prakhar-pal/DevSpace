@@ -134,7 +134,12 @@ production have distinct application IDs. Linux feature parity with macOS
 libghostty remains a later effort; tabs/splits and a Ghostty-style settings
 surface are out of scope.
 
-Text selection/paste use VTE/GTK. The backend retains authenticated Claude
+Text selection/paste use VTE/GTK.
+The terminal takes its default text, background, cursor and selection colours
+from the GTK theme, including light/dark theme changes, without restarting
+the shell. ANSI colours remain VTE's standard palette.
+
+The backend retains authenticated Claude
 notification/helper, `ded`/Zed, and image-upload behavior. These integrations
 are not considered host-accepted until their frontend event paths are verified;
 tests must not replace the real desktop clipboard or mutate a real workspace.

@@ -61,6 +61,7 @@ final class TerminalPane {
         _ = g_object_ref_sink(UnsafeMutableRawPointer(widget))
         vte_terminal_set_scrollback_lines(terminal, 10_000)
         vte_terminal_set_size(terminal, 80, 24)
+        applyTheme()
         connectSignals()
 
         guard spawn(launch) else {
@@ -115,6 +116,35 @@ final class TerminalPane {
         var columns: Int32 = 0
         guard vte_pty_get_size(pty, &rows, &columns, nil) != 0 else { return nil }
         return (rows, columns)
+    }
+
+    fileprivate func applyTheme() {
+        guard !isClosed else { return }
+        var foreground = GdkRGBA()
+        gtk_widget_get_color(widget, &foreground)
+        foreground = themeColor("theme_text_color") ?? foreground
+        let dark = foreground.red + foreground.green + foreground.blue > 1.5
+        var background = themeColor("theme_base_color") ?? themeColor("theme_bg_color")
+            ?? GdkRGBA(red: dark ? 0.12 : 1, green: dark ? 0.12 : 1, blue: dark ? 0.12 : 1, alpha: 1)
+        foreground.alpha = 1
+        background.alpha = 1
+        vte_terminal_set_color_foreground(terminal, &foreground)
+        vte_terminal_set_color_background(terminal, &background)
+        vte_terminal_set_color_cursor(terminal, &foreground)
+        vte_terminal_set_color_cursor_foreground(terminal, &background)
+        if var highlight = themeColor("theme_selected_bg_color"),
+           var highlightText = themeColor("theme_selected_fg_color") {
+            vte_terminal_set_color_highlight(terminal, &highlight)
+            vte_terminal_set_color_highlight_foreground(terminal, &highlightText)
+        } else {
+            vte_terminal_set_color_highlight(terminal, nil)
+            vte_terminal_set_color_highlight_foreground(terminal, nil)
+        }
+    }
+
+    private func themeColor(_ name: String) -> GdkRGBA? {
+        var color = GdkRGBA()
+        return gtk_style_context_lookup_color(gtk_widget_get_style_context(widget), name, &color) != 0 ? color : nil
     }
 
     func dispose() {
@@ -205,6 +235,21 @@ final class TerminalPane {
     }
 
     private func connectSignals() {
+        let mapped: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void = { _, data in
+            guard let data else { return }
+            Unmanaged<TerminalPane>.fromOpaque(data).takeUnretainedValue().applyTheme()
+        }
+        connectSignal(UnsafeMutableRawPointer(widget), "map", unsafeBitCast(mapped, to: GCallback.self))
+        if let settings = gtk_settings_get_default() {
+            let themeChanged: @convention(c)
+                (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void = { _, _, data in
+                    guard let data else { return }
+                    Unmanaged<TerminalPane>.fromOpaque(data).takeUnretainedValue().applyTheme()
+                }
+            for setting in ["notify::gtk-theme-name", "notify::gtk-application-prefer-dark-theme"] {
+                connectSignal(UnsafeMutableRawPointer(settings), setting, unsafeBitCast(themeChanged, to: GCallback.self))
+            }
+        }
         let contentsChanged = unsafeBitCast(
             devspaceLinuxVteContentsChanged as @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void,
             to: GCallback.self
