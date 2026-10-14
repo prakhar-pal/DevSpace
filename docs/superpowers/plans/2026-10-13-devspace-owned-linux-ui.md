@@ -19,6 +19,7 @@
 - Do not start/stop/delete workspaces or alter the physical clipboard during tests; use controlled test doubles/private displays.
 - Ubuntu 24.04 testing remains deferred. Validate on the current Ubuntu host when Swift + VTE development dependencies are available.
 - Do not build/launch a release bundle or close a running release app without user confirmation. Follow current `AGENTS.md` milestone-commit rules; do not push or create a PR unless requested.
+- Before `make linux-run` replaces `build/linux-dev-bundle`, verify that neither `DevSpaceDev` nor `DevSpaceDevBackend` is running from that bundle. The assembler removes the old tree after replacement, while an active process can keep executing from its now-deleted files; use a separate output path or wait for an approved restart instead.
 - Preserve unrelated dirty work. Keep scratch artifacts in `.tmp/`; avoid duplicate dependency trees/caches.
 
 ## Execution status — 2026-10-14
