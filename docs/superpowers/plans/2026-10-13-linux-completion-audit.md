@@ -32,6 +32,14 @@ defined. CI YAML/shell blocks are validated locally, and its corresponding
 commands passed on the current host; a GitHub/container run is not claimed.
 Production package CI still requires the missing real license/maintainer inputs.
 
+Zed failure handling is now verified through the Swift frontend: a controlled
+missing executable and a client exiting with status37 both produce visible
+errors while workspace actions remain enabled and the same VTE child completes
+another input/output round-trip. The GTK suite passed seven checks, including
+the authorized `wc-1` shell. Launch process exits are observed by the existing
+GTK pump; running editors are not terminated when DevSpace closes. Real `ded`
+opening the user's editor remains host acceptance.
+
 | Area | Verified evidence | Still required |
 | --- | --- | --- |
 | GTK/VTE app | SwiftPM builds `DevSpaceLinuxApp` and `DevSpaceLinuxBackend` with global Swift.org 6.4.1 for Ubuntu 26.04. The fresh 2026-10-14 `make linux-test` run reported 69 tests and `OK` (three opt-in checks skipped); private-Xvfb coverage includes empty startup, VTE I/O, resize, copy/paste round-trip, private PNG creation for image paste, Ctrl+C passthrough, reconnect shortcut, stale effects, orderly close, and backend failure. A frontend/backend test verifies the generated image is removed after backend completion. The focused GTK test asserts the VTE allocation fills the pane. A real `wc-1` VTE shell round-trip and terminal close passed under Xvfb using the production test identity while DevSpaceDev continued owning the separate development listener; read-only status confirmed the workspace remained Running. The earlier same-channel attempt collided with the already-running DevSpaceDev listener on port 17866 and did not open a pane. | Review the updated bundle's visual layout and close/reopen behavior on the host display; do not repeat a same-channel `wc-1` test while DevSpaceDev owns it. |

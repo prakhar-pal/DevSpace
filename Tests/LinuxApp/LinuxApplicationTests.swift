@@ -15,6 +15,7 @@ private final class TestContext {
     var imagePasteSent = false
     var imagePastePath: String?
     var notificationActivated = false
+    var editorProbeSent = false
     var hostCommandSent = false
     var hostShellVerified = false
     var failure: String?
@@ -125,7 +126,9 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
         return 1
     }
     if Date().timeIntervalSince(context.startedAt) > 8 {
-        context.failure = "timed out waiting for workspace and terminal effects"
+        context.failure = context.mode == "zed-failure"
+            ? "Zed launch failure did not become visible while the terminal remained usable"
+            : "timed out waiting for workspace and terminal effects"
         controller.requestShutdown()
     }
 
@@ -141,7 +144,17 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
     )
     if !context.terminalClosed,
        let pane = window.pane(for: identity), pane.text.contains("received:from-app") {
-        if !context.notificationActivated {
+        if context.mode == "zed-failure" {
+            guard let root = gtk_window_get_child(window.window),
+                  containsLabel(root, containing: "Could not launch Zed"), countEnabledButtons(root) > 0,
+                  !pane.isClosed else { return 1 }
+            if !context.editorProbeSent {
+                pane.feed("editor-error-probe\n")
+                context.editorProbeSent = true
+                return 1
+            }
+            guard pane.text.contains("received:editor-error-probe") else { return 1 }
+        } else if !context.notificationActivated {
             let actions = OpaquePointer(UnsafeMutableRawPointer(context.application))
             guard g_action_group_has_action(actions, "activate-workspace") != 0 else {
                 context.failure = "notification workspace activation action is missing"
@@ -315,6 +328,9 @@ struct LinuxApplicationTests {
         }
         if context.mode != "crash", context.connectSent, context.terminalClosed,
            context.controller?.backend.state == .stopped {
+            if context.mode == "zed-failure" {
+                print("zed-failure=visible terminal=round-trip actions=enabled")
+            }
             print("linux-application snapshot=received terminal=opened stale-effects=rejected shutdown=orderly")
             exit(EXIT_SUCCESS)
         }

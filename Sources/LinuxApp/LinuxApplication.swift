@@ -33,6 +33,7 @@ final class LinuxApplicationController {
     private var shutdownStartedAt: Date?
     private var shownBackendFailure = false
     private var pendingImageSources: [String: URL] = [:]
+    private var editorProcesses: [Process] = []
 
     init(application: UnsafeMutablePointer<GtkApplication>, channel: String,
          backendExecutableURL: URL? = nil, backendArguments: [String]? = nil) {
@@ -103,6 +104,15 @@ final class LinuxApplicationController {
     @discardableResult
     func pump() -> Int32 {
         for message in backend.takeReceived() { receive(message) }
+        editorProcesses.removeAll { process in
+            guard !process.isRunning else { return false }
+            if process.terminationStatus != 0 {
+                window?.setStatus(process.terminationStatus == 127
+                    ? "Could not launch Zed; install it and add it to PATH"
+                    : "Could not launch Zed (status \(process.terminationStatus))")
+            }
+            return true
+        }
 
         if shutdownRequested {
             sendShutdownIfReady()
@@ -294,6 +304,7 @@ final class LinuxApplicationController {
         process.arguments = ["zed", url]
         do {
             try process.run()
+            editorProcesses.append(process)
         } catch {
             window?.setStatus("Could not launch Zed; install it and add it to PATH")
         }

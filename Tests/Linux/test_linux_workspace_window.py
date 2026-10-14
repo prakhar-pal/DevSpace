@@ -139,6 +139,25 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("backend-failure=visible actions=disabled gtk=responsive", result.stdout)
 
+    def test_missing_zed_and_nonzero_exit_are_visible_without_breaking_the_terminal(self):
+        for name in ("missing", "exits-nonzero"):
+            with self.subTest(editor=name):
+                tools = self.build / name
+                tools.mkdir()
+                if name == "exits-nonzero":
+                    executable = tools / "zed"
+                    executable.write_text("#!/bin/sh\nexit 37\n")
+                    executable.chmod(0o755)
+                environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+                environment.pop("WAYLAND_DISPLAY", None)
+                result = subprocess.run([
+                    "xvfb-run", "-a", "/usr/bin/env", f"PATH={tools}", str(self.app_runner),
+                    shutil.which("python3") or "/usr/bin/python3",
+                    str(ROOT / "Tests/Linux/fixtures/linux_ui_backend_peer.py"), "zed-failure",
+                ], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("zed-failure=visible terminal=round-trip actions=enabled", result.stdout)
+
     @unittest.skipUnless(os.environ.get("DEVSPACE_HOST_UI_WORKSPACE"),
                          "opt-in authorized real workspace through GTK/VTE")
     def test_real_workspace_shell_round_trips_through_the_vte_widget(self):

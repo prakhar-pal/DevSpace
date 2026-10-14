@@ -52,12 +52,14 @@ for line in sys.stdin:
         effect = {"kind": "terminal_launch", "workspaceID": workspace,
                   "generation": generation, "paneID": pane,
                   "executable": "/bin/sh", "arguments": [
-                      "-c", "printf 'ready\\n'; IFS= read -r input; printf 'received:%s\\n' \"$input\"; exec sleep 30"],
+                      "-c", "printf 'ready\\n'; while IFS= read -r input; do printf 'received:%s\\n' \"$input\"; done"],
                   "message": None}
         send({"version": 1, "kind": "terminal_launch", "payload": {"json": json.dumps(effect)}})
         send({"version": 1, "id": request["id"], "kind": "completed"})
     elif kind == "terminal_output":
         send({"version": 1, "kind": "platform_error", "payload": {"message": "fixture SSH error"}})
+        if sys.argv[1:] == ["zed-failure"]:
+            send({"version": 1, "kind": "platform_open_zed", "payload": {"url": "ssh://fixture-pod.devpod/tmp/project"}})
         stale = "00000000-0000-0000-0000-000000000003"
         for effect in (
             {"kind": "terminal_inject", "workspaceID": workspace, "generation": stale,
