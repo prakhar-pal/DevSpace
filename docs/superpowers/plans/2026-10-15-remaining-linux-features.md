@@ -50,6 +50,15 @@ integration acceptance remain. M04–M10 remain unimplemented.
 The goal controller was queried and still reports paused; direct turn work is
 authorized, but automatic continuation requires resuming the goal in the UI.
 
+M03 second increment: a real approximately18 MB private clipboard PNG reproduced
+oversized frontend staging. The frontend now shares ImageUpload.maximumBytes
+(16 MiB) and rejects oversized encoded PNGs before creating files or upload
+requests, displaying a nonfatal error without pasting unrelated clipboard text.
+GTK7 passed (one live skip), ImageUploadTests2 passed, and development products
+rebuilt. Tests clean their generated PNGs, including the failing oversized case.
+M03 remains open for editor discovery/fallback parity and live acceptance;
+M04–M10 are not implemented. No release build/installation is claimed.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

@@ -184,7 +184,8 @@ final class WorkspaceWindow {
                 return
             }
             guard let pane = TerminalPane(launch: launch, onEvent: { [weak self] kind, payload in
-                self?.onCommand?(kind, payload)
+                if kind == "clipboard_error" { self?.setStatus(payload["message"] ?? "Clipboard image unavailable") }
+                else { self?.onCommand?(kind, payload) }
             }) else {
                 setStatus("Terminal could not start")
                 onCommand?("terminal_launch_failed", eventPayload(identity))

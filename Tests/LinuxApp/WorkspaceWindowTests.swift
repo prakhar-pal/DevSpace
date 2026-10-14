@@ -38,6 +38,11 @@ struct WorkspaceWindowTests {
 
             let window = WorkspaceWindow(application: application)
             var commands: [(String, [String: String]?)] = []
+            defer {
+                for command in commands where command.0 == "paste_image" {
+                    if let path = command.1?["source_path"] { try? FileManager.default.removeItem(atPath: path) }
+                }
+            }
             window.onCommand = { kind, payload in commands.append((kind, payload)) }
             window.present()
             try expect(window.terminalCount == 0, "empty startup created a terminal")
@@ -278,6 +283,22 @@ struct WorkspaceWindowTests {
             try expect(try Data(contentsOf: URL(fileURLWithPath: imagePath))
                 .starts(with: Data([137, 80, 78, 71, 13, 10, 26, 10])),
                        "clipboard image upload source was not a PNG")
+
+            let random = try FileHandle(forReadingFrom: URL(fileURLWithPath: "/dev/urandom"))
+            let largePixels = random.readData(ofLength: 4100 * 1100 * 4)
+            try random.close()
+            let largeBytes = largePixels.withUnsafeBytes { g_bytes_new($0.baseAddress, gsize($0.count)) }!
+            defer { g_bytes_unref(largeBytes) }
+            let largeTexture = gdk_memory_texture_new(4100, 1100, GDK_MEMORY_R8G8B8A8, largeBytes, 4100 * 4)!
+            gdk_clipboard_set_texture(clipboard, largeTexture)
+            g_object_unref(UnsafeMutableRawPointer(largeTexture))
+            let imageRequests = commands.filter { $0.0 == "paste_image" }.count
+            _ = originalPane.handleKey(keyval: UInt32(GDK_KEY_v), modifiers: copyPasteModifiers)
+            _ = pumpUntil(timeout: 0.4) { false }
+            try expect(commands.filter { $0.0 == "paste_image" }.count == imageRequests,
+                       "frontend created an upload request for a PNG over 16 MiB")
+            try expect(containsLabel("16 MiB", in: gtk_window_get_child(window.window)!),
+                       "oversized clipboard image has no actionable error")
 
             try expect(originalPane.handleKey(keyval: UInt32(GDK_KEY_r), modifiers: copyPasteModifiers),
                        "Ctrl+Shift+R was not handled by the terminal")

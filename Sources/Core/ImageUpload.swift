@@ -1,12 +1,13 @@
 import Foundation
 
 public enum ImageUpload {
+    public static let maximumBytes = 16 * 1024 * 1024
     public static func upload(_ runner: CommandRunning, podID: String, controlPath: String, source: URL) throws -> String {
         try Devpod.validateId(podID)
         guard !controlPath.isEmpty else { throw DevpodError("image upload requires an owned SSH master") }
         let attributes = try FileManager.default.attributesOfItem(atPath: source.path)
         guard attributes[.type] as? FileAttributeType == .typeRegular,
-              let size = attributes[.size] as? NSNumber, size.intValue <= 16 * 1024 * 1024 else {
+              let size = attributes[.size] as? NSNumber, size.intValue <= maximumBytes else {
             throw DevpodError("clipboard image must be a regular PNG file no larger than 16 MiB")
         }
         let file = try FileHandle(forReadingFrom: source)

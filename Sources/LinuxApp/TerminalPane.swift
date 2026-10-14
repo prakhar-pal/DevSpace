@@ -2,6 +2,7 @@ import Foundation
 import Glibc
 import CGTK
 import CVTE
+import DevSpaceCore
 
 struct TerminalPaneIdentity: Hashable {
     let workspaceID: String
@@ -349,7 +350,7 @@ final class TerminalPane {
             return
         }
         guard let sourcePath = privatePNG(from: texture) else {
-            pasteClipboardText(clipboard)
+            onEvent("clipboard_error", ["message": "Could not prepare clipboard image; PNG must be no larger than 16 MiB"])
             return
         }
         onEvent("paste_image", [
@@ -383,7 +384,8 @@ final class TerminalPane {
         guard let png = gdk_texture_save_to_png_bytes(texture) else { return nil }
         defer { g_bytes_unref(png) }
         var size: gsize = 0
-        guard let bytes = g_bytes_get_data(png, &size), size > 8 else { return nil }
+        guard let bytes = g_bytes_get_data(png, &size), size > 8,
+              size <= gsize(ImageUpload.maximumBytes) else { return nil }
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("devspace-paste-\(UUID().uuidString).png")
