@@ -2,6 +2,18 @@
 
 ## Current checkpoint — 2026-10-14
 
+CI run38569596450 on `7841009` passed container Core226 (two skips), protocol4,
+and macOS tests/development assembly/release build. Linux integration's only
+failure was a test hard-coding package version0.7.1 instead of reading merged
+CI checkout metadata (0.8.0). That expectation now reads Info.plist.
+
+Linux bundles now include DevSpace's GPL text and the selected toolchain's
+Swift license under share/doc/devspace, with a source-scope declaration that
+does not claim to replace ICU/artwork notices. The new real-assembly regression
+was observed RED before implementation. Packaging/build checks passed21; the
+full current-host Linux suite passed75 with three opt-in skips in101.443 seconds.
+The active production bundle was not replaced or stopped.
+
 PR111 CI on `26795ee` completed: macOS tests, development assembly, and release
 executable build all passed. Linux Core crashed with signal 11 during the first
 PTY test, in libdispatch's epoll event loop. The notification/PTY sequence
@@ -48,9 +60,10 @@ the refreshed `build/linux-production-bundle-next` resolves dependencies and
 rejects a missing channel before GTK initialization. The active production
 bundle was left untouched.
 
-Remaining gates: current-head Linux and macOS CI (PR111 still has an older
-remote head); obtain real
-license/copyright and maintainer metadata for the production .deb. Physical
+Remaining gates: all-green current-head Linux and macOS CI; refreshed release
+verification; complete artwork and runtime copyright coverage for the .deb.
+The project license and maintainer have been chosen; they are no longer missing.
+Physical
 clipboard/IME/banner interaction is not proven by programmatic acceptance.
 Ubuntu 24.04 remains explicitly deferred. The active production bundle must
 not be stopped or replaced during development.

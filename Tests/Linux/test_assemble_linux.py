@@ -2,6 +2,7 @@
 
 import json
 import os
+import plistlib
 import ctypes.util
 import importlib.util
 from pathlib import Path
@@ -17,6 +18,21 @@ PACKAGE_SCRIPT = ROOT / "scripts/package-linux.py"
 
 
 class AssembleLinuxTests(unittest.TestCase):
+    def test_bundle_preserves_project_and_selected_toolchain_license(self):
+        swift_license = self.directory / "swift-LICENSE.txt"
+        swift_license.write_text("Selected toolchain license fixture\n")
+        result = subprocess.run([
+            sys.executable, str(SCRIPT), "--frontend", str(self.frontend),
+            "--backend", str(self.backend), "--swift-runtime", str(self.runtime),
+            "--swift-license", str(swift_license), "--channel", "production",
+            "--output", str(self.output),
+        ], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        documentation = self.output / "share/doc/devspace"
+        self.assertEqual((documentation / "LICENSE").read_bytes(), (ROOT / "LICENSE").read_bytes())
+        self.assertEqual((documentation / "swift-runtime-LICENSE.txt").read_bytes(), swift_license.read_bytes())
+        self.assertIn("GPL-3.0-or-later", (documentation / "licensing.txt").read_text())
+
     def test_launcher_finds_user_local_tools_with_minimal_gui_path(self):
         home = self.directory / "home"
         tools = home / ".local/bin"
@@ -46,9 +62,12 @@ class AssembleLinuxTests(unittest.TestCase):
         executable.chmod(0o755)
         self.backend = self.directory / "backend"
         self.backend.write_text("backend artifact")
-        self.runtime = self.directory / "runtime"
-        self.runtime.mkdir()
+        self.runtime = self.directory / "toolchain/usr/lib/swift/linux"
+        self.runtime.mkdir(parents=True)
         (self.runtime / "libswiftCore.so").write_text("Swift runtime")
+        notice = self.directory / "toolchain/usr/share/swift/LICENSE.txt"
+        notice.parent.mkdir(parents=True)
+        notice.write_text("Swift toolchain license fixture\n")
         self.output = self.directory / "installed bundle α"
 
     def assemble(self, channel="development", replace=False):
@@ -128,7 +147,7 @@ class AssembleLinuxTests(unittest.TestCase):
         self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(package), "Package"], text=True).strip(),
                          "devspace")
         self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(package), "Version"], text=True).strip(),
-                         "0.7.1")
+                         plistlib.loads((ROOT / "Info.plist").read_bytes())["CFBundleShortVersionString"])
         self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(package), "Architecture"], text=True).strip(),
                          subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip())
         self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(package), "Maintainer"], text=True).strip(),

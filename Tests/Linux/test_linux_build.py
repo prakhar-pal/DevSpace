@@ -22,12 +22,16 @@ class LinuxBuildTests(unittest.TestCase):
                         ignore=shutil.ignore_patterns("*.pyc", "__pycache__"))
         shutil.copytree(ROOT / "Resources", self.directory / "Resources")
         shutil.copyfile(ROOT / "Info.plist", self.directory / "Info.plist")
+        shutil.copyfile(ROOT / "LICENSE", self.directory / "LICENSE")
         if (ROOT / "Package.resolved").exists():
             shutil.copyfile(ROOT / "Package.resolved", self.directory / "Package.resolved")
 
-        self.runtime = self.directory / "runtime"
-        self.runtime.mkdir()
+        self.runtime = self.directory / "toolchain/usr/lib/swift/linux"
+        self.runtime.mkdir(parents=True)
         (self.runtime / "libswiftCore.so").write_text("controlled runtime")
+        notice = self.directory / "toolchain/usr/share/swift/LICENSE.txt"
+        notice.parent.mkdir(parents=True)
+        notice.write_text("Swift toolchain license fixture\n")
 
         self.app_program = (
             "#!/usr/bin/env python3\nimport json,os,sys\n"

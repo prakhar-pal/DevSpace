@@ -65,7 +65,10 @@ all bundled Swift libraries. A package built on Ubuntu 26.04 requires that
 host ABI; Ubuntu 24.04 compatibility is not claimed. The copyright manifest
 must cover the project and bundled third-party runtime code.
 This target builds release artifacts and requires confirmation before use. A
-project copyright manifest is not yet present in the repository.
+complete Debian copyright manifest is not yet present in the repository.
+DevSpace-owned source is GPL-3.0-or-later; bundles carry the project GPL text
+and the selected Swift toolchain license, but embedded ICU/artwork attribution
+still needs separate coverage before distribution.
 
 On the current Ubuntu 26.04 development host, use the globally installed
 Swift.org 6.4.1 toolchain (`swift`/`swiftc` on `PATH`). Its SwiftPM runner is

@@ -37,6 +37,8 @@ def main():
     parser.add_argument("--frontend", required=True, type=Path)
     parser.add_argument("--backend", required=True, type=Path)
     parser.add_argument("--swift-runtime", required=True, type=Path)
+    parser.add_argument("--swift-license", type=Path,
+                        help="LICENSE.txt from the selected Swift toolchain (default: its usr/share/swift)")
     parser.add_argument("--channel", choices=("development", "production"), required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--replace", action="store_true",
@@ -59,6 +61,9 @@ def main():
             parser.exit(1, f"Refusing to replace an unrecognized or different-channel bundle: {output}\n")
     if not (args.swift_runtime / "libswiftCore.so").is_file():
         parser.exit(1, "Swift runtime directory must contain libswiftCore.so\n")
+    swift_license = args.swift_license or args.swift_runtime.absolute().parents[2] / "share/swift/LICENSE.txt"
+    if not swift_license.is_file() or swift_license.stat().st_size == 0:
+        parser.exit(1, f"Swift toolchain license notice is missing: {swift_license}\n")
     development = args.channel == "development"
     name = "DevSpaceDev" if development else "DevSpace"
     command = "devspace-dev" if development else "devspace"
@@ -80,6 +85,16 @@ def main():
         for runtime in args.swift_runtime.glob("*.so*"):
             if runtime.is_file():
                 shutil.copy2(runtime, bundle / "lib" / runtime.name)
+        documentation = bundle / "share/doc/devspace"
+        documentation.mkdir(parents=True)
+        shutil.copyfile(ROOT / "LICENSE", documentation / "LICENSE")
+        shutil.copyfile(swift_license, documentation / "swift-runtime-LICENSE.txt")
+        (documentation / "licensing.txt").write_text(
+            "DevSpace-owned source code: GPL-3.0-or-later. See LICENSE.\n"
+            "Third-party components retain their own licenses. The Swift toolchain\n"
+            "license is provided separately; it is not a complete third-party inventory.\n"
+            "Artwork licensing and embedded ICU notices require separate coverage.\n"
+        )
         launcher = bundle / "bin" / command
         launcher.write_text(f'''#!/bin/sh
 set -eu

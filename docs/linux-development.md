@@ -71,9 +71,14 @@ It installs the app under `/usr/lib/devspace`, the `devspace` launcher under
 `/usr/bin`, and desktop metadata/icon under `/usr/share`. DevPod remains a
 user-installed executable.
 
-The repository currently has no project copyright/license manifest. Supply a
-Debian-format copyright file and maintainer identity before building a package:
-The manifest must cover the project and third-party code in the bundled runtime.
+DevSpace-owned source is GPL-3.0-or-later (see the root LICENSE and README).
+Bundles include that license and the selected Swift toolchain's license under
+`share/doc/devspace`; pass `LINUX_SWIFT_LICENSE=` for a nonstandard toolchain
+layout. These files do not yet constitute a complete third-party notice inventory.
+Supply a Debian-format copyright file and maintainer identity before building a package:
+The manifest must cover the project, artwork, and third-party code in the bundled runtime.
+The approved maintainer is `prakhar-pal <prakharpalpfdr+github@gmail.com>`;
+artwork licensing and embedded ICU notice coverage remain open.
 
 ```sh
 make linux-package \
