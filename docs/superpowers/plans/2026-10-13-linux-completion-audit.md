@@ -1,5 +1,40 @@
 # Linux port completion audit
 
+## Current checkpoint — 2026-10-14
+
+This checkpoint supersedes historical UI and availability descriptions below.
+The approved UI now has selection-only compact DevPod rows with running/stopped
+dots, no Workspaces heading, no terminal title/Close bar, no hook-success label,
+and GTK-derived VTE colors. Running workspaces auto-connect; only the selected
+pane is visible while other connections remain owned by the backend.
+
+Verified corrections include independent SSH preparation/readiness deadlines,
+rejecting retired terminal generations, and removing only this application's
+notification forward before cleaning hooks. Cleanup retains shared hooks while
+the other DevSpace channel's listener remains reachable. Actual wc-1 acceptance
+verified forward cancellation leaves its master usable, helper notification
+routing, badge updates, selection/focus of the existing pane, and close/reopen.
+The production application and its hooks remained active throughout development
+acceptance. The owned Wayland screenshot was inspected.
+
+Linux diagnostics now use private XDG state storage only in Debug development
+builds. The new subprocess regression failed before implementation, then passed
+in Debug and Release. Full Core: 225 tests, one opt-in skip, zero failures.
+The current full Linux run passed 74 tests with three opt-in skips in 129.365
+seconds, including the four protocol checks. Both release products rebuilt;
+the refreshed `build/linux-production-bundle-next` resolves dependencies and
+rejects a missing channel before GTK initialization. The active production
+bundle was left untouched.
+
+Remaining gates: current-head Linux and macOS CI (PR111 still has an older
+remote head); obtain real
+license/copyright and maintainer metadata for the production .deb. Physical
+clipboard/IME/banner interaction is not proven by programmatic acceptance.
+Ubuntu 24.04 remains explicitly deferred. The active production bundle must
+not be stopped or replaced during development.
+
+## Historical evidence
+
 Status: implementation substantially complete; visual host-display and
 end-to-end integration acceptance remain open. The approved Linux direction is
 a DevSpace-owned Swift GTK4 app using VTE only for terminal rendering/input.

@@ -3,6 +3,16 @@
 Status: user-directed on 2026-10-13. This supersedes the earlier Ghostty
 adapter design for Linux; it does not change the macOS libghostty application.
 
+2026-10-14 user amendments: list all DevPods and automatically connect running
+ones, installing Claude notification hooks on connection and removing managed
+notification hooks on disconnect. Keep connections in the background while
+showing only the selected workspace's terminal. The sidebar uses selectable,
+highlighted rows with green/grey status dots and sizes to workspace names.
+Remove sidebar action buttons, the Workspaces heading, terminal title/Close
+bars and routine hook-install success messages. VTE follows the GTK theme.
+Backend workspace operations remain available; restoring their UI controls is
+outside this narrowed UI scope.
+
 ## Intent
 
 Build a simple, native GTK Linux interface that is usable quickly. Use Swift for
@@ -75,8 +85,9 @@ undelivered-image cleanup.
 - The Linux application entry, UI, backend, protocol handling, and terminal
   lifecycle glue are Swift; GTK4/VTE are linked native C dependencies. Any
   non-Swift shipped code has a specific interop justification.
-- A clean launch shows one DevSpace-owned window and one Workspaces heading,
-  with no terminal child until a workspace is opened.
+- A clean launch shows one DevSpace-owned window and a compact workspace list,
+  with no local shell. Running workspaces connect automatically and only the
+  selected workspace's terminal is visible.
 - Opening a running workspace creates one VTE terminal using the backend's
   validated SSH launch effect. Input/output, resize, focus, scrollback, basic
   clipboard paste and terminal close work on the host Ubuntu desktop.
