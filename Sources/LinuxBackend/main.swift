@@ -183,8 +183,6 @@ private func installIntegration(_ workspace: String, requestID: String?) throws 
             }
             switch result {
             case .success:
-                _ = send(BackendProtocolMessage(kind: "platform_info", payload: ["workspace_id": workspace,
-                    "message": "Claude hooks installed for \(workspace). Reload its terminal to enable ded and directory reporting in this shell."]))
                 if let requestID { _ = send(BackendProtocolMessage(id: requestID, kind: "completed")) }
             case .failure:
                 // CLI diagnostics may contain encoded credentials; never forward

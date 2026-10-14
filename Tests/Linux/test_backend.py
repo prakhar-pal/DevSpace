@@ -447,8 +447,8 @@ class BackendIntegrationTests(unittest.TestCase):
             "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo unrelated"}]}]}}))
         for _ in range(2):
             self.assertEqual(self.request("install_hooks", workspace_id="pod")["kind"], "completed")
-        self.assertTrue(any(frame["kind"] == "platform_info" and "Reload" in frame.get("payload", {}).get("message", "")
-                            for frame in self.frames), "first shell needs an explicit reload instruction")
+        self.assertFalse(any(frame["kind"] == "platform_info" for frame in self.frames),
+                         "routine hook installation should be silent")
         merged = json.loads(settings.read_text())
         self.assertEqual(merged["permissions"], {"allow": ["Bash(git:*)"]})
         self.assertEqual(len(merged["hooks"]["Stop"]), 2)
