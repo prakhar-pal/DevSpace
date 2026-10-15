@@ -193,7 +193,8 @@ class AssembleLinuxTests(unittest.TestCase):
         launcher = extracted / "usr/bin/devspace"
         self.assertTrue(launcher.is_symlink())
         self.assertEqual(os.readlink(launcher), "../lib/devspace/bin/devspace")
-        desktop = extracted / "usr/share/applications/devspace.desktop"
+        desktop = extracted / "usr/share/applications/com.prakharp.devspace.desktop"
+        self.assertTrue(desktop.is_file(), "installed desktop filename must match the GApplication notification identity")
         self.assertIn("Exec=/usr/bin/devspace\n", desktop.read_text())
         self.assertTrue(list((extracted / "usr/share/icons/hicolor").glob(
             "*/apps/com.prakharp.devspace.png")))

@@ -41,6 +41,18 @@ public enum Hooks {
             command.contains("http://localhost:$port/notify") && command.contains("pod_id")
     }
 
+    private static func preservingUnmanagedCommands(_ entry: Any) -> Any? {
+        guard isDevspaceEntry(entry), var object = entry as? [String: Any],
+              let commands = object["hooks"] as? [Any] else { return entry }
+        let unrelated = commands.filter { command in
+            guard let value = command as? [String: Any], let text = value["command"] as? String else { return true }
+            return !isDevspaceCommand(text)
+        }
+        guard !unrelated.isEmpty else { return nil }
+        object["hooks"] = unrelated
+        return object
+    }
+
     static func devspaceHookEntry(matcher: String?, label: String, podID: String, token: String) -> [String: Any] {
         var entry: [String: Any] = [
             "hooks": [["type": "command", "command": hookCommand(label, podID: podID, token: token)]],
@@ -56,17 +68,7 @@ public enum Hooks {
         var hooks = (root["hooks"] as? [String: Any]) ?? [:] // wrong-typed -> treat as missing
         for (key, matcher, label) in hookEvents {
             var arr = (hooks[key] as? [Any]) ?? [] // wrong-typed -> treat as missing
-            arr = arr.compactMap { entry in
-                guard isDevspaceEntry(entry), var object = entry as? [String: Any],
-                      let commands = object["hooks"] as? [Any] else { return entry }
-                let unrelated = commands.filter { command in
-                    guard let value = command as? [String: Any], let text = value["command"] as? String else { return true }
-                    return !isDevspaceCommand(text)
-                }
-                guard !unrelated.isEmpty else { return nil }
-                object["hooks"] = unrelated
-                return object
-            }
+            arr = arr.compactMap(preservingUnmanagedCommands)
             arr.append(devspaceHookEntry(matcher: matcher, label: label, podID: podID, token: token))
             hooks[key] = arr
         }
@@ -81,12 +83,10 @@ public enum Hooks {
         var removed = false
         for (event, value) in Array(hooks) {
             guard let entries = value as? [Any] else { continue }
-            let remaining = entries.filter { entry in
-                let isDevspace = isDevspaceEntry(entry)
-                removed = removed || isDevspace
-                return !isDevspace
-            }
-            if remaining.count != entries.count { hooks[event] = remaining.isEmpty ? nil : remaining }
+            guard entries.contains(where: isDevspaceEntry) else { continue }
+            removed = true
+            let remaining = entries.compactMap(preservingUnmanagedCommands)
+            hooks[event] = remaining.isEmpty ? nil : remaining
         }
         guard removed else { return nil }
         var root = existing

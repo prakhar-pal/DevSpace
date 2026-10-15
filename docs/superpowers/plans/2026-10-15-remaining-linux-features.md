@@ -240,6 +240,23 @@ All planned source features are now implemented. Final fresh review, current
 CI/macOS and the previously listed clean-host/live/physical-input acceptance
 remain; source completion is not a claim of full release acceptance.
 
+Final fresh whole-branch review found four High and four Medium defects despite
+fixture-only Linux98 (four skips) and Core244 passing. One review-fix pass is
+in progress: failed-client status/retry ownership; first-shell handoff;
+installed desktop identity; mixed-entry hook preservation; provisioning/poll
+connection gating; lagged creation discovery; independent shell integration;
+and scrolling expanded hidden rows. Live/installed/physical acceptance remains
+separate. The user approved a fresh production BUNDLE after fixes, explicitly
+NO new .deb build, installation or production shutdown.
+
+First review fixes verified: hook removal now shares injection's per-command
+filter, preserving unrelated commands and entry metadata instead of deleting a
+mixed group. The new Swift test failed for lost settings, then Hooks30 passed.
+The package builder now installs the global desktop filename matching the
+GApplication ID; its artifact assertion first failed, then assembly/package
+fixture16 passed. This was a temporary test fixture, not a new deliverable .deb.
+The remaining six review findings are still open; no release-ready claim.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

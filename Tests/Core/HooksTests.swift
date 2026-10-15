@@ -9,6 +9,21 @@ import Glibc
 
 // Mirrors hooks.rs tests.
 final class HooksTests: XCTestCase {
+    func testRemovalPreservesUnrelatedCommandsInsideAMixedManagedEntry() throws {
+        let unrelated: [[String: Any]] = [["type": "command", "command": "echo preserve-me", "timeout": 17]]
+        let existing: [String: Any] = ["otherSetting": true, "hooks": ["Stop": [[
+            "matcher": "custom", "extra": "keep", "hooks": unrelated + [[
+                "type": "command", "command": Hooks.hookCommand("Stop", podID: "pod", token: "token")
+            ]]
+        ]]]]
+        let cleaned = try XCTUnwrap(Hooks.removingSettings(existing))
+        let expected: [String: Any] = ["otherSetting": true, "hooks": ["Stop": [[
+            "matcher": "custom", "extra": "keep", "hooks": unrelated
+        ]]]]
+        XCTAssertEqual(cleaned as NSDictionary, expected as NSDictionary)
+        XCTAssertNil(Hooks.removingSettings(cleaned), "cleanup must be idempotent")
+    }
+
     func testSignalDuringPublicationDoesNotContinueWithoutItsLock() throws {
         final class InterruptedRunner: CommandRunning, @unchecked Sendable {
             let directory: URL

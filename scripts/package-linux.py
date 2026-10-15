@@ -115,7 +115,7 @@ def main():
         desktop_text = source_desktop.read_text()
         if desktop_text.count("Exec=devspace\n") != 1:
             parser.error("production desktop entry must contain exactly one Exec=devspace line")
-        desktop = root / "usr/share/applications/devspace.desktop"
+        desktop = root / f"usr/share/applications/{IDENTITY}.desktop"
         desktop.parent.mkdir(parents=True)
         desktop.write_text(desktop_text.replace("Exec=devspace\n", "Exec=/usr/bin/devspace\n"))
 
