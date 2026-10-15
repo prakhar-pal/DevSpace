@@ -187,6 +187,18 @@ macOS CI is still required for the shared constants reference; no local macOS
 execution is claimed. Remaining source features: M08–M10; M07 installation/CI
 and physical-input acceptance remain distinct from the already-built package.
 
+M08 implemented: row menus expose Hide/Show and a bottom Hidden section reuses
+SidebarLayout.split/hiddenRows and the existing persisted backend commands.
+Collapsed sections retain the selected hidden row; expanding/collapsing preserves
+the exact VTE pane. A native Swift regression first observed a hidden row still
+visible when collapsed, then passed with command-target and no-lifecycle checks.
+GTK15 passed (two opt-in skips, including backend43); wc-1 was rechecked using
+the source's status --output json syntax and remains Stopped. No live mutation.
+The first suite invocation's output reader outlived completed tests because a
+portal inherited its pipe; only that confirmed reader was terminated. A fresh
+run using a regular diagnostic log exited zero with the recorded suite result.
+M09/M10 remain, along with the previously recorded release/live acceptance gaps.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

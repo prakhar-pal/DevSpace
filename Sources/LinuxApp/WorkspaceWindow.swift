@@ -5,6 +5,7 @@ import DevSpaceCore
 final class WorkspaceWindow {
     let window: UnsafeMutablePointer<GtkWindow>
     private let workspaceRows: UnsafeMutablePointer<GtkBox>
+    private let hiddenWorkspaceRows: UnsafeMutablePointer<GtkBox>
     private let terminalContainer: UnsafeMutablePointer<GtkBox>
     private let emptyState: UnsafeMutablePointer<GtkWidget>
     private let statusLabel: UnsafeMutablePointer<GtkWidget>
@@ -66,6 +67,9 @@ final class WorkspaceWindow {
         gtk_label_set_max_width_chars(OpaquePointer(notificationWarningLabel), 0)
         gtk_widget_set_visible(notificationWarningLabel, 0)
         gtk_box_append(sidebar, notificationWarningLabel)
+        hiddenWorkspaceRows = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 8)!)
+            .assumingMemoryBound(to: GtkBox.self)
+        gtk_box_append(sidebar, UnsafeMutableRawPointer(hiddenWorkspaceRows).assumingMemoryBound(to: GtkWidget.self))
 
         let separator = gtk_separator_new(GTK_ORIENTATION_VERTICAL)!
         terminalContainer = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)!)
@@ -170,21 +174,34 @@ final class WorkspaceWindow {
 
     func update(_ next: WorkspaceControllerSnapshot) {
         guard next.revision >= snapshot.revision else { return }
-        if next.workspaces != snapshot.workspaces || next.operations != snapshot.operations {
+        if next.workspaces != snapshot.workspaces || next.operations != snapshot.operations || next.layout != snapshot.layout {
             dismissWorkspaceMenu()
         }
         let selectionChanged = snapshot.selectedID != next.selectedID
         snapshot = next
         clear(workspaceRows)
-        let ordered = next.layout.order.compactMap { id in next.workspaces.first { $0.id == id } }
-        let orderedIDs = Set(ordered.map(\.id))
-        let workspaces = ordered + next.workspaces.filter { !orderedIDs.contains($0.id) }
-        if workspaces.isEmpty {
+        clear(hiddenWorkspaceRows)
+        let parts = SidebarLayout.split(
+            displayIDs: SidebarLayout.displayIDs(order: next.layout.order, workspaces: next.workspaces),
+            hidden: Set(next.layout.hidden), byID: Dictionary(uniqueKeysWithValues: next.workspaces.map { ($0.id, $0) }))
+        if next.workspaces.isEmpty {
             gtk_box_append(workspaceRows, gtk_label_new("No workspaces found.")!)
         }
-        for workspace in workspaces {
+        for workspace in parts.visible {
             appendWorkspace(workspace, selected: workspace.id == next.selectedID,
                             alias: next.layout.aliases[workspace.id], badged: next.badges.contains(workspace.id))
+        }
+        if !parts.hidden.isEmpty {
+            let toggle = gtk_button_new_with_label("\(next.layout.hiddenCollapsed ? "▸" : "▾") Hidden (\(parts.hidden.count))")!
+            gtk_widget_set_name(toggle, "toggle-hidden-workspaces")
+            gtk_widget_add_css_class(toggle, "flat")
+            connectAction(toggle, context: WorkspaceActionContext(window: self,
+                kind: next.layout.hiddenCollapsed ? "expand_hidden" : "collapse_hidden", payload: [:]))
+            gtk_box_append(hiddenWorkspaceRows, toggle)
+            for workspace in SidebarLayout.hiddenRows(parts.hidden, collapsed: next.layout.hiddenCollapsed, selectedID: next.selectedID) {
+                appendWorkspace(workspace, selected: workspace.id == next.selectedID,
+                    alias: next.layout.aliases[workspace.id], badged: next.badges.contains(workspace.id), into: hiddenWorkspaceRows)
+            }
         }
         // Establish the requested floor once from the original content-sized
         // layout. Measuring the constrained widget again would double it on
@@ -313,6 +330,7 @@ final class WorkspaceWindow {
     func setActionsEnabled(_ enabled: Bool) {
         actionsEnabled = enabled
         gtk_widget_set_sensitive(UnsafeMutableRawPointer(workspaceRows).assumingMemoryBound(to: GtkWidget.self), enabled ? 1 : 0)
+        gtk_widget_set_sensitive(UnsafeMutableRawPointer(hiddenWorkspaceRows).assumingMemoryBound(to: GtkWidget.self), enabled ? 1 : 0)
         gtk_widget_set_sensitive(emptyState, enabled ? 1 : 0)
         if let workspaceMenu { gtk_widget_set_sensitive(workspaceMenu, enabled ? 1 : 0) }
         if let renameDialog {
@@ -330,7 +348,8 @@ final class WorkspaceWindow {
         g_object_unref(UnsafeMutableRawPointer(emptyState))
     }
 
-    private func appendWorkspace(_ workspace: WorkspaceView, selected: Bool, alias: String?, badged: Bool) {
+    private func appendWorkspace(_ workspace: WorkspaceView, selected: Bool, alias: String?, badged: Bool,
+                                 into destination: UnsafeMutablePointer<GtkBox>? = nil) {
         let row = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 4)!)
             .assumingMemoryBound(to: GtkBox.self)
         let title = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6)!)
@@ -384,7 +403,7 @@ final class WorkspaceWindow {
             ))
             gtk_box_append(container, stop)
         }
-        gtk_box_append(workspaceRows, UnsafeMutableRawPointer(container).assumingMemoryBound(to: GtkWidget.self))
+        gtk_box_append(destination ?? workspaceRows, UnsafeMutableRawPointer(container).assumingMemoryBound(to: GtkWidget.self))
     }
 
     private func refreshLifecyclePanel() {
@@ -470,6 +489,8 @@ final class WorkspaceWindow {
             gtk_box_append(UnsafeMutableRawPointer(box).assumingMemoryBound(to: GtkBox.self), button)
         }
         addAction("rename", "Set friendly name…")
+        if snapshot.layout.hidden.contains(workspaceID) { addAction("show", "Show") }
+        else { addAction("hide", "Hide") }
         if pane(forWorkspace: workspaceID) != nil {
             for (kind, label) in [("disconnect", "Disconnect"), ("reconnect", "Reload SSH Session")] {
                 addAction(kind, label, enabled: !busy && workspace.state == "Running"

@@ -45,6 +45,11 @@ struct WorkspaceWindowTests {
                 g_object_unref(UnsafeMutableRawPointer(application))
                 return
             }
+            if CommandLine.arguments.dropFirst().contains("visibility") {
+                try testWorkspaceVisibility(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
 
             let window = WorkspaceWindow(application: application)
             var commands: [(String, [String: String]?)] = []
@@ -571,6 +576,55 @@ struct WorkspaceWindowTests {
         gtk_dialog_response(UnsafeMutableRawPointer(failed).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_ACCEPT.rawValue)
         try expect(commands.count == count, "backend failure allowed a pending rename to mutate state")
         print("organization=rename-order shortcuts=bounded cancel=nonmutating")
+    }
+
+    private static func testWorkspaceVisibility(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let window = WorkspaceWindow(application: application)
+        defer { gtk_window_destroy(window.window) }
+        let workspaces = ["visible", "hidden", "selected-hidden"].map {
+            WorkspaceView(id: $0, provider: "test", source: "", lastUsed: "", state: "Running", error: nil)
+        }
+        var revision = 0
+        func update(collapsed: Bool) {
+            revision += 1
+            window.update(WorkspaceControllerSnapshot(revision: UInt64(revision), workspaces: workspaces,
+                selectedID: "selected-hidden", layout: Layout(order: workspaces.map(\.id),
+                    hidden: ["hidden", "selected-hidden"], hiddenCollapsed: collapsed), terminalPanes: []))
+        }
+        var commands: [(String, [String: String]?)] = []
+        window.onCommand = { commands.append(($0, $1)) }
+        update(collapsed: true)
+        window.present()
+        let root = gtk_window_get_child(window.window)!
+        try expect(pumpUntil { gtk_widget_get_mapped(root) != 0 }, "visibility window did not map")
+        try expect(namedWidget("select-workspace-hidden", in: root) == nil, "collapsed hidden workspace remains visible")
+        try expect(namedWidget("select-workspace-selected-hidden", in: root) != nil, "selected hidden workspace became unreachable")
+        let identity = TerminalPaneIdentity(workspaceID: "selected-hidden", generation: UUID(), paneID: UUID())
+        window.apply(try terminalEffect(kind: "terminal_launch", workspace: identity.workspaceID,
+            generation: identity.generation, pane: identity.paneID, executable: "/bin/sh", arguments: ["-c", "printf ready; exec sleep 30"]))
+        try expect(pumpUntil { window.pane(for: identity)?.text.contains("ready") == true }, "hidden workspace terminal failed")
+        let pane = window.pane(for: identity)!
+        guard let toggle = namedWidget("toggle-hidden-workspaces", in: root) else { throw TestFailure("Hidden toggle is missing") }
+        _ = gtk_widget_activate(toggle)
+        try expect(pumpUntil { commands.last?.0 == "expand_hidden" }, "Hidden toggle did not expand")
+        update(collapsed: false)
+        try expect(namedWidget("select-workspace-hidden", in: root) != nil, "expanded hidden workspace is absent")
+        try expect(window.pane(for: identity) === pane, "visibility change recreated the terminal")
+        window.showWorkspaceMenu("hidden", relativeTo: root)
+        guard let show = namedWidget("show-workspace", in: root) else { throw TestFailure("Show action is missing") }
+        _ = gtk_widget_activate(show)
+        try expect(pumpUntil { commands.last?.0 == "show" && commands.last?.1?["workspace_id"] == "hidden" }, "Show targeted the wrong workspace")
+        window.showWorkspaceMenu("visible", relativeTo: root)
+        guard let hide = namedWidget("hide-workspace", in: root) else { throw TestFailure("Hide action is missing") }
+        _ = gtk_widget_activate(hide)
+        try expect(pumpUntil { commands.last?.0 == "hide" && commands.last?.1?["workspace_id"] == "visible" }, "Hide targeted the wrong workspace")
+        _ = gtk_widget_activate(namedWidget("toggle-hidden-workspaces", in: root)!)
+        try expect(pumpUntil { commands.last?.0 == "collapse_hidden" }, "Hidden toggle did not collapse")
+        update(collapsed: true)
+        try expect(window.pane(for: identity) === pane, "collapse disposed the selected terminal")
+        try expect(!commands.contains { ["connect", "disconnect", "stop", "start"].contains($0.0) }, "visibility changed workspace or SSH lifecycle")
+        window.closeTerminal(identity)
+        print("visibility=selected-reachable terminal=preserved actions=hide-show")
     }
 
     private static func activeDialog(for parent: UnsafeMutablePointer<GtkWindow>) -> UnsafeMutablePointer<GtkWindow>? {

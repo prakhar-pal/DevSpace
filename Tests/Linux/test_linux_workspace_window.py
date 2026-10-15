@@ -130,6 +130,14 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("organization=rename-order shortcuts=bounded cancel=nonmutating", result.stdout)
 
+    def test_hidden_workspace_visibility_preserves_selected_terminal(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "visibility"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=12)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("visibility=selected-reachable terminal=preserved actions=hide-show", result.stdout)
+
     @unittest.skipUnless(os.environ.get("DEVSPACE_TEST_HOST_DISPLAY") in ("wayland", "x11"),
                          "opt-in controlled terminal on host display; no physical clipboard access")
     def test_controlled_terminal_and_orderly_quit_on_host_display(self):
