@@ -300,7 +300,7 @@ final class AppModel: ObservableObject {
     private var creationDiscoveryMissCount = 0
     private var creationLastMissRevision: UInt64?
     private var lastAppliedPollRevision: UInt64 = 0
-    private static let maxCreationDiscoveryMisses = 3
+    private static let maxCreationDiscoveryMisses = WorkspaceCreationDiscovery.maximumMisses
     private static let sshStartupRetryDelays = SSHRecoveryBudget.startupDelays
     private static let sshDisruptionRetryDelays = SSHRecoveryBudget.disruptionDelays
     private static let sshClientRetryDelays: [TimeInterval] = [0.5, 1.5]

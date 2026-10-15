@@ -332,6 +332,19 @@ class BackendIntegrationTests(unittest.TestCase):
         self.request("poll")
         self.assertNotIn("pod", json.loads(self.request("snapshot")["payload"]["connections"]))
 
+    def test_cancelled_create_does_not_connect_a_workspace_seen_during_provisioning(self):
+        self.request("poll")
+        self.begin_slow_command("create", repository="https://example.invalid/new.git", workspace_id="new-pod")
+        operation_id = str(self.sequence)
+        (self.directory / "created.json").write_text(json.dumps({"id": "new-pod", "provider": {"name": "test"}}))
+        self.request("poll")
+        self.assertNotIn("new-pod", json.loads(self.request("snapshot")["payload"]["connections"]))
+        self.request("cancel", request_id=operation_id)
+        self.assertEqual(self.response_for(operation_id)["kind"], "cancelled")
+        self.request("poll")
+        self.assertNotIn("new-pod", json.loads(self.request("snapshot")["payload"]["connections"]),
+                         "cancelled creation retained auto-connect intent from an early Running poll")
+
     def test_connect_and_reload_reject_busy_workspaces(self):
         self.request("poll")
         self.begin_slow_command()
@@ -415,6 +428,67 @@ class BackendIntegrationTests(unittest.TestCase):
         snapshot = self.request("snapshot")
         self.assertIn("pod", json.loads(snapshot["payload"]["connections"]),
                       "successful recreation left the workspace disconnected")
+
+    def begin_creation_awaiting_discovery(self):
+        self.request("poll")
+        self.sequence += 1
+        request_id = str(self.sequence)
+        self.process.stdin.write(json.dumps({"version": 1, "id": request_id, "kind": "create",
+            "payload": {"repository": "https://example.invalid/new.git", "workspace_id": "new-pod"}}) + "\n")
+        self.process.stdin.flush()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            operations = self.snapshot_request("snapshot")["operations"]
+            if any(item["id"] == request_id and item["state"] == "discovering" for item in operations):
+                return request_id
+            if any(frame.get("id") == request_id and frame["kind"] in ("completed", "error") for frame in self.frames):
+                self.fail("creation finished before lagged discovery could resolve it")
+            time.sleep(0.01)
+        self.fail("successful provisioning was not retained for discovery")
+
+    def test_creation_waits_for_lagged_discovery_and_selects_on_later_poll(self):
+        (self.directory / "creation-list-lag").write_text("2")
+        request_id = self.begin_creation_awaiting_discovery()
+        self.assertEqual(self.snapshot_request("poll")["selectedID"], "pod")
+        selected = self.snapshot_request("poll")["selectedID"]
+        self.assertEqual(selected, "new-pod")
+        response = self.response_for(request_id)
+        self.assertEqual(response["kind"], "completed")
+        self.assertEqual(response["payload"]["created_id"], "new-pod")
+
+    def test_transient_discovery_list_failure_does_not_reclassify_successful_up(self):
+        (self.directory / "post-create-list-fail").write_text("2")
+        request_id = self.begin_creation_awaiting_discovery()
+        self.assertEqual(self.request("poll")["kind"], "error")
+        self.assertEqual(self.snapshot_request("poll")["selectedID"], "new-pod")
+        self.assertEqual(self.response_for(request_id)["kind"], "completed")
+
+    def test_cancelling_discovery_keeps_created_workspace_and_releases_operation(self):
+        (self.directory / "creation-list-lag").write_text("10")
+        request_id = self.begin_creation_awaiting_discovery()
+        self.assertEqual(self.request("cancel", request_id=request_id)["kind"], "completed")
+        self.assertEqual(self.response_for(request_id)["kind"], "cancelled")
+        self.assertTrue((self.directory / "created.json").exists(), "cancelling discovery deleted the provisioned workspace")
+        self.assertEqual(self.snapshot_request("snapshot")["operations"], [])
+
+    def test_discovery_ends_after_three_successful_misses_without_false_up_failure(self):
+        (self.directory / "creation-list-lag").write_text("10")
+        request_id = self.begin_creation_awaiting_discovery()
+        self.request("poll")
+        self.request("poll")
+        self.assertEqual(self.response_for(request_id)["kind"], "completed")
+        snapshot = self.snapshot_request("snapshot")
+        self.assertEqual(snapshot["operations"], [])
+        self.assertEqual(snapshot["selectedID"], "pod")
+        self.assertTrue((self.directory / "created.json").exists())
+
+    def test_shutdown_finishes_pending_discovery_without_deleting_created_workspace(self):
+        (self.directory / "creation-list-lag").write_text("10")
+        request_id = self.begin_creation_awaiting_discovery()
+        self.assertEqual(self.request("shutdown")["kind"], "stopped")
+        self.assertEqual(self.response_for(request_id)["kind"], "cancelled")
+        self.assertEqual(self.process.wait(timeout=5), 0)
+        self.assertTrue((self.directory / "created.json").exists())
 
     def test_creation_selects_discovered_workspace_and_rejects_existing_id(self):
         self.request("poll")

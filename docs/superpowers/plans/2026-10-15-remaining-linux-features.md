@@ -296,6 +296,22 @@ path, then passed alongside visible-row scrolling and hide/show terminal-preserv
 checks (three native GTK cases). Creation discovery is the remaining review item;
 its three Swift policy tests pass, but backend integration is not yet implemented.
 
+Creation-discovery review fix verified: successful provisioning is distinct from
+workspace-list visibility. The operation retains its output and request ID in
+discovering state; subsequent successful polls resolve the explicit/new unique
+ID, with the same three-successful-miss bound as macOS. Transient list failures
+do not turn successful up into a failed Create or consume the miss bound.
+Ambiguity/exhaustion preserves the previous selection. Cancelling discovery or
+shutdown releases its operation without deleting the created workspace.
+Early workspace visibility during Create no longer acquires lasting SSH intent
+if provisioning is cancelled; success explicitly claims its discovered ID.
+Observed RED: three premature-completion cases and cancelled-create connection
+intent. Verified: Core17 affected policy/controller/command tests, backend51,
+then two additional discovery-bound/shutdown cases; backend rebuilt without the
+implicit-strong-capture warning. All eight final-review source fixes are now
+implemented. Full post-fix regressions and the approved fresh production BUNDLE
+(not .deb) remain before handoff. Current-head macOS CI remains unverified.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

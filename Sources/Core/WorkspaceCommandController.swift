@@ -25,9 +25,12 @@ public final class WorkspaceCommandController {
         let workspace: String?
         var output = Data()
         var cancelled = false
-        init(_ message: BackendProtocolMessage, workspace: String?) {
+        var discovery: WorkspaceCreationDiscovery?
+        let completion: (BackendProtocolMessage) -> Void
+        init(_ message: BackendProtocolMessage, workspace: String?, completion: @escaping (BackendProtocolMessage) -> Void) {
             self.message = message
             self.workspace = workspace
+            self.completion = completion
         }
     }
 
@@ -45,7 +48,7 @@ public final class WorkspaceCommandController {
             return WorkspaceOperationDescriptor(
                 id: key, kind: job.message.kind,
                 workspaceID: job.workspace,
-                state: job.cancelled ? "cancelling" : "running",
+                state: job.cancelled ? "cancelling" : job.discovery == nil ? "running" : "discovering",
                 output: String(decoding: job.output, as: UTF8.self))
         }
     }
@@ -69,13 +72,13 @@ public final class WorkspaceCommandController {
         guard !jobs.values.contains(where: { $0.workspace == workspace }) else {
             throw DevpodError("workspace operation is already active")
         }
-        let job = Job(message, workspace: workspace)
+        let job = Job(message, workspace: workspace, completion: completion)
         jobs[key] = job
         onChange?()
         prepare { [weak self] in
             guard let self, !self.stopping, self.jobs[key] === job else { return }
             operations.submit(
-                operation: {
+                operation: { [weak self] in
                     let beforeIDs: Set<String>
                     let explicitID: String?
                     if message.kind == "create" {
@@ -104,29 +107,35 @@ public final class WorkspaceCommandController {
                             }
                         })
                     var payload = ["command": message.kind]
+                    var discovery: WorkspaceCreationDiscovery?
                     if message.kind == "create" {
-                        let afterIDs = Set(try Devpod.list(job.runner).map(\.id))
-                        if let created = WorkspaceController.createdWorkspaceID(
-                            explicitID: explicitID, before: beforeIDs, after: afterIDs)
-                        {
-                            payload["created_id"] = created
+                        var pending = WorkspaceCreationDiscovery(explicitID: explicitID, before: beforeIDs)
+                        if let after = try? Devpod.list(job.runner) {
+                            switch pending.observe(Set(after.map(\.id))) {
+                            case .waiting: discovery = pending
+                            case .resolved(let id): payload["created_id"] = id
+                            }
+                        } else {
+                            // `up` succeeded; a transient list error is not a
+                            // provisioning failure. Fresh polls finish discovery.
+                            discovery = pending
                         }
                     }
-                    return BackendProtocolMessage(
-                        id: message.id, kind: "completed", payload: payload)
+                    return (BackendProtocolMessage(id: message.id, kind: "completed", payload: payload), discovery)
                 },
                 completion: { [weak self] result in
                     guard let self, self.jobs[key] === job else { return }
-                    self.jobs.removeValue(forKey: key)
-                    self.onChange?()
                     if job.cancelled {
-                        completion(BackendProtocolMessage(id: message.id, kind: "cancelled"))
+                        self.finish(key, response: BackendProtocolMessage(id: message.id, kind: "cancelled"))
                     } else {
                         switch result {
-                        case let .success(response): completion(response)
+                        case let .success((response, discovery)):
+                            if let discovery {
+                                job.discovery = discovery
+                                self.onChange?()
+                            } else { self.finish(key, response: response) }
                         case let .failure(error):
-                            completion(
-                                BackendProtocolMessage(
+                            self.finish(key, response: BackendProtocolMessage(
                                     id: message.id, kind: "error",
                                     payload: ["message": String(describing: error)]))
                         }
@@ -135,19 +144,38 @@ public final class WorkspaceCommandController {
         }
     }
 
+    /// Only successful, fresh list observations consume the discovery bound.
+    public func resolveCreations(workspaceIDs: Set<String>) {
+        guard !stopping else { return }
+        for (key, job) in Array(jobs) {
+            guard var discovery = job.discovery else { continue }
+            let outcome = discovery.observe(workspaceIDs)
+            job.discovery = discovery
+            if case .resolved(let id) = outcome {
+                var payload = ["command": "create"]
+                payload["created_id"] = id
+                finish(key, response: BackendProtocolMessage(id: job.message.id, kind: "completed", payload: payload))
+            }
+        }
+    }
+
+    private func finish(_ key: String, response: BackendProtocolMessage) {
+        guard let job = jobs.removeValue(forKey: key) else { return }
+        onChange?()
+        job.completion(response)
+    }
+
     public func cancel(_ requestID: String) throws {
         guard let job = jobs[requestID] else { throw DevpodError("operation not found") }
         job.cancelled = true
         job.runner.cancel()
-        onChange?()
+        if job.discovery != nil { finish(requestID, response: BackendProtocolMessage(id: job.message.id, kind: "cancelled")) }
+        else { onChange?() }
     }
 
     public func shutdown() {
         stopping = true
         operations.cancelAll()
-        for job in jobs.values {
-            job.cancelled = true
-            job.runner.cancel()
-        }
+        for key in Array(jobs.keys) { try? cancel(key) }
     }
 }

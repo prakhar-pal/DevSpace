@@ -27,7 +27,16 @@ if args == ["list", "--output", "json", "--skip-pro"]:
     if state_file.with_name("extra-pod").exists():
         workspaces.append({"id": "other", "provider": {"name": "test"}})
     if state_file.with_name("created.json").exists():
-        workspaces.append(json.loads(state_file.with_name("created.json").read_text()))
+        failure = state_file.with_name("post-create-list-fail")
+        lag = state_file.with_name("creation-list-lag")
+        if failure.exists() and int(failure.read_text()) > 0:
+            failure.write_text(str(int(failure.read_text()) - 1))
+            print("temporary workspace discovery failure", file=sys.stderr)
+            sys.exit(1)
+        if lag.exists() and int(lag.read_text()) > 0:
+            lag.write_text(str(int(lag.read_text()) - 1))
+        else:
+            workspaces.append(json.loads(state_file.with_name("created.json").read_text()))
     print(json.dumps(workspaces))
 elif args[0] == "status":
     observed = state_file.read_text() if state_file.exists() else "Running"

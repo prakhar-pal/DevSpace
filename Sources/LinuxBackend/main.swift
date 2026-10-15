@@ -611,6 +611,7 @@ private func handle(_ message: BackendProtocolMessage) {
                     let previousIDs = Set(controller.snapshot.workspaces.map(\.id))
                     let revision = controller.snapshot.revision &+ 1
                     _ = controller.apply(PollUpdate(revision: revision, views: views))
+                    workspaceCommands.resolveCreations(workspaceIDs: Set(views.map(\.id)))
                     for removed in previousIDs.subtracting(views.map(\.id)) { stateNotifyGate.forget(removed) }
                     for (workspace, event) in stateNotifyGate.observe(views) {
                         emitStateNotification(workspace, event: event)
@@ -624,6 +625,10 @@ private func handle(_ message: BackendProtocolMessage) {
                     }
                     autoConnect.formIntersection(liveIDs)
                     starting.formIntersection(liveIDs)
+                    let activeOperations = controller.snapshot.operations
+                    let busyWorkspaces = Set(activeOperations.compactMap(\.workspaceID))
+                    let creating = activeOperations.contains { $0.kind == "create" }
+                    let previouslySeen = seenDefinitive
                     let plan = WorkspaceLifecycle.reconcile(
                         workspaces: views,
                         seenDefinitive: seenDefinitive,
@@ -634,15 +639,17 @@ private func handle(_ message: BackendProtocolMessage) {
                     )
                     seenDefinitive = plan.seenDefinitive
                     autoConnect = plan.autoConnect
-                    let activeOperations = controller.snapshot.operations
-                    let busyWorkspaces = Set(activeOperations.compactMap(\.workspaceID))
-                    let creating = activeOperations.contains { $0.kind == "create" }
+                    if creating {
+                        // A partial create can become visible before `up`
+                        // succeeds. Only its successful completion claims SSH.
+                        autoConnect.subtract(views.map(\.id).filter { !previouslySeen.contains($0) })
+                    }
                     for id in Array(starting) where !busyWorkspaces.contains(id)
                         && views.contains(where: { $0.id == id && $0.state == "Running" }) {
                         starting.remove(id)
                     }
                     terminals.reconcile(views)
-                    for workspace in plan.connect where !creating && !busyWorkspaces.contains(workspace)
+                    for workspace in plan.connect where autoConnect.contains(workspace) && !creating && !busyWorkspaces.contains(workspace)
                         && !terminals.openedWorkspaces.contains(workspace) && sshRecoveries[workspace] == nil {
                         do { try beginConnection(workspace) }
                         catch { _ = send(BackendProtocolMessage(kind: "platform_error", payload: [
@@ -668,6 +675,7 @@ private func handle(_ message: BackendProtocolMessage) {
 
     case "create", "start", "stop", "delete", "recreate":
         do {
+            let previousSelection = controller.snapshot.selectedID
             let workspace = message.payload?["workspace_id"]
             if let workspace, message.kind == "start" {
                 try Devpod.validateId(workspace)
@@ -694,7 +702,13 @@ private func handle(_ message: BackendProtocolMessage) {
                     controller.select(workspace)
                 }
                 pollGeneration &+= 1
-                if let created = response.payload?["created_id"] { controller.select(created) }
+                if let created = response.payload?["created_id"] {
+                    controller.select(created)
+                    autoConnect.insert(created)
+                    starting.insert(created)
+                } else if message.kind == "create", response.kind == "completed" {
+                    controller.select(previousSelection)
+                }
                 _ = send(response)
             }
         } catch {
