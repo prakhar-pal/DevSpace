@@ -29,6 +29,29 @@ private final class TimeoutMasterScheduler: SSHTransportScheduling {
 }
 
 final class WorkspaceTerminalControllerTests: XCTestCase {
+    func testConnectDuringDisconnectWaitsForCleanupAndOldMasterExit() throws {
+        let first = ControlledMaster(), second = ControlledMaster()
+        var transports = [first, second]
+        var effects: [WorkspaceTerminalEffect] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in transports.removeFirst() }, emit: { effects.append($0) })
+        var cleanup: (() -> Void)?
+        controller.beforeDisconnect = { _, _, _, completion in cleanup = completion }
+        try controller.connect("pod")
+        XCTAssertEqual(controller.connectionStates["pod"], "connecting")
+        first.ready()
+        XCTAssertEqual(controller.connectionStates["pod"], "connected")
+        controller.disconnect("pod")
+        XCTAssertEqual(controller.connectionStates["pod"], "disconnecting")
+        try controller.connect("pod")
+        XCTAssertEqual(second.state, .idle)
+        cleanup?()
+        XCTAssertEqual(second.state, .idle, "replacement started before the old master released its lease")
+        first.stopped()
+        XCTAssertEqual(second.state, .starting, "explicit Connect was lost while Disconnect was finishing")
+        second.ready()
+        XCTAssertEqual(effects.filter { $0.kind == "terminal_launch" }.count, 2)
+    }
     func testLastShellExitStillWaitsForHookCleanup() throws {
         let master = ControlledMaster()
         var effects: [WorkspaceTerminalEffect] = []

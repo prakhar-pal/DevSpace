@@ -9,11 +9,15 @@ final class WorkspaceWindow {
     private let emptyState: UnsafeMutablePointer<GtkWidget>
     private let statusLabel: UnsafeMutablePointer<GtkWidget>
     private let notificationWarningLabel: UnsafeMutablePointer<GtkWidget>
+    private let sidebar: UnsafeMutablePointer<GtkWidget>
+    private var sidebarMinimumEstablished = false
     private var terminalPanes: [TerminalPaneIdentity: TerminalPane] = [:]
     private var terminalRoots: [TerminalPaneIdentity: UnsafeMutablePointer<GtkWidget>] = [:]
     private var retiredTerminalGenerations: [String: Set<UUID>] = [:]
     private var actionsEnabled = true
     private var terminalErrorWorkspace: String?
+    private var connectionStates: [String: String] = [:]
+    private var workspaceMenu: UnsafeMutablePointer<GtkWidget>?
     private(set) var snapshot = WorkspaceControllerSnapshot(
         revision: 0, workspaces: [], selectedID: nil, layout: Layout(), terminalPanes: []
     )
@@ -34,6 +38,7 @@ final class WorkspaceWindow {
             .assumingMemoryBound(to: GtkBox.self)
         let rootWidget = UnsafeMutableRawPointer(root).assumingMemoryBound(to: GtkWidget.self)
         let sidebarWidget = UnsafeMutableRawPointer(sidebar).assumingMemoryBound(to: GtkWidget.self)
+        self.sidebar = sidebarWidget
         gtk_widget_set_hexpand(sidebarWidget, 0)
         gtk_widget_set_margin_top(sidebarWidget, 16)
         gtk_widget_set_margin_bottom(sidebarWidget, 16)
@@ -91,6 +96,11 @@ final class WorkspaceWindow {
         gtk_window_present(window)
     }
 
+    func setConnectionStates(_ states: [String: String]) {
+        if states != connectionStates { dismissWorkspaceMenu() }
+        connectionStates = states
+    }
+
     @discardableResult
     func handleShortcut(keyval: UInt32, modifiers: GdkModifierType) -> Bool {
         let allowed = GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue
@@ -143,6 +153,9 @@ final class WorkspaceWindow {
 
     func update(_ next: WorkspaceControllerSnapshot) {
         guard next.revision >= snapshot.revision else { return }
+        if next.workspaces != snapshot.workspaces || next.operations != snapshot.operations {
+            dismissWorkspaceMenu()
+        }
         let selectionChanged = snapshot.selectedID != next.selectedID
         snapshot = next
         clear(workspaceRows)
@@ -155,6 +168,16 @@ final class WorkspaceWindow {
         for workspace in workspaces {
             appendWorkspace(workspace, selected: workspace.id == next.selectedID,
                             alias: next.layout.aliases[workspace.id], badged: next.badges.contains(workspace.id))
+        }
+        // Establish the requested floor once from the original content-sized
+        // layout. Measuring the constrained widget again would double it on
+        // every poll, and growing names must not ratchet the minimum upward.
+        if !sidebarMinimumEstablished,
+           next.workspaces.contains(where: { $0.state == "Running" || $0.state == "Stopped" }) {
+            var natural: Int32 = 0
+            gtk_widget_measure(sidebar, GTK_ORIENTATION_HORIZONTAL, -1, nil, &natural, nil, nil)
+            gtk_widget_set_size_request(sidebar, natural * 2, -1)
+            sidebarMinimumEstablished = true
         }
         revealSelectedTerminal(focus: selectionChanged)
         refreshLifecyclePanel()
@@ -274,9 +297,11 @@ final class WorkspaceWindow {
         actionsEnabled = enabled
         gtk_widget_set_sensitive(UnsafeMutableRawPointer(workspaceRows).assumingMemoryBound(to: GtkWidget.self), enabled ? 1 : 0)
         gtk_widget_set_sensitive(emptyState, enabled ? 1 : 0)
+        if let workspaceMenu { gtk_widget_set_sensitive(workspaceMenu, enabled ? 1 : 0) }
     }
 
     deinit {
+        dismissWorkspaceMenu()
         g_object_unref(UnsafeMutableRawPointer(emptyState))
     }
 
@@ -306,6 +331,17 @@ final class WorkspaceWindow {
         connectAction(button, context: WorkspaceActionContext(
             window: self, kind: "select", payload: ["workspace_id": workspace.id]
         ))
+        let gesture = gtk_gesture_click_new()!
+        gtk_gesture_single_set_button(gesture, 3)
+        let pressed = unsafeBitCast(devspaceLinuxWorkspaceMenu as @convention(c)
+            (UnsafeMutableRawPointer?, Int32, Double, Double, UnsafeMutableRawPointer?) -> Void, to: GCallback.self)
+        let destroy: GClosureNotify = { data, _ in
+            if let data { Unmanaged<WorkspaceActionContext>.fromOpaque(data).release() }
+        }
+        _ = g_signal_connect_data(UnsafeMutableRawPointer(gesture), "pressed", pressed,
+            Unmanaged.passRetained(WorkspaceActionContext(window: self, kind: "menu",
+                payload: ["workspace_id": workspace.id])).toOpaque(), destroy, GConnectFlags(rawValue: 0))
+        gtk_widget_add_controller(button, gesture)
         let container = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0)!)
             .assumingMemoryBound(to: GtkBox.self)
         gtk_widget_set_hexpand(button, 1)
@@ -366,10 +402,61 @@ final class WorkspaceWindow {
             ))
             gtk_box_append(box, start)
         } else {
-            gtk_box_append(box, gtk_label_new(workspace.state == "Running"
-                ? "Connecting to workspace…" : "Checking workspace status…")!)
+            let phase = connectionStates[workspace.id]
+            let connecting = phase == "connecting" || phase == "disconnecting"
+            if workspace.state == "Running" {
+                gtk_box_append(box, gtk_label_new(phase == "disconnecting" ? "Disconnecting SSH session…"
+                    : connecting ? "Connecting to workspace…" : "Workspace is running. Connect to open its terminal.")!)
+                let connect = gtk_button_new_with_label(connecting ? "Connecting…" : "Connect")!
+                gtk_widget_set_name(connect, "connect-workspace")
+                gtk_widget_set_sensitive(connect, actionsEnabled && !connecting ? 1 : 0)
+                connectAction(connect, context: WorkspaceActionContext(window: self, kind: "connect",
+                    payload: ["workspace_id": workspace.id]))
+                gtk_box_append(box, connect)
+            } else { gtk_box_append(box, gtk_label_new("Checking workspace status…")!) }
         }
         revealSelectedTerminal()
+    }
+
+    func showWorkspaceMenu(_ workspaceID: String, relativeTo source: UnsafeMutablePointer<GtkWidget>, x: Double = 0, y: Double = 0) {
+        guard actionsEnabled, let workspace = snapshot.workspaces.first(where: { $0.id == workspaceID }),
+              let root = gtk_window_get_child(window) else { return }
+        dismissWorkspaceMenu()
+        let popover = gtk_popover_new()!
+        _ = g_object_ref_sink(UnsafeMutableRawPointer(popover))
+        workspaceMenu = popover
+        gtk_widget_set_parent(popover, root)
+        var point = graphene_point_t(x: Float(x), y: Float(y))
+        var target = graphene_point_t()
+        if gtk_widget_compute_point(source, root, &point, &target) != 0 {
+            var rectangle = GdkRectangle(x: Int32(target.x), y: Int32(target.y), width: 1, height: 1)
+            gtk_popover_set_pointing_to(UnsafeMutableRawPointer(popover).assumingMemoryBound(to: GtkPopover.self), &rectangle)
+        }
+        let box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
+        gtk_popover_set_child(UnsafeMutableRawPointer(popover).assumingMemoryBound(to: GtkPopover.self), box)
+        let busy = snapshot.operations.contains { $0.workspaceID == workspaceID }
+        if pane(forWorkspace: workspaceID) != nil {
+            for (kind, label) in [("disconnect", "Disconnect"), ("reconnect", "Reload SSH Session")] {
+                let button = gtk_button_new_with_label(label)!
+                gtk_widget_set_name(button, "\(kind)-workspace")
+                gtk_widget_set_sensitive(button, !busy && workspace.state == "Running"
+                    && connectionStates[workspaceID] != "disconnecting" ? 1 : 0)
+                connectAction(button, context: WorkspaceActionContext(window: self, kind: kind,
+                    payload: ["workspace_id": workspaceID]))
+                gtk_box_append(UnsafeMutableRawPointer(box).assumingMemoryBound(to: GtkBox.self), button)
+            }
+        } else {
+            gtk_box_append(UnsafeMutableRawPointer(box).assumingMemoryBound(to: GtkBox.self), gtk_label_new("No SSH session")!)
+        }
+        gtk_popover_popup(UnsafeMutableRawPointer(popover).assumingMemoryBound(to: GtkPopover.self))
+    }
+
+    private func dismissWorkspaceMenu() {
+        guard let menu = workspaceMenu else { return }
+        workspaceMenu = nil
+        gtk_popover_popdown(UnsafeMutableRawPointer(menu).assumingMemoryBound(to: GtkPopover.self))
+        if gtk_widget_get_parent(menu) != nil { gtk_widget_unparent(menu) }
+        g_object_unref(UnsafeMutableRawPointer(menu))
     }
 
     private static func configureSidebarText(_ label: UnsafeMutablePointer<GtkWidget>) {
@@ -424,8 +511,22 @@ private func devspaceLinuxWorkspaceAction(_ button: UnsafeMutableRawPointer?, _ 
     guard let data else { return }
     let context = Unmanaged<WorkspaceActionContext>.fromOpaque(data).takeUnretainedValue()
     guard let button, gtk_widget_is_sensitive(button.assumingMemoryBound(to: GtkWidget.self)) != 0 else { return }
+    if let popover = gtk_widget_get_ancestor(button.assumingMemoryBound(to: GtkWidget.self), gtk_popover_get_type()) {
+        gtk_popover_popdown(UnsafeMutableRawPointer(popover).assumingMemoryBound(to: GtkPopover.self))
+    }
     context.window?.onCommand?(context.kind, context.payload)
     _ = button
+}
+
+@_cdecl("devspace_linux_workspace_menu")
+private func devspaceLinuxWorkspaceMenu(_ gesture: UnsafeMutableRawPointer?, _ count: Int32,
+                                        _ x: Double, _ y: Double, _ data: UnsafeMutableRawPointer?) {
+    guard let gesture, let data,
+          let source = gtk_event_controller_get_widget(OpaquePointer(gesture)) else { return }
+    let context = Unmanaged<WorkspaceActionContext>.fromOpaque(data).takeUnretainedValue()
+    if let workspace = context.payload["workspace_id"] {
+        context.window?.showWorkspaceMenu(workspace, relativeTo: source, x: x, y: y)
+    }
 }
 
 @_cdecl("devspace_linux_window_key_pressed")

@@ -85,6 +85,24 @@ counterpart to NSWorkspace activation. Cost: a desktop entry that does not
 honor single-instance activation may behave differently; no DevPod provisioning
 is attempted when an existing remote session is detected.
 
+M04 implemented: running disconnected workspaces expose Connect/retry, owned
+connection phases distinguish connecting/disconnecting from idle, and existing
+terminal rows offer Disconnect/Reload SSH Session in a right-click menu without
+persistent extra sidebar buttons. Busy workspaces reject Connect/Reload.
+An explicit Connect during Disconnect is retained until hook cleanup and the old
+master's exit; reload still waits for lease release and rejects old callbacks.
+Verified: Core235 (one opt-in skip), GTK11 (one live skip, including backend40),
+both development products, and the busy-workspace protocol case directly.
+No real workspace lifecycle commands were run. Native menu ownership survives
+polling and backend failure; disconnect/terminal exit remain SSH-only actions.
+
+Latest user UI adjustment implemented in this increment: establish the sidebar
+minimum once at twice its original content-sized width, rather than doubling on
+each poll. Native regression reproduced an unset minimum with a 172 px fixture
+baseline before the change and now verifies the doubled floor plus terminal
+expansion. A later longer name can grow the sidebar without ratcheting its floor.
+M05–M10 remain; M03 live wc-1 acceptance is still pending (Stopped on recheck).
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

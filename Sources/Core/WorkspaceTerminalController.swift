@@ -18,6 +18,7 @@ public final class WorkspaceTerminalController {
     public var onDisconnect: ((String, UUID) -> Void)?
     public var beforeDisconnect: ((String, UUID, String, @escaping () -> Void) -> Void)?
     public var onFocus: ((String) -> Void)?
+    public var onConnectionChange: (() -> Void)?
     private final class Connection {
         let generation = UUID()
         let transport: SSHTransportControlling
@@ -53,6 +54,12 @@ public final class WorkspaceTerminalController {
 
     public var hasOwnedTransports: Bool { !connections.isEmpty }
     public var openedWorkspaces: Set<String> { Set(connections.keys) }
+
+    public var connectionStates: [String: String] {
+        connections.mapValues { connection in
+            connection.stopping ? "disconnecting" : connection.panes.isEmpty ? "connecting" : "connected"
+        }
+    }
 
     public func hasProducedOutput(_ workspace: String) -> Bool {
         connections[workspace]?.hasProducedOutput == true
@@ -99,7 +106,8 @@ public final class WorkspaceTerminalController {
         try Devpod.validateId(workspace)
         guard !shuttingDown else { throw DevpodError("terminal controller is shutting down") }
         if let connection = connections[workspace] {
-            if !connection.stopping, connection.transport.state == .ready {
+            if connection.stopping { connection.reconnect = true }
+            else if connection.transport.state == .ready {
                 launchPane(workspace, connection)
             }
             return
@@ -121,19 +129,25 @@ public final class WorkspaceTerminalController {
             for completion in connection.afterStop { completion() }
             connection.afterStop.removeAll()
             if connection.reconnect, !self.shuttingDown { try? self.connect(workspace) }
+            else { self.onConnectionChange?() }
         }
         connection.transport.onExit = { [weak self, weak connection] code in
             guard let self, let connection, self.isCurrent(workspace, connection) else { return }
             if !connection.stopping { self.onDisconnect?(workspace, connection.generation) }
             self.closePanes(workspace, connection)
             self.connections.removeValue(forKey: workspace)
+            self.onConnectionChange?()
             self.effect("terminal_error", workspace, connection, message: "SSH master exited: \(code)")
         }
         connection.transport.onStartError = { [weak self, weak connection] error in
             guard let self, let connection, self.isCurrent(workspace, connection) else { return }
             self.effect("terminal_error", workspace, connection, message: "SSH connection failed: \(error)")
-            if connection.transport.state == .exited { self.connections.removeValue(forKey: workspace) }
+            if connection.transport.state == .exited {
+                self.connections.removeValue(forKey: workspace)
+                self.onConnectionChange?()
+            }
         }
+        onConnectionChange?()
         connection.transport.start()
     }
 
@@ -211,6 +225,7 @@ public final class WorkspaceTerminalController {
     private func stop(_ workspace: String, _ connection: Connection) {
         guard !connection.stopping else { return }
         connection.stopping = true
+        onConnectionChange?()
         onDisconnect?(workspace, connection.generation)
         let finish = { [weak self, weak connection] in
             guard let self, let connection, self.isCurrent(workspace, connection) else { return }

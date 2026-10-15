@@ -70,9 +70,11 @@ private func fail(_ message: String) {
 
 private func sendSnapshot(_ id: String?, from controller: WorkspaceController) -> Bool {
     guard let data = try? JSONEncoder().encode(controller.snapshot),
-          let json = String(data: data, encoding: .utf8)
+          let json = String(data: data, encoding: .utf8),
+          let states = try? JSONEncoder().encode(terminals.connectionStates),
+          let connections = String(data: states, encoding: .utf8)
     else { return false }
-    return send(BackendProtocolMessage(id: id, kind: "snapshot", payload: ["json": json]))
+    return send(BackendProtocolMessage(id: id, kind: "snapshot", payload: ["json": json, "connections": connections]))
 }
 
 let identity = requestedIdentity()
@@ -137,6 +139,10 @@ let terminals = WorkspaceTerminalController(identity: identity,
 
 workspaceCommands.onChange = {
     controller.setOperations(workspaceCommands.snapshot)
+    if handshaken && !stopping { _ = sendSnapshot(nil, from: controller) }
+}
+
+terminals.onConnectionChange = {
     if handshaken && !stopping { _ = sendSnapshot(nil, from: controller) }
 }
 
@@ -429,11 +435,16 @@ private func handle(_ message: BackendProtocolMessage) {
                 guard controller.snapshot.workspaces.contains(where: { $0.id == workspace && $0.state == "Running" }) else {
                     throw DevpodError("workspace is not running: \(workspace)")
                 }
+                guard !controller.snapshot.operations.contains(where: { $0.workspaceID == workspace }) else {
+                    throw DevpodError("workspace is busy: \(workspace)")
+                }
                 autoConnect.insert(workspace)
                 controller.select(workspace)
                 _ = sendSnapshot(nil, from: controller)
                 if message.kind == "reconnect" { try terminals.reconnect(workspace) }
-                else if !terminals.openedWorkspaces.contains(workspace) { try terminals.connect(workspace) }
+                else if !terminals.openedWorkspaces.contains(workspace) || terminals.connectionStates[workspace] == "disconnecting" {
+                    try terminals.connect(workspace)
+                }
             }
             _ = send(BackendProtocolMessage(id: message.id, kind: "completed"))
         } catch {

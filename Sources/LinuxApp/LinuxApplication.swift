@@ -237,6 +237,11 @@ final class LinuxApplicationController {
                 let snapshot = try JSONDecoder().decode(
                     WorkspaceControllerSnapshot.self, from: Data(json.utf8)
                 )
+                guard snapshot.revision >= (window?.snapshot.revision ?? 0) else { return }
+                let connections = message.payload?["connections"].flatMap {
+                    try? JSONDecoder().decode([String: String].self, from: Data($0.utf8))
+                } ?? [:]
+                window?.setConnectionStates(connections)
                 window?.update(snapshot)
                 editorGenerations = editorGenerations.filter { workspace, _ in
                     snapshot.workspaces.contains { $0.id == workspace && $0.state == "Running" }

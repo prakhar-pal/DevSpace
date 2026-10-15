@@ -303,6 +303,13 @@ class BackendIntegrationTests(unittest.TestCase):
         self.assertEqual(self.request("shutdown")["kind"], "stopped")
         self.assertTrue((self.directory / "cleaned").exists(), "shutdown acknowledged before command cleanup")
 
+    def test_connect_and_reload_reject_busy_workspaces(self):
+        self.request("poll")
+        self.begin_slow_command()
+        self.assertEqual(self.request("connect", workspace_id="pod")["kind"], "error")
+        self.assertEqual(self.request("reconnect", workspace_id="pod")["kind"], "error")
+        self.assertFalse(any(frame["kind"] == "terminal_launch" for frame in self.frames))
+
     def test_cancel_operation_waits_for_cleanup_and_keeps_polling_usable(self):
         self.begin_slow_command()
         running_request = str(self.sequence)

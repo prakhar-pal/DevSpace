@@ -173,8 +173,13 @@ struct WorkspaceWindowTests {
             let sidebar = gtk_widget_get_first_child(gtk_window_get_child(window.window))!
             var baselineMinimum: Int32 = 0
             var baselineNatural: Int32 = 0
+            var requestedMinimum: Int32 = -1
+            gtk_widget_get_size_request(sidebar, &requestedMinimum, nil)
+            gtk_widget_set_size_request(sidebar, -1, -1)
             gtk_widget_measure(sidebar, GTK_ORIENTATION_HORIZONTAL, -1, &baselineMinimum, &baselineNatural, nil, nil)
-            try expect(baselineNatural < 220, "short workspace names still reserve a wide sidebar: \(baselineNatural)")
+            gtk_widget_set_size_request(sidebar, requestedMinimum, -1)
+            try expect(requestedMinimum == baselineNatural * 2,
+                       "sidebar minimum \(requestedMinimum) is not double its original content width \(baselineNatural)")
             window.update(WorkspaceControllerSnapshot(
                 revision: 2, workspaces: [workspace, otherWorkspace], selectedID: workspace.id,
                 layout: Layout(aliases: [workspace.id: String(repeating: "LongProject", count: 10)]), terminalPanes: []
@@ -186,7 +191,7 @@ struct WorkspaceWindowTests {
             var minimumWidth: Int32 = 0
             var naturalWidth: Int32 = 0
             gtk_widget_measure(sidebar, GTK_ORIENTATION_HORIZONTAL, -1, &minimumWidth, &naturalWidth, nil, nil)
-            try expect(naturalWidth < 280 && minimumWidth <= nameMinimum && naturalWidth <= nameNatural,
+            try expect(naturalWidth < 560 && minimumWidth <= nameMinimum && naturalWidth <= nameNatural,
                        "long sidebar text widened minimum=\(minimumWidth)/\(nameMinimum) natural=\(naturalWidth)/\(nameNatural)")
             try expect(pumpUntil {
                 gtk_widget_get_allocated_width(originalPane.widget) >=
@@ -433,6 +438,12 @@ struct WorkspaceWindowTests {
         try expect(pumpUntil { commands.contains { $0.0 == "cancel" && $0.1?["request_id"] == "request-42" } },
                    "Cancel did not identify its owned operation")
         try update("Running")
+        guard let connect = namedWidget("connect-workspace", in: root) else {
+            throw TestFailure("disconnected running workspace has no Connect action")
+        }
+        _ = gtk_widget_activate(connect)
+        try expect(pumpUntil { commands.contains { $0.0 == "connect" && $0.1?["workspace_id"] == "pod" } },
+                   "Connect did not target the selected workspace")
         guard let stop = namedWidget("stop-workspace", in: root) else { throw TestFailure("running workspace has no Stop") }
         window.setActionsEnabled(false)
         try expect(gtk_widget_is_sensitive(stop) == 0, "backend failure leaves Stop enabled")
@@ -443,6 +454,24 @@ struct WorkspaceWindowTests {
         window.setStatus("Provider rejected stop")
         try update("Running")
         try expect(containsLabel("Provider rejected stop", in: root), "polling erased the operation failure")
+        window.setConnectionStates(["pod": "connecting"])
+        try update("Running")
+        try expect(namedWidget("connect-workspace", in: root).map { gtk_widget_is_sensitive($0) == 0 } == true,
+                   "in-flight SSH connection still offers another Connect")
+        window.setConnectionStates([:])
+        try update("Running")
+        let identity = TerminalPaneIdentity(workspaceID: "pod", generation: UUID(), paneID: UUID())
+        window.apply(try terminalEffect(kind: "terminal_launch", workspace: "pod", generation: identity.generation,
+            pane: identity.paneID, executable: "/bin/sh", arguments: ["-c", "printf 'menu-ready\\n'; exec /bin/sleep 30"]))
+        try expect(pumpUntil { window.pane(for: identity)?.text.contains("menu-ready") == true }, "menu test shell failed")
+        for (name, command) in [("reconnect-workspace", "reconnect"), ("disconnect-workspace", "disconnect")] {
+            window.showWorkspaceMenu("pod", relativeTo: root)
+            guard let action = namedWidget(name, in: root) else { throw TestFailure("missing session menu action: \(name)") }
+            _ = gtk_widget_activate(action)
+            try expect(pumpUntil { commands.contains { $0.0 == command && $0.1?["workspace_id"] == "pod" } },
+                       "session menu did not target the existing workspace")
+        }
+        window.closeTerminal(identity)
         try update("Unknown")
         try expect(namedWidget("start-workspace", in: root) == nil, "unknown state offers Start")
         try expect(namedWidget("stop-workspace", in: root) == nil, "unknown state offers Stop")
