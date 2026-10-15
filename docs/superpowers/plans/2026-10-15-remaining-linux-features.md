@@ -212,6 +212,18 @@ native test with independent local shell round-trips and active-tab editor
 directory targeting. No real SSH multi-shell/live hook acceptance is claimed
 while wc-1 remains stopped. M10 is the remaining source-feature milestone.
 
+M10 first increment: New/Create and Recreate confirmation dialogs, global
+creation progress/cancellation without a selected workspace, and native Guide
+with actual Linux bindings are implemented. Validation reuses Devpod.CreateRequest;
+Recreate explains container replacement and submits only after confirmation.
+Successful recreation restores connection intent, with SSH deferred to confirmed
+Running status. Native tests first observed missing New; the backend fixture
+observed successful recreation remaining disconnected before the fix. GTK17
+passed (two opt-in skips, including backend45). Backend-failure coverage caught
+an enabled footer and now verifies it is disabled; the malformed provisioning
+snapshot fixture was corrected to include required badges. M10 is NOT complete:
+retained failure output and the pre-snapshot duplicate-submit window remain next.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

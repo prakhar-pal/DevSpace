@@ -130,6 +130,14 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("organization=rename-order shortcuts=bounded cancel=nonmutating", result.stdout)
 
+    def test_provisioning_dialogs_progress_and_guide(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "provisioning"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=12)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("provisioning=validated confirmation=required progress=global guide=linux", result.stdout)
+
     def test_terminal_tabs_preserve_shells_and_creation_order(self):
         environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
         environment.pop("WAYLAND_DISPLAY", None)

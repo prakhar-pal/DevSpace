@@ -23,6 +23,8 @@ final class WorkspaceWindow {
     private var connectionStates: [String: String] = [:]
     private var workspaceMenu: UnsafeMutablePointer<GtkWidget>?
     private var renameDialog: UnsafeMutablePointer<GtkWidget>?
+    private var newWorkspaceButton: UnsafeMutablePointer<GtkWidget>?
+    private var sidebarFooter: UnsafeMutablePointer<GtkWidget>?
     private(set) var snapshot = WorkspaceControllerSnapshot(
         revision: 0, workspaces: [], selectedID: nil, layout: Layout(), terminalPanes: []
     )
@@ -96,6 +98,19 @@ final class WorkspaceWindow {
         gtk_box_append(root, separator)
         gtk_box_append(root, terminalWidget)
         gtk_window_set_child(window, rootWidget)
+        let footer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4)!
+        sidebarFooter = footer
+        let footerBox = UnsafeMutableRawPointer(footer).assumingMemoryBound(to: GtkBox.self)
+        for (kind, title, name) in [("new_workspace", "New", "new-workspace"), ("guide", "Guide", "workspace-guide")] {
+            let button = gtk_button_new_with_label(title)!
+            gtk_widget_set_name(button, name)
+            gtk_widget_set_hexpand(button, 1)
+            gtk_widget_add_css_class(button, "flat")
+            connectAction(button, context: WorkspaceActionContext(window: self, kind: kind, payload: [:]))
+            gtk_box_append(footerBox, button)
+            if kind == "new_workspace" { newWorkspaceButton = button }
+        }
+        gtk_box_append(sidebar, footer)
         refreshLifecyclePanel()
         let keys = gtk_event_controller_key_new()!
         gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE)
@@ -341,7 +356,7 @@ final class WorkspaceWindow {
         for (identity, root) in terminalRoots {
             gtk_widget_set_visible(root, identity == selectedPane?.identity ? 1 : 0)
         }
-        let operating = snapshot.operations.contains { $0.workspaceID == snapshot.selectedID }
+        let operating = snapshot.operations.contains { $0.workspaceID == snapshot.selectedID || $0.kind == "create" }
         gtk_widget_set_visible(emptyState, selectedPane == nil || operating ? 1 : 0)
         if operating {
             for root in terminalRoots.values { gtk_widget_set_visible(root, 0) }
@@ -409,6 +424,7 @@ final class WorkspaceWindow {
 
     func setActionsEnabled(_ enabled: Bool) {
         actionsEnabled = enabled
+        if let sidebarFooter { gtk_widget_set_sensitive(sidebarFooter, enabled ? 1 : 0) }
         gtk_widget_set_sensitive(UnsafeMutableRawPointer(terminalTabs).assumingMemoryBound(to: GtkWidget.self), enabled ? 1 : 0)
         gtk_widget_set_sensitive(UnsafeMutableRawPointer(workspaceRows).assumingMemoryBound(to: GtkWidget.self), enabled ? 1 : 0)
         gtk_widget_set_sensitive(UnsafeMutableRawPointer(hiddenWorkspaceRows).assumingMemoryBound(to: GtkWidget.self), enabled ? 1 : 0)
@@ -417,6 +433,9 @@ final class WorkspaceWindow {
         if let renameDialog {
             gtk_dialog_set_response_sensitive(UnsafeMutableRawPointer(renameDialog).assumingMemoryBound(to: GtkDialog.self),
                 GTK_RESPONSE_ACCEPT.rawValue, enabled ? 1 : 0)
+        }
+        if let newWorkspaceButton {
+            gtk_widget_set_sensitive(newWorkspaceButton, enabled && !snapshot.operations.contains { $0.kind == "create" } ? 1 : 0)
         }
     }
 
@@ -493,12 +512,14 @@ final class WorkspaceWindow {
         gtk_widget_set_margin_top(emptyState, 24)
         gtk_widget_set_margin_start(emptyState, 24)
         gtk_widget_set_margin_end(emptyState, 24)
-        guard let workspace = snapshot.workspaces.first(where: { $0.id == snapshot.selectedID }) else {
-            gtk_box_append(box, gtk_label_new("Select a workspace to open its terminal.")!)
-            return
+        if let newWorkspaceButton {
+            gtk_widget_set_sensitive(newWorkspaceButton, actionsEnabled && !snapshot.operations.contains { $0.kind == "create" } ? 1 : 0)
         }
-        if let operation = snapshot.operations.first(where: { $0.workspaceID == workspace.id }) {
-            gtk_box_append(box, gtk_label_new("\(operation.kind.capitalized): \(snapshot.layout.aliases[workspace.id] ?? workspace.id) — \(operation.state)")!)
+        let workspace = snapshot.workspaces.first(where: { $0.id == snapshot.selectedID })
+        if let operation = snapshot.operations.first(where: { $0.kind == "create" })
+            ?? snapshot.operations.first(where: { $0.workspaceID == workspace?.id }) {
+            let name = operation.workspaceID.flatMap { snapshot.layout.aliases[$0] ?? $0 } ?? "New workspace"
+            gtk_box_append(box, gtk_label_new("\(operation.kind.capitalized): \(name) — \(operation.state)")!)
             let output = gtk_label_new(operation.output)!
             gtk_label_set_xalign(OpaquePointer(output), 0)
             gtk_label_set_yalign(OpaquePointer(output), 0)
@@ -509,16 +530,21 @@ final class WorkspaceWindow {
             gtk_widget_set_vexpand(scroll, 1)
             gtk_scrolled_window_set_child(OpaquePointer(scroll), output)
             gtk_box_append(box, scroll)
-            if operation.kind == "start" {
+            if ["start", "create", "recreate"].contains(operation.kind) {
                 let cancel = gtk_button_new_with_label(operation.state == "cancelling" ? "Cancelling…" : "Cancel")!
                 gtk_widget_set_name(cancel, "cancel-operation")
                 gtk_widget_set_sensitive(cancel, actionsEnabled && operation.state != "cancelling" ? 1 : 0)
-                connectAction(cancel, context: WorkspaceActionContext(
-                    window: self, kind: "cancel", payload: ["request_id": operation.id]
-                ))
+                connectAction(cancel, context: WorkspaceActionContext(window: self, kind: "cancel", payload: ["request_id": operation.id]))
                 gtk_box_append(box, cancel)
             }
-        } else if workspace.state == "Stopped" {
+            revealSelectedTerminal()
+            return
+        }
+        guard let workspace else {
+            gtk_box_append(box, gtk_label_new("Select a workspace to open its terminal.")!)
+            return
+        }
+        if workspace.state == "Stopped" {
             gtk_box_append(box, gtk_label_new("Workspace stopped")!)
             let start = gtk_button_new_with_label("Start")!
             gtk_widget_set_name(start, "start-workspace")
@@ -570,6 +596,7 @@ final class WorkspaceWindow {
             gtk_box_append(UnsafeMutableRawPointer(box).assumingMemoryBound(to: GtkBox.self), button)
         }
         addAction("rename", "Set friendly name…")
+        addAction("recreate", "Recreate…", enabled: !busy)
         if snapshot.layout.hidden.contains(workspaceID) { addAction("show", "Show") }
         else { addAction("hide", "Hide") }
         if pane(forWorkspace: workspaceID) != nil {
@@ -608,8 +635,128 @@ final class WorkspaceWindow {
             let identity = TerminalPaneIdentity(workspaceID: workspace, generation: generation, paneID: pane)
             if kind == "select_terminal" { selectTerminal(identity) }
             else { closeTerminal(identity, reportExit: true) }
-        } else if kind == "rename", let workspace = payload["workspace_id"] { beginRename(workspace) }
+        } else if kind == "new_workspace" { beginWorkspaceDialog("create") }
+        else if kind == "guide" { beginWorkspaceDialog("guide") }
+        else if kind == "recreate", let workspace = payload["workspace_id"] { beginWorkspaceDialog("recreate", workspace: workspace) }
+        else if kind == "rename", let workspace = payload["workspace_id"] { beginRename(workspace) }
         else { onCommand?(kind, payload) }
+    }
+
+    private func beginWorkspaceDialog(_ kind: String, workspace: String? = nil) {
+        guard renameDialog == nil else { return }
+        if kind == "create", snapshot.operations.contains(where: { $0.kind == "create" }) { return }
+        if kind == "recreate" {
+            guard let workspace, snapshot.workspaces.contains(where: { $0.id == workspace }),
+                  !snapshot.operations.contains(where: { $0.workspaceID == workspace }) else { return }
+        }
+        let widget = gtk_dialog_new()!
+        _ = g_object_ref_sink(UnsafeMutableRawPointer(widget))
+        renameDialog = widget
+        let dialog = UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkDialog.self)
+        let modal = UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkWindow.self)
+        gtk_window_set_title(modal, kind == "create" ? "Create DevPod workspace" : kind == "guide" ? "Using DevSpace" : "Recreate \(workspace ?? "workspace")?")
+        gtk_window_set_transient_for(modal, window)
+        gtk_window_set_modal(modal, 1)
+        gtk_window_set_destroy_with_parent(modal, 1)
+        gtk_window_set_default_size(modal, kind == "guide" ? 560 : 460, kind == "guide" ? 520 : -1)
+        let contentWidget = gtk_dialog_get_content_area(dialog)!
+        let content = UnsafeMutableRawPointer(contentWidget).assumingMemoryBound(to: GtkBox.self)
+        for margin in [gtk_widget_set_margin_top, gtk_widget_set_margin_bottom, gtk_widget_set_margin_start, gtk_widget_set_margin_end] { margin(contentWidget, 16) }
+        gtk_box_set_spacing(content, 12)
+        var repository: UnsafeMutablePointer<GtkWidget>?
+        var identifier: UnsafeMutablePointer<GtkWidget>?
+        if kind == "create" {
+            gtk_box_append(content, gtk_label_new("Provision a workspace from a Git repository.")!)
+            gtk_box_append(content, gtk_label_new("Repository URL")!)
+            repository = gtk_entry_new()!
+            gtk_widget_set_name(repository!, "workspace-repository")
+            gtk_entry_set_activates_default(UnsafeMutableRawPointer(repository!).assumingMemoryBound(to: GtkEntry.self), 1)
+            gtk_box_append(content, repository!)
+            gtk_box_append(content, gtk_label_new("DevPod ID (optional)")!)
+            identifier = gtk_entry_new()!
+            gtk_widget_set_name(identifier!, "workspace-id")
+            gtk_entry_set_activates_default(UnsafeMutableRawPointer(identifier!).assumingMemoryBound(to: GtkEntry.self), 1)
+            gtk_box_append(content, identifier!)
+        } else if kind == "recreate" {
+            let warning = gtk_label_new("DevPod will replace the existing container and provision the workspace again. The current terminal session will disconnect.")!
+            gtk_label_set_wrap(OpaquePointer(warning), 1)
+            gtk_box_append(content, warning)
+        } else {
+            let scroll = gtk_scrolled_window_new()!
+            gtk_widget_set_vexpand(scroll, 1)
+            let rows = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12)!
+            for text in [
+                "Ctrl+Shift+1–9 — Select a visible workspace", "Ctrl+Shift+B — Toggle sidebar",
+                "Ctrl+Shift+R — Reload SSH session", "Ctrl+Shift+O — Open active folder in Zed",
+                "Ctrl+Shift+T — New terminal", "Ctrl+PageUp / PageDown — Previous / next terminal",
+                "Ctrl+Shift+C / V — Copy selection / paste text or image",
+                "Ctrl+Shift+Alt+Up / Down — Reorder selected workspace", "Esc — Close this guide",
+                "Running workspaces connect automatically at launch. Connect reopens a disconnected session; stopped workspaces are never awakened automatically.",
+                "Start opens a stopped workspace. Stop shuts it down. Exiting the last shell only disconnects SSH.",
+                "New provisions from a repository. Right-click a workspace for Recreate; confirmation is required before replacing its container. Provisioning logs and cancellation appear in the main pane.",
+                "Right-click for friendly names, Move Up/Down and Hide/Show. The selected hidden workspace stays reachable when Hidden is collapsed.",
+                "New Terminal shares the existing SSH connection. Tabs keep their shell and scrollback, use working-directory titles and appear only when multiple shells are open.",
+                "Images are uploaded to the active workspace and their paths inserted into its shell. Open in Zed follows the active terminal folder when available.",
+                "Claude Code hooks are installed on connection and removed on disconnect. Notifications and sidebar badges report completion or requests for input; selecting a workspace clears its badge."
+            ] {
+                let label = gtk_label_new(text)!
+                gtk_label_set_wrap(OpaquePointer(label), 1)
+                gtk_label_set_xalign(OpaquePointer(label), 0)
+                gtk_box_append(UnsafeMutableRawPointer(rows).assumingMemoryBound(to: GtkBox.self), label)
+            }
+            gtk_scrolled_window_set_child(OpaquePointer(scroll), rows)
+            gtk_box_append(content, scroll)
+        }
+        let error = gtk_label_new("")!
+        gtk_label_set_wrap(OpaquePointer(error), 1)
+        gtk_widget_add_css_class(error, "error")
+        gtk_box_append(content, error)
+        if kind == "guide" { _ = gtk_dialog_add_button(dialog, "Close", GTK_RESPONSE_CLOSE.rawValue) }
+        else {
+            _ = gtk_dialog_add_button(dialog, "Cancel", GTK_RESPONSE_CANCEL.rawValue)
+            let accept = gtk_dialog_add_button(dialog, kind == "create" ? "Create" : "Recreate", GTK_RESPONSE_ACCEPT.rawValue)!
+            if kind == "recreate" { gtk_widget_add_css_class(accept, "destructive-action") }
+            gtk_dialog_set_default_response(dialog, GTK_RESPONSE_ACCEPT.rawValue)
+        }
+        let context = WorkspaceDialogContext(window: self, kind: kind, workspace: workspace,
+            repository: repository, identifier: identifier, error: error)
+        let callback = unsafeBitCast(devspaceLinuxWorkspaceDialogResponse as @convention(c)
+            (UnsafeMutableRawPointer?, Int32, UnsafeMutableRawPointer?) -> Void, to: GCallback.self)
+        let destroy: GClosureNotify = { data, _ in
+            if let data { Unmanaged<WorkspaceDialogContext>.fromOpaque(data).release() }
+        }
+        _ = g_signal_connect_data(UnsafeMutableRawPointer(widget), "response", callback,
+            Unmanaged.passRetained(context).toOpaque(), destroy, GConnectFlags(rawValue: 0))
+        gtk_window_present(modal)
+        if let repository { _ = gtk_widget_grab_focus(repository) }
+    }
+
+    fileprivate func finishWorkspaceDialog(_ context: WorkspaceDialogContext, response: Int32) {
+        guard let dialog = renameDialog else { return }
+        var payload: [String: String]?
+        if response == GTK_RESPONSE_ACCEPT.rawValue, actionsEnabled {
+            do {
+                if context.kind == "create", let repository = context.repository, let identifier = context.identifier {
+                    guard !snapshot.operations.contains(where: { $0.kind == "create" }) else { return }
+                    let request = try Devpod.CreateRequest(repositoryURL: String(cString: gtk_editable_get_text(OpaquePointer(repository))),
+                        id: String(cString: gtk_editable_get_text(OpaquePointer(identifier))))
+                    if let id = request.id, snapshot.workspaces.contains(where: { $0.id == id }) { throw DevpodError("A workspace named \(id) already exists.") }
+                    payload = ["repository": request.repositoryURL]
+                    payload?["workspace_id"] = request.id
+                } else if context.kind == "recreate", let workspace = context.workspace,
+                    snapshot.workspaces.contains(where: { $0.id == workspace }),
+                    !snapshot.operations.contains(where: { $0.workspaceID == workspace }) {
+                    payload = ["workspace_id": workspace]
+                }
+            } catch {
+                gtk_label_set_text(OpaquePointer(context.error), String(describing: error))
+                return
+            }
+        }
+        renameDialog = nil
+        gtk_window_destroy(UnsafeMutableRawPointer(dialog).assumingMemoryBound(to: GtkWindow.self))
+        g_object_unref(UnsafeMutableRawPointer(dialog))
+        if let payload { onCommand?(context.kind, payload) }
     }
 
     private func beginRename(_ workspace: String) {
@@ -719,6 +866,27 @@ private final class WorkspaceActionContext {
         self.kind = kind
         self.payload = payload
     }
+}
+
+fileprivate final class WorkspaceDialogContext {
+    weak var window: WorkspaceWindow?
+    let kind: String
+    let workspace: String?
+    let repository: UnsafeMutablePointer<GtkWidget>?
+    let identifier: UnsafeMutablePointer<GtkWidget>?
+    let error: UnsafeMutablePointer<GtkWidget>
+    init(window: WorkspaceWindow, kind: String, workspace: String?, repository: UnsafeMutablePointer<GtkWidget>?,
+         identifier: UnsafeMutablePointer<GtkWidget>?, error: UnsafeMutablePointer<GtkWidget>) {
+        self.window = window; self.kind = kind; self.workspace = workspace
+        self.repository = repository; self.identifier = identifier; self.error = error
+    }
+}
+
+@_cdecl("devspace_linux_workspace_dialog_response")
+private func devspaceLinuxWorkspaceDialogResponse(_ dialog: UnsafeMutableRawPointer?, _ response: Int32, _ data: UnsafeMutableRawPointer?) {
+    guard let data else { return }
+    let context = Unmanaged<WorkspaceDialogContext>.fromOpaque(data).takeUnretainedValue()
+    context.window?.finishWorkspaceDialog(context, response: response)
 }
 
 private final class RenameContext {

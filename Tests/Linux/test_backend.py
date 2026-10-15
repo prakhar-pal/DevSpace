@@ -389,6 +389,15 @@ class BackendIntegrationTests(unittest.TestCase):
             time.sleep(0.02)
         self.assertLessEqual(len(active[0]["output"].encode()), 16384)
 
+    def test_successful_recreate_restores_connection_intent_only_after_running_poll(self):
+        self.request("poll")
+        self.request("disconnect", workspace_id="pod")
+        self.assertEqual(self.request("recreate", workspace_id="pod")["kind"], "completed")
+        self.request("poll")
+        snapshot = self.request("snapshot")
+        self.assertIn("pod", json.loads(snapshot["payload"]["connections"]),
+                      "successful recreation left the workspace disconnected")
+
     def test_creation_selects_discovered_workspace_and_rejects_existing_id(self):
         self.request("poll")
         duplicate = self.request("create", repository="https://example.invalid/new.git", workspace_id="pod")

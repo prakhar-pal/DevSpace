@@ -668,6 +668,11 @@ private func handle(_ message: BackendProtocolMessage) {
                     autoConnect.remove(workspace)
                     starting.remove(workspace)
                 }
+                if message.kind == "recreate", response.kind == "completed", let workspace {
+                    autoConnect.insert(workspace)
+                    starting.insert(workspace)
+                    controller.select(workspace)
+                }
                 pollGeneration &+= 1
                 if let created = response.payload?["created_id"] { controller.select(created) }
                 _ = send(response)

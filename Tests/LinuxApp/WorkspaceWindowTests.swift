@@ -55,6 +55,11 @@ struct WorkspaceWindowTests {
                 g_object_unref(UnsafeMutableRawPointer(application))
                 return
             }
+            if CommandLine.arguments.dropFirst().contains("provisioning") {
+                try testProvisioningDialogs(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
 
             let window = WorkspaceWindow(application: application)
             var commands: [(String, [String: String]?)] = []
@@ -581,6 +586,65 @@ struct WorkspaceWindowTests {
         gtk_dialog_response(UnsafeMutableRawPointer(failed).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_ACCEPT.rawValue)
         try expect(commands.count == count, "backend failure allowed a pending rename to mutate state")
         print("organization=rename-order shortcuts=bounded cancel=nonmutating")
+    }
+
+    private static func testProvisioningDialogs(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let window = WorkspaceWindow(application: application)
+        defer { gtk_window_destroy(window.window) }
+        var commands: [(String, [String: String]?)] = []
+        window.onCommand = { commands.append(($0, $1)) }
+        let workspace = WorkspaceView(id: "pod", provider: "test", source: "", lastUsed: "", state: "Stopped", error: nil)
+        window.update(WorkspaceControllerSnapshot(revision: 1, workspaces: [workspace], selectedID: "pod", layout: Layout(), terminalPanes: []))
+        window.present()
+        let root = gtk_window_get_child(window.window)!
+        try expect(pumpUntil { gtk_widget_get_mapped(root) != 0 }, "provisioning window did not map")
+        guard let new = namedWidget("new-workspace", in: root) else { throw TestFailure("New workspace action is missing") }
+        _ = gtk_widget_activate(new)
+        let dialog = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(dialog)) }
+        let content = gtk_window_get_child(dialog)!
+        guard let repository = namedWidget("workspace-repository", in: content),
+              let identifier = namedWidget("workspace-id", in: content) else { throw TestFailure("creation fields are missing") }
+        let modifiers = GdkModifierType(rawValue: GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue)
+        try expect(!window.handleShortcut(keyval: UInt32(GDK_KEY_1), modifiers: modifiers), "workspace shortcut escaped Create dialog")
+        gtk_dialog_response(UnsafeMutableRawPointer(dialog).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_ACCEPT.rawValue)
+        try expect(commands.isEmpty, "empty repository was submitted")
+        gtk_editable_set_text(OpaquePointer(repository), " https://example.invalid/repo.git ")
+        gtk_editable_set_text(OpaquePointer(identifier), " new-pod ")
+        gtk_dialog_response(UnsafeMutableRawPointer(dialog).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_ACCEPT.rawValue)
+        try expect(commands.last?.0 == "create" && commands.last?.1?["repository"] == "https://example.invalid/repo.git"
+            && commands.last?.1?["workspace_id"] == "new-pod", "Create did not submit normalized inputs")
+        window.showWorkspaceMenu("pod", relativeTo: root)
+        guard let recreate = namedWidget("recreate-workspace", in: root) else { throw TestFailure("Recreate action is missing") }
+        _ = gtk_widget_activate(recreate)
+        let confirmation = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(confirmation)) }
+        try expect(containsLabel("DevPod will replace the existing container and provision the workspace again. The current terminal session will disconnect.", in: gtk_window_get_child(confirmation)!), "Recreate lacks destructive-operation explanation")
+        let count = commands.count
+        gtk_dialog_response(UnsafeMutableRawPointer(confirmation).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_CANCEL.rawValue)
+        try expect(commands.count == count, "cancelling Recreate changed the workspace")
+        window.showWorkspaceMenu("pod", relativeTo: root)
+        _ = gtk_widget_activate(namedWidget("recreate-workspace", in: root)!)
+        let confirmed = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(confirmed)) }
+        gtk_dialog_response(UnsafeMutableRawPointer(confirmed).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_ACCEPT.rawValue)
+        try expect(commands.last?.0 == "recreate" && commands.last?.1?["workspace_id"] == "pod", "confirmed Recreate targeted the wrong workspace")
+        let json = """
+        {"revision":2,"workspaces":[],"layout":{},"terminalPanes":[],"badges":[],"operations":[{"id":"create-42","kind":"create","state":"running","output":"Provisioning λ界🙂"}]}
+        """
+        window.update(try JSONDecoder().decode(WorkspaceControllerSnapshot.self, from: Data(json.utf8)))
+        try expect(containsLabel("Provisioning λ界🙂", in: root), "global creation output is not visible without a selection")
+        try expect(gtk_widget_is_sensitive(new) == 0, "active creation allows duplicate submission")
+        guard let cancel = namedWidget("cancel-operation", in: root) else { throw TestFailure("creation progress has no Cancel") }
+        _ = gtk_widget_activate(cancel)
+        try expect(pumpUntil { commands.last?.0 == "cancel" && commands.last?.1?["request_id"] == "create-42" }, "creation cancellation was not scoped")
+        guard let guide = namedWidget("workspace-guide", in: root) else { throw TestFailure("Guide is missing") }
+        _ = gtk_widget_activate(guide)
+        let help = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(help)) }
+        try expect(containsLabel("Ctrl+Shift+T — New terminal", in: gtk_window_get_child(help)!), "Guide does not describe actual Linux shortcuts")
+        gtk_dialog_response(UnsafeMutableRawPointer(help).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_CLOSE.rawValue)
+        print("provisioning=validated confirmation=required progress=global guide=linux")
     }
 
     private static func testTerminalTabs(_ application: UnsafeMutablePointer<GtkApplication>) throws {
