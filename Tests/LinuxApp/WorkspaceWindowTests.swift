@@ -634,6 +634,9 @@ struct WorkspaceWindowTests {
         gdk_clipboard_set_text(clipboard, "native")
         keys.press(["Control_L", "Shift_L", "v"], in: window.window)
         try expect(pumpUntil { pane.text.contains("BYTE:6e") && pane.text.contains("BYTE:65") }, "native paste did not reach the PTY")
+        _ = pumpUntil(timeout: 0.1) { false }
+        try expect(pane.text.components(separatedBy: "BYTE:6e").count == 2,
+            "one native paste was delivered more than once")
         _ = gtk_widget_grab_focus(namedWidget("select-workspace-pod1", in: root)!)
         gdk_clipboard_set_text(clipboard, "side")
         keys.press(["Control_L", "Shift_L", "v"], in: window.window)
@@ -709,7 +712,15 @@ struct WorkspaceWindowTests {
             try expect(gtk_widget_get_focusable(button) != 0, "sidebar action is not keyboard focusable")
         }
         let menu = namedWidget("workspace-menu-other", in: root)!
-        _ = gtk_widget_activate(menu)
+        _ = g_object_ref(UnsafeMutableRawPointer(menu))
+        defer { g_object_unref(UnsafeMutableRawPointer(menu)) }
+        _ = gtk_widget_grab_focus(menu)
+        window.update(WorkspaceControllerSnapshot(revision: 2, workspaces: workspaces, selectedID: "pod",
+            layout: Layout(hidden: ["hidden"]), terminalPanes: []))
+        try expect(namedWidget("workspace-menu-other", in: root) == menu
+            && gtk_window_get_focus(window.window) == menu, "unchanged poll destroyed the keyboard-focused menu control")
+        let keys = try NativeKeyInput()
+        keys.press(["Return"], in: window.window)
         try expect(pumpUntil { namedWidget("hide-workspace", in: root) != nil }, "three-dot button did not open the existing menu")
         try expect(commands.isEmpty && window.snapshot.selectedID == "pod", "opening an unselected row's menu selected or connected it")
         _ = gtk_widget_activate(namedWidget("hide-workspace", in: root)!)

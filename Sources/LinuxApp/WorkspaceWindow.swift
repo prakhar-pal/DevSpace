@@ -13,6 +13,7 @@ final class WorkspaceWindow {
     private let notificationWarningLabel: UnsafeMutablePointer<GtkWidget>
     private let sidebar: UnsafeMutablePointer<GtkWidget>
     private var sidebarMinimumEstablished = false
+    private var sidebarRowsRendered = false
     private var terminalPanes: [TerminalPaneIdentity: TerminalPane] = [:]
     private var terminalOrder: [TerminalPaneIdentity] = []
     private var activeTerminal: [String: TerminalPaneIdentity] = [:]
@@ -255,10 +256,31 @@ final class WorkspaceWindow {
             dismissWorkspaceMenu()
         }
         let selectionChanged = snapshot.selectedID != next.selectedID
+        let rowsChanged = !sidebarRowsRendered || selectionChanged
+            || next.workspaces != snapshot.workspaces || next.operations != snapshot.operations
+            || next.layout != snapshot.layout || next.badges != snapshot.badges
         snapshot = next
         for operation in next.operations where operation.kind == "create" || operation.kind == "recreate" {
             pendingProvisioning[operation.id] = operation
         }
+        if rowsChanged { refreshWorkspaceRows() }
+        // Establish the requested floor once from the original content-sized
+        // layout. Measuring the constrained widget again would double it on
+        // every poll, and growing names must not ratchet the minimum upward.
+        if !sidebarMinimumEstablished,
+           next.workspaces.contains(where: { $0.state == "Running" || $0.state == "Stopped" }) {
+            var natural: Int32 = 0
+            gtk_widget_measure(sidebar, GTK_ORIENTATION_HORIZONTAL, -1, nil, &natural, nil, nil)
+            gtk_widget_set_size_request(sidebar, natural * 2, -1)
+            sidebarMinimumEstablished = true
+        }
+        revealSelectedTerminal(focus: selectionChanged)
+        refreshLifecyclePanel()
+    }
+
+    private func refreshWorkspaceRows() {
+        let next = snapshot
+        sidebarRowsRendered = true
         clear(workspaceRows)
         clear(hiddenWorkspaceRows)
         let parts = SidebarLayout.split(
@@ -283,18 +305,6 @@ final class WorkspaceWindow {
                     alias: next.layout.aliases[workspace.id], badged: next.badges.contains(workspace.id), into: hiddenWorkspaceRows)
             }
         }
-        // Establish the requested floor once from the original content-sized
-        // layout. Measuring the constrained widget again would double it on
-        // every poll, and growing names must not ratchet the minimum upward.
-        if !sidebarMinimumEstablished,
-           next.workspaces.contains(where: { $0.state == "Running" || $0.state == "Stopped" }) {
-            var natural: Int32 = 0
-            gtk_widget_measure(sidebar, GTK_ORIENTATION_HORIZONTAL, -1, nil, &natural, nil, nil)
-            gtk_widget_set_size_request(sidebar, natural * 2, -1)
-            sidebarMinimumEstablished = true
-        }
-        revealSelectedTerminal(focus: selectionChanged)
-        refreshLifecyclePanel()
     }
 
     func apply(_ effect: WorkspaceTerminalEffect) {

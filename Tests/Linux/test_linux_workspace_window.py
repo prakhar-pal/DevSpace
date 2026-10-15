@@ -155,7 +155,8 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
                 self.assertFalse(set(requests) & {"start", "stop", "recreate", "delete"})
 
     def test_sidebar_action_buttons_and_targeted_menu(self):
-        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none",
+                           DEVSPACE_PRIVATE_KEY_TEST="1")
         environment.pop("WAYLAND_DISPLAY", None)
         result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "sidebar-controls"],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=12)
