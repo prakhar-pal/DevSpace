@@ -123,7 +123,7 @@ struct WorkspaceWindowTests {
             try window.apply(terminalEffect(
                 kind: "terminal_launch", workspace: workspace.id, generation: generation, pane: paneID,
                 executable: "/bin/sh",
-                arguments: ["-c", "printf 'ready\\n\\033]7;file://remote/tmp/a%%20b/%%CE%%B1\\007'; while IFS= read -r input; do printf 'received:%s\\n' \"$input\"; done; exec sleep 30"]
+                arguments: ["-c", "printf 'ready\\n\\033]7;file://remote/tmp/a%%20b/%%CE%%B1\\007'; while IFS= read -r input; do if [ \"$input\" = __devspace_size_probe__ ]; then printf 'child-size:'; stty size; else printf 'received:%s\\n' \"$input\"; fi; done; exec sleep 30"]
             ))
             try expect(pumpUntil { window.pane(for: identity)?.text.contains("ready") == true },
                        "the validated terminal launch did not render output")
@@ -238,10 +238,21 @@ struct WorkspaceWindowTests {
                     gtk_widget_get_width(gtk_window_get_child(window.window)) - naturalWidth - 2
             }, "the sidebar consumed expansion space intended for the terminal")
             let originalWidget = originalPane.widget
-            originalPane.resize(columns: 100, rows: 30)
+            guard let oldSize = originalPane.ptySize else { throw TestFailure("terminal has no PTY before window resize") }
+            let windowRoot = gtk_window_get_child(window.window)!
+            gtk_window_set_default_size(window.window, gtk_widget_get_width(windowRoot) + 240, gtk_widget_get_height(windowRoot) + 160)
             try expect(pumpUntil {
-                originalPane.ptySize?.columns == 100 && originalPane.ptySize?.rows == 30
-            }, "resizing the VTE widget did not resize its PTY")
+                guard let size = originalPane.ptySize else { return false }
+                return size.columns > oldSize.columns && size.rows > oldSize.rows
+            }, "resizing the actual GTK window did not grow its terminal PTY")
+            let terminal = UnsafeMutableRawPointer(originalWidget).assumingMemoryBound(to: VteTerminal.self)
+            let gridColumns = Int32(vte_terminal_get_column_count(terminal))
+            let gridRows = Int32(vte_terminal_get_row_count(terminal))
+            try expect(originalPane.ptySize?.columns == gridColumns && originalPane.ptySize?.rows == gridRows,
+                       "PTY dimensions diverged from the displayed terminal grid")
+            originalPane.feed("__devspace_size_probe__\n")
+            try expect(pumpUntil { originalPane.text.contains("child-size:\(gridRows) \(gridColumns)") },
+                       "child shell did not observe the resized terminal grid")
 
             guard let clipboard = gdk_display_get_clipboard(gdk_display_get_default()!) else {
                 throw TestFailure("GTK did not provide the private test clipboard")
@@ -411,7 +422,7 @@ struct WorkspaceWindowTests {
             ))
             try expect(window.terminalCount == 1, "a fresh connection generation could not launch")
             let silentPane = window.pane(for: replacement)!
-            silentPane.resize(columns: 90, rows: 25)
+            vte_terminal_set_size(UnsafeMutableRawPointer(silentPane.widget).assumingMemoryBound(to: VteTerminal.self), 90, 25)
             _ = gtk_widget_grab_focus(silentPane.widget)
             _ = pumpUntil(timeout: 0.2) { false }
             try expect(!commands.contains {

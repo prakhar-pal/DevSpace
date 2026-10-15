@@ -92,11 +92,6 @@ final class TerminalPane {
         text.withCString { vte_terminal_feed_child(terminal, $0, Int(text.utf8.count)) }
     }
 
-    func resize(columns: Int, rows: Int) {
-        guard !isClosed, columns > 0, rows > 0 else { return }
-        vte_terminal_set_size(terminal, Int(columns), Int(rows))
-    }
-
     @discardableResult
     func handleKey(keyval: UInt32, modifiers: GdkModifierType) -> Bool {
         guard !isClosed else { return false }

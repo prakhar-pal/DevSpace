@@ -312,6 +312,17 @@ implicit-strong-capture warning. All eight final-review source fixes are now
 implemented. Full post-fix regressions and the approved fresh production BUNDLE
 (not .deb) remain before handoff. Current-head macOS CI remains unverified.
 
+Post-fix Core252 passed (one opt-in skip), and both optimized products compiled.
+The full fixture-only Linux109 run exposed one invalid resize-test assumption:
+it required a transient forced 100x30 grid even after GTK reallocated its child.
+A diagnostic reproduced the mismatch with a valid 94x42 PTY at 757x718 pixels.
+The test now resizes the actual GTK window and verifies growth, agreement with
+VTE's displayed grid and stty size from the child shell; its focused run passed.
+The production adapter's unused test-only resize method was removed. A final
+full Linux rerun and refreshed optimized frontend are required before bundling.
+wc-1 was rechecked read-only and remains Stopped. Existing production PIDs were
+confirmed under build/linux-production-bundle, not the inactive next output.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.
