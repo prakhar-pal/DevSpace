@@ -257,6 +257,16 @@ GApplication ID; its artifact assertion first failed, then assembly/package
 fixture16 passed. This was a temporary test fixture, not a new deliverable .deb.
 The remaining six review findings are still open; no release-ready claim.
 
+Client-exit review fix verified: VTE wait status is decoded and sent through the
+private terminal protocol. Nonzero client exits preserve the owned master and
+connection intent, retry twice at macOS's 0.5/1.5-second delays with stable pane
+identity, then expose Retry/Close. Explicit Close is distinct from client failure;
+late timers cannot relaunch after close/master exit. A failed slot does not retire
+its generation or dispose siblings. Core23 controller tests and three native GTK
+tests passed after observing the failed-client-before-master race and VTE's lost
+exit status. New retry state clears on real output. First-shell handoff and the
+other five remaining review concerns are still being addressed.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

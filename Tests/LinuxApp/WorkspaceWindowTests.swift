@@ -60,6 +60,11 @@ struct WorkspaceWindowTests {
                 g_object_unref(UnsafeMutableRawPointer(application))
                 return
             }
+            if CommandLine.arguments.dropFirst().contains("client-failure") {
+                try testClientFailure(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
 
             let window = WorkspaceWindow(application: application)
             var commands: [(String, [String: String]?)] = []
@@ -415,9 +420,9 @@ struct WorkspaceWindowTests {
 
     private static func terminalEffect(
         kind: String, workspace: String, generation: UUID, pane: UUID,
-        executable: String? = nil, arguments: [String] = [], message: String? = nil
+        executable: String? = nil, arguments: [String] = [], message: String? = nil, retrying: Bool? = nil
     ) throws -> WorkspaceTerminalEffect {
-        let object: [String: Any] = [
+        var object: [String: Any] = [
             "kind": kind,
             "workspaceID": workspace,
             "generation": generation.uuidString,
@@ -426,6 +431,7 @@ struct WorkspaceWindowTests {
             "arguments": arguments,
             "message": message as Any? ?? NSNull(),
         ]
+        object["retrying"] = retrying
         let data = try JSONSerialization.data(withJSONObject: object)
         return try JSONDecoder().decode(WorkspaceTerminalEffect.self, from: data)
     }
@@ -586,6 +592,37 @@ struct WorkspaceWindowTests {
         gtk_dialog_response(UnsafeMutableRawPointer(failed).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_ACCEPT.rawValue)
         try expect(commands.count == count, "backend failure allowed a pending rename to mutate state")
         print("organization=rename-order shortcuts=bounded cancel=nonmutating")
+    }
+
+    private static func testClientFailure(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let window = WorkspaceWindow(application: application)
+        defer { gtk_window_destroy(window.window) }
+        let workspace = WorkspaceView(id: "pod", provider: "test", source: "", lastUsed: "", state: "Running", error: nil)
+        window.setConnectionStates(["pod": "connected"])
+        window.update(WorkspaceControllerSnapshot(revision: 1, workspaces: [workspace], selectedID: "pod", layout: Layout(), terminalPanes: []))
+        window.present()
+        let root = gtk_window_get_child(window.window)!
+        var commands: [(String, [String: String]?)] = []
+        window.onCommand = { commands.append(($0, $1)) }
+        let identity = TerminalPaneIdentity(workspaceID: "pod", generation: UUID(), paneID: UUID())
+        window.apply(try terminalEffect(kind: "terminal_launch", workspace: "pod", generation: identity.generation,
+            pane: identity.paneID, executable: "/bin/sh", arguments: ["-c", "printf ready; sleep 0.1; exit 7"]))
+        try expect(pumpUntil { commands.contains { $0.0 == "terminal_exit" && $0.1?["exit_code"] == "7" } }, "VTE discarded the decoded child exit status")
+        window.apply(try terminalEffect(kind: "terminal_client_failed", workspace: "pod", generation: identity.generation,
+            pane: identity.paneID, message: "SSH terminal failed (exit 7).", retrying: false))
+        try expect(window.terminalCount == 1 && window.pane(for: identity) == nil, "failed client lost its logical tab or retained a dead VTE child")
+        guard let retry = namedWidget("retry-terminal-\(identity.paneID.uuidString.lowercased())", in: root) else { throw TestFailure("failed client has no Retry") }
+        _ = gtk_widget_activate(retry)
+        try expect(pumpUntil { commands.last?.0 == "terminal_retry" && commands.last?.1?["pane_id"] == identity.paneID.uuidString.lowercased() }, "Retry did not target the failed shell")
+        window.apply(try terminalEffect(kind: "terminal_launch", workspace: "pod", generation: identity.generation,
+            pane: identity.paneID, executable: "/bin/sh", arguments: ["-c", "printf replacement; exec sleep 30"]))
+        try expect(pumpUntil { window.pane(for: identity)?.text.contains("replacement") == true }, "same-identity client retry did not replace the failure slot")
+        try expect(window.terminalCount == 1, "retry duplicated the logical tab")
+        window.apply(try terminalEffect(kind: "terminal_client_failed", workspace: "pod", generation: identity.generation,
+            pane: identity.paneID, message: "SSH terminal failed (exit 7).", retrying: false))
+        window.closeTerminal(identity, reportExit: true)
+        try expect(window.terminalCount == 0 && commands.last?.0 == "terminal_exit" && commands.last?.1?["explicit_close"] == "true", "Close on a failed slot did not explicitly withdraw its shell")
+        print("client-exit=status-preserved failed-slot=retryable close=explicit")
     }
 
     private static func testProvisioningDialogs(_ application: UnsafeMutablePointer<GtkApplication>) throws {

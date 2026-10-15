@@ -167,10 +167,10 @@ final class TerminalPane {
         g_object_unref(UnsafeMutableRawPointer(widget))
     }
 
-    func reportExit() {
+    func reportExit(code: Int32 = 0) {
         guard !isClosed, !exitReported else { return }
         exitReported = true
-        report("terminal_exit")
+        report("terminal_exit", extra: ["exit_code": String(code)])
     }
 
     fileprivate func contentsChanged() {
@@ -196,8 +196,10 @@ final class TerminalPane {
         onEvent("terminal_directory", payload)
     }
 
-    fileprivate func childExited() {
-        reportExit()
+    fileprivate func childExited(status: Int32) {
+        // VTE supplies waitpid status, like the host-owned PTY implementation.
+        let code: Int32 = (status & 0x7F) == 0 ? (status >> 8) & 0xFF : 128 + (status & 0x7F)
+        reportExit(code: code)
     }
 
     private func spawn(_ launch: LinuxTerminalLaunch) -> Bool {
@@ -314,12 +316,14 @@ final class TerminalPane {
         signalConnections.append((object, handler))
     }
 
-    private func report(_ kind: String) {
-        onEvent(kind, [
+    private func report(_ kind: String, extra: [String: String] = [:]) {
+        var payload = [
             "workspace_id": identity.workspaceID,
             "generation": identity.generation.uuidString.lowercased(),
             "pane_id": identity.paneID.uuidString.lowercased(),
-        ])
+        ]
+        payload.merge(extra) { _, new in new }
+        onEvent(kind, payload)
     }
 
     private func pasteClipboard() {
@@ -420,9 +424,8 @@ private func devspaceLinuxVteContentsChanged(_ terminal: UnsafeMutableRawPointer
 @_cdecl("devspace_linux_vte_child_exited")
 private func devspaceLinuxVteChildExited(_ terminal: UnsafeMutableRawPointer?, _ status: Int32, _ data: UnsafeMutableRawPointer?) {
     guard let data else { return }
-    Unmanaged<TerminalPane>.fromOpaque(data).takeUnretainedValue().childExited()
+    Unmanaged<TerminalPane>.fromOpaque(data).takeUnretainedValue().childExited(status: status)
     _ = terminal
-    _ = status
 }
 
 @_cdecl("devspace_linux_vte_focus_entered")

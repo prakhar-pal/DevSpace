@@ -32,7 +32,7 @@ final class WorkspaceWindow {
     )
     var onCommand: ((String, [String: String]?) -> Void)?
 
-    var terminalCount: Int { terminalPanes.count }
+    var terminalCount: Int { terminalRoots.count }
     var workspaceCount: Int { snapshot.workspaces.count }
 
     init(application: UnsafeMutablePointer<GtkApplication>) {
@@ -298,6 +298,8 @@ final class WorkspaceWindow {
             openTerminal(pane)
         case "terminal_close":
             closeTerminal(identity)
+        case "terminal_client_failed":
+            showClientFailure(identity, message: effect.message ?? "SSH terminal failed", retrying: effect.retrying == true)
         case "terminal_inject":
             guard let pane = terminalPanes[identity], let message = effect.message else { return }
             pane.feed(message)
@@ -309,17 +311,19 @@ final class WorkspaceWindow {
     func openTerminal(_ pane: TerminalPane) {
         guard terminalPanes[pane.identity] == nil else { return }
         terminalPanes[pane.identity] = pane
-        terminalOrder.append(pane.identity)
-        activeTerminal[pane.identity.workspaceID] = pane.identity
-
-        let root = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)!)
-            .assumingMemoryBound(to: GtkBox.self)
+        let existingRoot = terminalRoots[pane.identity]
+        if existingRoot == nil {
+            terminalOrder.append(pane.identity)
+            activeTerminal[pane.identity.workspaceID] = pane.identity
+        }
+        let rootWidget = existingRoot ?? gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)!
+        let root = UnsafeMutableRawPointer(rootWidget).assumingMemoryBound(to: GtkBox.self)
+        clear(root)
         gtk_widget_set_vexpand(pane.widget, 1)
         gtk_box_append(root, pane.widget)
-        let rootWidget = UnsafeMutableRawPointer(root).assumingMemoryBound(to: GtkWidget.self)
         gtk_widget_set_vexpand(rootWidget, 1)
         terminalRoots[pane.identity] = rootWidget
-        gtk_box_append(terminalContainer, rootWidget)
+        if existingRoot == nil { gtk_box_append(terminalContainer, rootWidget) }
         if terminalErrorWorkspace == pane.identity.workspaceID { setStatus("") }
         revealSelectedTerminal(focus: pane.identity.workspaceID == snapshot.selectedID)
         refreshLifecyclePanel()
@@ -330,12 +334,17 @@ final class WorkspaceWindow {
     }
 
     func pane(forWorkspace workspaceID: String) -> TerminalPane? {
-        if let identity = activeTerminal[workspaceID], let pane = terminalPanes[identity] { return pane }
-        return terminalOrder.first { $0.workspaceID == workspaceID }.flatMap { terminalPanes[$0] }
+        activeIdentity(forWorkspace: workspaceID).flatMap { terminalPanes[$0] }
+    }
+
+    private func activeIdentity(forWorkspace workspaceID: String) -> TerminalPaneIdentity? {
+        if let identity = activeTerminal[workspaceID], terminalRoots[identity] != nil { return identity }
+        return terminalOrder.first { $0.workspaceID == workspaceID }
     }
 
     func closeTerminal(_ identity: TerminalPaneIdentity, reportExit: Bool = false) {
-        guard let pane = terminalPanes.removeValue(forKey: identity) else { return }
+        guard terminalRoots[identity] != nil else { return }
+        let pane = terminalPanes.removeValue(forKey: identity)
         let siblings = terminalOrder.filter { $0.workspaceID == identity.workspaceID }
         let index = siblings.firstIndex(of: identity) ?? 0
         terminalOrder.removeAll { $0 == identity }
@@ -343,10 +352,15 @@ final class WorkspaceWindow {
             let remaining = siblings.filter { $0 != identity }
             activeTerminal[identity.workspaceID] = remaining.isEmpty ? nil : remaining[max(0, index - 1)]
         }
-        if reportExit { pane.reportExit() }
+        if reportExit {
+            var payload = eventPayload(identity)
+            payload["exit_code"] = "0"
+            payload["explicit_close"] = "true"
+            onCommand?("terminal_exit", payload)
+        }
         if let root = terminalRoots.removeValue(forKey: identity) { gtk_box_remove(terminalContainer, root) }
-        pane.dispose()
-        if !terminalPanes.keys.contains(where: {
+        pane?.dispose()
+        if !terminalRoots.keys.contains(where: {
             $0.workspaceID == identity.workspaceID && $0.generation == identity.generation
         }) {
             retiredTerminalGenerations[identity.workspaceID, default: []].insert(identity.generation)
@@ -355,14 +369,34 @@ final class WorkspaceWindow {
         refreshLifecyclePanel()
     }
 
+    private func showClientFailure(_ identity: TerminalPaneIdentity, message: String, retrying: Bool) {
+        guard let root = terminalRoots[identity] else { return }
+        terminalPanes.removeValue(forKey: identity)?.dispose()
+        let box = UnsafeMutableRawPointer(root).assumingMemoryBound(to: GtkBox.self)
+        clear(box)
+        gtk_box_append(box, gtk_label_new(message)!)
+        if !retrying {
+            let retry = gtk_button_new_with_label("Retry")!
+            gtk_widget_set_name(retry, "retry-terminal-\(identity.paneID.uuidString.lowercased())")
+            connectAction(retry, context: WorkspaceActionContext(window: self, kind: "terminal_retry", payload: eventPayload(identity)))
+            gtk_box_append(box, retry)
+        }
+        let close = gtk_button_new_with_label("Close")!
+        connectAction(close, context: WorkspaceActionContext(window: self, kind: "close_terminal", payload: eventPayload(identity)))
+        gtk_box_append(box, close)
+        revealSelectedTerminal()
+        refreshLifecyclePanel()
+    }
+
     private func revealSelectedTerminal(focus: Bool = false) {
         refreshTerminalTabs()
-        let selectedPane = snapshot.selectedID.flatMap { pane(forWorkspace: $0) }
+        let selected = snapshot.selectedID.flatMap { activeIdentity(forWorkspace: $0) }
+        let selectedPane = selected.flatMap { terminalPanes[$0] }
         for (identity, root) in terminalRoots {
-            gtk_widget_set_visible(root, identity == selectedPane?.identity ? 1 : 0)
+            gtk_widget_set_visible(root, identity == selected ? 1 : 0)
         }
         let operating = presentedOperation != nil
-        gtk_widget_set_visible(emptyState, selectedPane == nil || operating ? 1 : 0)
+        gtk_widget_set_visible(emptyState, selected == nil || operating ? 1 : 0)
         if operating {
             for root in terminalRoots.values { gtk_widget_set_visible(root, 0) }
         }
@@ -373,11 +407,11 @@ final class WorkspaceWindow {
         actionsEnabled && connectionStates[workspace] == "connected"
             && snapshot.workspaces.contains { $0.id == workspace && $0.state == "Running" }
             && !isWorkspaceBusy(workspace)
-            && pane(forWorkspace: workspace) != nil
+            && activeIdentity(forWorkspace: workspace) != nil
     }
 
     private func selectTerminal(_ identity: TerminalPaneIdentity) {
-        guard terminalPanes[identity] != nil, canMutateTerminal(identity.workspaceID) else { return }
+        guard terminalRoots[identity] != nil, canMutateTerminal(identity.workspaceID) else { return }
         activeTerminal[identity.workspaceID] = identity
         revealSelectedTerminal(focus: true)
     }

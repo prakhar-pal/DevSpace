@@ -28,7 +28,76 @@ private final class TimeoutMasterScheduler: SSHTransportScheduling {
     }
 }
 
+private final class ClientRetryScheduler: SSHTransportScheduling {
+    var tasks: [(TimeInterval, () -> Void)] = []
+    func schedule(after delay: TimeInterval, action: @escaping () -> Void) { tasks.append((delay, action)) }
+}
+
 final class WorkspaceTerminalControllerTests: XCTestCase {
+    func testFailedClientBeforeMasterExitPreservesDisruptionRecoveryIntent() throws {
+        let master = ControlledMaster(), scheduler = ClientRetryScheduler()
+        var effects: [WorkspaceTerminalEffect] = []
+        var intent = true
+        var failure: WorkspaceTerminalController.Failure?
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) }, scheduler: scheduler)
+        controller.onLastPaneClosed = { _ in intent = false }
+        controller.onFailure = { _, value in failure = value }
+        try controller.connect("pod")
+        master.ready()
+        let launch = try XCTUnwrap(effects.first)
+        let pane = try XCTUnwrap(launch.paneID)
+        _ = controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_output")
+        _ = controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_exit", exitCode: 255)
+        XCTAssertTrue(intent, "failed multiplex client was treated as deliberate disconnect")
+        XCTAssertEqual(master.state, .ready, "client failure stopped the shared master")
+        master.state = .exited
+        master.onExit?(255)
+        XCTAssertEqual(failure, .disruption(255))
+        XCTAssertTrue(intent)
+        for task in scheduler.tasks { task.1() }
+        XCTAssertEqual(effects.filter { $0.kind == "terminal_launch" }.count, 1, "stale client retry launched after master exit")
+    }
+
+    func testClientRetriesAreBoundedKeepPaneIdentityAndAllowExplicitRetryOrClose() throws {
+        let master = ControlledMaster(), scheduler = ClientRetryScheduler()
+        var effects: [WorkspaceTerminalEffect] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) }, scheduler: scheduler)
+        try controller.connect("pod")
+        master.ready()
+        let launch = try XCTUnwrap(effects.first), pane = try XCTUnwrap(effects.first?.paneID)
+        _ = controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_output")
+        for attempt in 0..<3 {
+            _ = controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_exit", exitCode: 7)
+            XCTAssertEqual(effects.last?.kind, "terminal_client_failed")
+            XCTAssertEqual(effects.last?.retrying, attempt < 2)
+            XCTAssertEqual(master.state, .ready)
+            if attempt < 2 {
+                XCTAssertEqual(scheduler.tasks.count, 1)
+                let task = try XCTUnwrap(scheduler.tasks.first)
+                XCTAssertEqual(task.0, attempt == 0 ? 0.5 : 1.5)
+                scheduler.tasks.removeFirst()
+                task.1()
+                XCTAssertEqual(effects.last?.paneID, pane)
+                XCTAssertEqual(effects.last?.generation, launch.generation)
+                XCTAssertEqual(effects.last?.kind, "terminal_launch")
+            }
+        }
+        XCTAssertTrue(scheduler.tasks.isEmpty)
+        XCTAssertEqual(controller.panes.map(\.id), [pane])
+        XCTAssertTrue(controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_retry"))
+        XCTAssertEqual(effects.last?.kind, "terminal_launch")
+        _ = controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_exit", exitCode: 7)
+        XCTAssertEqual(scheduler.tasks.count, 1)
+        _ = controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_exit", explicitClose: true)
+        XCTAssertEqual(master.state, .stopping)
+        let task = try XCTUnwrap(scheduler.tasks.first)
+        scheduler.tasks.removeFirst()
+        task.1()
+        XCTAssertTrue(controller.panes.isEmpty)
+    }
+
     func testClosingTheLastShellWithdrawsIntentWithoutReopeningOnPoll() throws {
         let master = ControlledMaster()
         var effects: [WorkspaceTerminalEffect] = []

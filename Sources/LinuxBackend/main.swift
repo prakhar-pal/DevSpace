@@ -562,13 +562,15 @@ private func handle(_ message: BackendProtocolMessage) {
             _ = send(BackendProtocolMessage(id: message.id, kind: "error", payload: ["message": String(describing: error)]))
         }
 
-    case "terminal_output", "terminal_directory", "terminal_focus", "terminal_exit", "terminal_launch_failed":
+    case "terminal_output", "terminal_directory", "terminal_focus", "terminal_exit", "terminal_launch_failed", "terminal_retry":
         let payload = message.payload ?? [:]
         guard let workspace = payload["workspace_id"],
               let generationString = payload["generation"], let generation = UUID(uuidString: generationString),
               let paneString = payload["pane_id"], let pane = UUID(uuidString: paneString),
+              let exitCode = Int32(payload["exit_code"] ?? "0"),
               terminals.report(workspace: workspace, generation: generation, pane: pane,
-                               kind: message.kind, directory: payload["directory"]) else {
+                               kind: message.kind, directory: payload["directory"], exitCode: exitCode,
+                               explicitClose: payload["explicit_close"] == "true") else {
             _ = send(BackendProtocolMessage(id: message.id, kind: "error", payload: ["message": "invalid or stale terminal event"]))
             return
         }
