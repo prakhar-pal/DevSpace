@@ -69,10 +69,15 @@ private func fail(_ message: String) {
 }
 
 private func sendSnapshot(_ id: String?, from controller: WorkspaceController) -> Bool {
+    var states = terminals.connectionStates
+    for (workspace, recovery) in sshRecoveries where states[workspace] == nil {
+        if recovery.waiting { states[workspace] = "connecting" }
+        else if recovery.failed { states[workspace] = "failed" }
+    }
     guard let data = try? JSONEncoder().encode(controller.snapshot),
           let json = String(data: data, encoding: .utf8),
-          let states = try? JSONEncoder().encode(terminals.connectionStates),
-          let connections = String(data: states, encoding: .utf8)
+          let stateData = try? JSONEncoder().encode(states),
+          let connections = String(data: stateData, encoding: .utf8)
     else { return false }
     return send(BackendProtocolMessage(id: id, kind: "snapshot", payload: ["json": json, "connections": connections]))
 }
@@ -123,6 +128,13 @@ private final class UploadJob {
     func cancel() { cancelled = true; runner.cancel() }
 }
 private var uploadJobs: [UUID: UploadJob] = [:]
+private final class SSHRecovery {
+    var budget = SSHRecoveryBudget()
+    var generation = UUID()
+    var waiting = false
+    var failed = false
+}
+private var sshRecoveries: [String: SSHRecovery] = [:]
 let terminals = WorkspaceTerminalController(identity: identity,
     makeTransport: { workspace in
         SSHTransportSession(podID: workspace, proxyCommand: nil,
@@ -147,6 +159,12 @@ terminals.onConnectionChange = {
 }
 
 terminals.onFirstOutput = { workspace, _ in
+    if let recovery = sshRecoveries[workspace] {
+        recovery.budget.didConnect()
+        recovery.generation = UUID()
+        recovery.waiting = false
+        recovery.failed = false
+    }
     if stateNotifyGate.confirmSSH(workspace) { emitStateNotification(workspace, event: "started") }
     if integrationJobs.values.contains(where: { $0.workspace == workspace }) { return false }
     do { try installIntegration(workspace, requestID: nil) }
@@ -162,6 +180,78 @@ terminals.beforeDisconnect = { workspace, _, controlPath, completion in
     removeHooksWhenIntegrationSettles(workspace, controlPath: controlPath, completion: completion)
 }
 terminals.onFocus = { workspace in controller.select(workspace) }
+terminals.onLastPaneClosed = { workspace in
+    autoConnect.remove(workspace)
+    sshRecoveries[workspace] = nil
+}
+terminals.onFailure = { workspace, failure in
+    guard !stopping, autoConnect.contains(workspace),
+          !controller.snapshot.operations.contains(where: { $0.workspaceID == workspace }) else { return }
+    let recovery = sshRecoveries[workspace] ?? SSHRecovery()
+    if case .disruption = failure, sshRecoveries[workspace] == nil { recovery.budget.didConnect() }
+    sshRecoveries[workspace] = recovery
+    if failure == .startup(.workspaceAlreadyOwned) {
+        recovery.waiting = false
+        recovery.failed = true
+        _ = sendSnapshot(nil, from: controller)
+    } else { scheduleRecovery(workspace, recovery: recovery) }
+}
+
+private func beginConnection(_ workspace: String, reload: Bool = false) throws {
+    let recovery = SSHRecovery()
+    sshRecoveries[workspace] = recovery
+    do {
+        if reload { try terminals.reconnect(workspace) }
+        else { try terminals.connect(workspace) }
+    } catch {
+        recovery.failed = true
+        throw error
+    }
+}
+
+private func scheduleRecovery(_ workspace: String, recovery: SSHRecovery) {
+    guard sshRecoveries[workspace] === recovery, !stopping, autoConnect.contains(workspace) else { return }
+    guard let delay = recovery.budget.nextDelay() else {
+        recovery.waiting = false
+        recovery.failed = true
+        _ = sendSnapshot(nil, from: controller)
+        return
+    }
+    recovery.waiting = true
+    recovery.failed = false
+    let generation = UUID()
+    recovery.generation = generation
+    _ = sendSnapshot(nil, from: controller)
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+        guard recoveryIsCurrent(workspace, recovery: recovery, generation: generation) else { return }
+        // Never trust an earlier Running poll when reconnecting: inactivity
+        // shutdown may have happened during the backoff. Status cannot wake it.
+        operations.submit(operation: { try Devpod.status(devpod, id: workspace) }, completion: { result in
+            guard recoveryIsCurrent(workspace, recovery: recovery, generation: generation) else { return }
+            switch result {
+            case .success(let status) where status.state == "Running":
+                recovery.waiting = false
+                do { try terminals.connect(workspace) }
+                catch {
+                    _ = send(BackendProtocolMessage(kind: "platform_error", payload: ["message": "SSH retry failed for \(workspace): \(error)"]))
+                    scheduleRecovery(workspace, recovery: recovery)
+                }
+            case .success:
+                autoConnect.remove(workspace)
+                sshRecoveries[workspace] = nil
+                _ = sendSnapshot(nil, from: controller)
+            case .failure:
+                scheduleRecovery(workspace, recovery: recovery)
+            }
+        })
+    }
+}
+
+private func recoveryIsCurrent(_ workspace: String, recovery: SSHRecovery, generation: UUID) -> Bool {
+    !stopping && sshRecoveries[workspace] === recovery && recovery.generation == generation
+        && autoConnect.contains(workspace) && !terminals.openedWorkspaces.contains(workspace)
+        && !controller.snapshot.operations.contains { $0.workspaceID == workspace }
+}
 
 private func emitStateNotification(_ workspace: String, event: String) {
     guard !stopping, controller.receiveNotification(workspaceID: workspace) else { return }
@@ -430,7 +520,9 @@ private func handle(_ message: BackendProtocolMessage) {
             try Devpod.validateId(workspace)
             if message.kind == "disconnect" {
                 autoConnect.remove(workspace)
+                sshRecoveries[workspace] = nil
                 terminals.disconnect(workspace)
+                _ = sendSnapshot(nil, from: controller)
             } else {
                 guard controller.snapshot.workspaces.contains(where: { $0.id == workspace && $0.state == "Running" }) else {
                     throw DevpodError("workspace is not running: \(workspace)")
@@ -441,9 +533,11 @@ private func handle(_ message: BackendProtocolMessage) {
                 autoConnect.insert(workspace)
                 controller.select(workspace)
                 _ = sendSnapshot(nil, from: controller)
-                if message.kind == "reconnect" { try terminals.reconnect(workspace) }
-                else if !terminals.openedWorkspaces.contains(workspace) || terminals.connectionStates[workspace] == "disconnecting" {
-                    try terminals.connect(workspace)
+                if message.kind == "reconnect" { try beginConnection(workspace, reload: true) }
+                else if terminals.connectionStates[workspace] == "disconnecting"
+                    || (!terminals.openedWorkspaces.contains(workspace)
+                        && (sshRecoveries[workspace] == nil || sshRecoveries[workspace]?.failed == true)) {
+                    try beginConnection(workspace)
                 }
             }
             _ = send(BackendProtocolMessage(id: message.id, kind: "completed"))
@@ -493,6 +587,9 @@ private func handle(_ message: BackendProtocolMessage) {
                         controller.select(views.first(where: { $0.state == "Running" })?.id ?? views.first?.id)
                     }
                     let liveIDs = Set(views.map(\.id))
+                    sshRecoveries = sshRecoveries.filter { workspace, _ in
+                        liveIDs.contains(workspace) && !views.contains { $0.id == workspace && $0.state == "Stopped" }
+                    }
                     autoConnect.formIntersection(liveIDs)
                     starting.formIntersection(liveIDs)
                     let plan = WorkspaceLifecycle.reconcile(
@@ -509,8 +606,8 @@ private func handle(_ message: BackendProtocolMessage) {
                         starting.remove(id)
                     }
                     terminals.reconcile(views)
-                    for workspace in plan.connect where !terminals.openedWorkspaces.contains(workspace) {
-                        do { try terminals.connect(workspace) }
+                    for workspace in plan.connect where !terminals.openedWorkspaces.contains(workspace) && sshRecoveries[workspace] == nil {
+                        do { try beginConnection(workspace) }
                         catch { _ = send(BackendProtocolMessage(kind: "platform_error", payload: [
                             "message": "Could not connect to running workspace \(workspace): \(error)",
                         ])) }
@@ -537,9 +634,11 @@ private func handle(_ message: BackendProtocolMessage) {
             let workspace = message.payload?["workspace_id"]
             if let workspace, message.kind == "start" {
                 try Devpod.validateId(workspace)
+                sshRecoveries[workspace] = nil
                 autoConnect.insert(workspace)
                 starting.insert(workspace)
             } else if let workspace, ["stop", "delete", "recreate"].contains(message.kind) {
+                sshRecoveries[workspace] = nil
                 autoConnect.remove(workspace)
                 starting.remove(workspace)
             }
@@ -581,6 +680,7 @@ private func handle(_ message: BackendProtocolMessage) {
 private func shutdown(_ requestID: String?) {
     guard !stopping else { return }
     stopping = true
+    sshRecoveries.removeAll()
     notifyListener?.stop()
     notifyListener = nil
     for job in integrationJobs.values { job.cancel() }

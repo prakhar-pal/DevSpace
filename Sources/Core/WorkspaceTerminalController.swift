@@ -14,11 +14,17 @@ public struct WorkspaceTerminalEffect: Codable, Equatable, Sendable {
 /// Called on the controller event queue. An old master retains its lease until
 /// onStopped; a reload never starts its replacement before that notification.
 public final class WorkspaceTerminalController {
+    public enum Failure: Equatable {
+        case startup(SSHTransportSession.StartError)
+        case disruption(Int32)
+    }
     public var onFirstOutput: ((String, UUID) -> Bool)?
     public var onDisconnect: ((String, UUID) -> Void)?
     public var beforeDisconnect: ((String, UUID, String, @escaping () -> Void) -> Void)?
     public var onFocus: ((String) -> Void)?
     public var onConnectionChange: (() -> Void)?
+    public var onFailure: ((String, Failure) -> Void)?
+    public var onLastPaneClosed: ((String) -> Void)?
     private final class Connection {
         let generation = UUID()
         let transport: SSHTransportControlling
@@ -136,14 +142,18 @@ public final class WorkspaceTerminalController {
             if !connection.stopping { self.onDisconnect?(workspace, connection.generation) }
             self.closePanes(workspace, connection)
             self.connections.removeValue(forKey: workspace)
-            self.onConnectionChange?()
             self.effect("terminal_error", workspace, connection, message: "SSH master exited: \(code)")
+            if !connection.stopping {
+                self.onFailure?(workspace, connection.hasProducedOutput ? .disruption(code) : .startup(.exitedBeforeReady(code)))
+            }
+            self.onConnectionChange?()
         }
         connection.transport.onStartError = { [weak self, weak connection] error in
             guard let self, let connection, self.isCurrent(workspace, connection) else { return }
             self.effect("terminal_error", workspace, connection, message: "SSH connection failed: \(error)")
             if connection.transport.state == .exited {
                 self.connections.removeValue(forKey: workspace)
+                if !connection.stopping { self.onFailure?(workspace, .startup(error)) }
                 self.onConnectionChange?()
             }
         }
@@ -202,7 +212,22 @@ public final class WorkspaceTerminalController {
                 emit(WorkspaceTerminalEffect(kind: "terminal_close", workspaceID: workspace,
                     generation: generation, paneID: pane, executable: nil, arguments: [], message: nil))
             }
-            if connection.panes.isEmpty { disconnect(workspace) }
+            if connection.panes.isEmpty {
+                if kind == "terminal_launch_failed" || !connection.hasProducedOutput {
+                    if kind == "terminal_exit" {
+                        effect("terminal_error", workspace, connection, message: "SSH shell exited before producing output")
+                    }
+                    // Startup failure is not a deliberate disconnect. Recovery
+                    // may begin only after this master's cleanup/lease release,
+                    // and must not race a subsequent explicit reload.
+                    connection.afterStop.append { [weak self, weak connection] in
+                        guard let self, let connection, !self.shuttingDown,
+                              !connection.reconnect, self.connections[workspace] == nil else { return }
+                        self.onFailure?(workspace, .startup(.launchFailed))
+                    }
+                } else { onLastPaneClosed?(workspace) }
+                disconnect(workspace)
+            }
         default: return false
         }
         return true

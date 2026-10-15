@@ -593,3 +593,50 @@ class BackendIntegrationTests(unittest.TestCase):
         response = self.request("connect", workspace_id="pod")
         self.assertEqual(response["kind"], "error")
         self.assertIn("not running", response["payload"]["message"])
+
+    def test_failed_ssh_retries_are_bounded_and_manual_connect_starts_a_new_budget(self):
+        self.request("poll")
+        def wait_for_failures(count):
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                self.request("ping")
+                if len([frame for frame in self.frames if frame["kind"] == "terminal_error"]) >= count:
+                    return
+                time.sleep(0.02)
+            self.fail(f"did not observe {count} bounded SSH failures")
+        wait_for_failures(3)
+        for _ in range(3):
+            self.request("poll")
+        self.assertEqual(len([frame for frame in self.frames if frame["kind"] == "terminal_error"]), 3,
+                         "polling restarted an exhausted SSH connection")
+        snapshot = self.request("snapshot")
+        self.assertEqual(json.loads(snapshot["payload"]["connections"])["pod"], "failed")
+        self.assertEqual(self.request("connect", workspace_id="pod")["kind"], "completed")
+        wait_for_failures(6)
+
+    def test_disconnect_invalidates_a_scheduled_ssh_retry(self):
+        self.request("poll")
+        deadline = time.monotonic() + 3
+        while not any(frame["kind"] == "terminal_error" for frame in self.frames) and time.monotonic() < deadline:
+            self.request("ping")
+            time.sleep(0.01)
+        self.assertEqual(self.request("disconnect", workspace_id="pod")["kind"], "completed")
+        time.sleep(0.7)
+        self.request("poll")
+        self.assertEqual(len([frame for frame in self.frames if frame["kind"] == "terminal_error"]), 1,
+                         "a cancelled retry or subsequent poll reopened SSH")
+
+    def test_retry_checks_fresh_status_before_attempting_ssh(self):
+        self.request("poll")
+        deadline = time.monotonic() + 3
+        while not any(frame["kind"] == "terminal_error" for frame in self.frames) and time.monotonic() < deadline:
+            self.request("ping")
+            time.sleep(0.01)
+        # No status poll is sent: recovery must independently learn that the
+        # provider stopped the pod during its backoff instead of waking it.
+        (self.directory / "state").write_text("Stopped")
+        time.sleep(0.7)
+        self.request("ping")
+        snapshot = self.request("snapshot")
+        self.assertNotIn("pod", json.loads(snapshot["payload"]["connections"]))
+        self.assertEqual(len([frame for frame in self.frames if frame["kind"] == "terminal_error"]), 1)

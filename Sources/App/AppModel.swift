@@ -301,8 +301,8 @@ final class AppModel: ObservableObject {
     private var creationLastMissRevision: UInt64?
     private var lastAppliedPollRevision: UInt64 = 0
     private static let maxCreationDiscoveryMisses = 3
-    private static let sshStartupRetryDelays: [TimeInterval] = [0.5, 1.5]
-    private static let sshDisruptionRetryDelays: [TimeInterval] = [3, 5, 8, 13, 21]
+    private static let sshStartupRetryDelays = SSHRecoveryBudget.startupDelays
+    private static let sshDisruptionRetryDelays = SSHRecoveryBudget.disruptionDelays
     private static let sshClientRetryDelays: [TimeInterval] = [0.5, 1.5]
 
     enum TerminalHandoffAction: Equatable {

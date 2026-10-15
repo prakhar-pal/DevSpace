@@ -165,6 +165,28 @@ The bounded-recovery protocol regression is now RED (only one attempt occurs
 without a poll; macOS requires two bounded startup retries); it is the next task,
 not included as a passing result in this fix.
 
+M04 bounded recovery implemented: shared Swift SSHRecoveryBudget supplies the
+unchanged macOS startup delays (0.5/1.5 seconds) and disruption delays (3/5/8/13/21).
+Linux retries use a fresh read-only DevPod status check, cannot wake stopped pods,
+and remain failed after exhaustion instead of restarting on polls. Explicit
+Connect starts a new budget; disconnect/reload/stop/removal/shutdown invalidate
+late callbacks. Real output, not master readiness alone, establishes/reset the
+disruption budget. Last-shell exit after usable output withdraws connection
+intent. Unready client failure instead waits for hook cleanup/master exit before
+requesting bounded recovery, and an intervening explicit reload cancels it.
+Verified: Core243 (one opt-in skip), backend43, GTK14 (two opt-in skips), and both
+development products. New regressions observed missing timed retry/unsafe proxy
+fallback/unready-client intent withdrawal before their fixes. wc-1 was rechecked
+read-only and is still Stopped; live hooks/image acceptance remains unclaimed.
+One default SwiftBuild test client stalled with no active compiler; only that
+confirmed client was terminated. Core verification used the same global Swift
+toolchain's supported, deprecated native engine with the existing test scratch
+path. Default make linux-build-dev subsequently passed with SwiftBuild unchanged.
+No new compiler/toolchain installation or worktree was created. Current-head
+macOS CI is still required for the shared constants reference; no local macOS
+execution is claimed. Remaining source features: M08–M10; M07 installation/CI
+and physical-input acceptance remain distinct from the already-built package.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

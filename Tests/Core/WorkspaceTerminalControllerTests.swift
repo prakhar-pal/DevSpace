@@ -29,6 +29,87 @@ private final class TimeoutMasterScheduler: SSHTransportScheduling {
 }
 
 final class WorkspaceTerminalControllerTests: XCTestCase {
+    func testClosingTheLastShellWithdrawsIntentWithoutReopeningOnPoll() throws {
+        let master = ControlledMaster()
+        var effects: [WorkspaceTerminalEffect] = []
+        var intent: Set<String> = ["pod"]
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) })
+        controller.onLastPaneClosed = { intent.remove($0) }
+        try controller.connect("pod")
+        master.ready()
+        let pane = try XCTUnwrap(effects.first)
+        _ = controller.report(workspace: "pod", generation: pane.generation,
+            pane: try XCTUnwrap(pane.paneID), kind: "terminal_output")
+        XCTAssertTrue(controller.report(workspace: "pod", generation: pane.generation,
+            pane: try XCTUnwrap(pane.paneID), kind: "terminal_exit"))
+        master.stopped()
+        let plan = WorkspaceLifecycle.reconcile(workspaces: [.init(id: "pod", provider: "", source: "", lastUsed: "",
+            state: "Running", error: nil)], seenDefinitive: ["pod"], autoConnect: intent,
+            opened: controller.openedWorkspaces, starting: [], shuttingDown: [])
+        XCTAssertTrue(plan.connect.isEmpty, "a running-status poll reopened the deliberately closed shell")
+    }
+
+    func testUnreadyClientFailureWaitsForMasterExitBeforeRequestingRecovery() throws {
+        for kind in ["terminal_exit", "terminal_launch_failed"] {
+            let master = ControlledMaster()
+            var effects: [WorkspaceTerminalEffect] = []
+            var failure: WorkspaceTerminalController.Failure?
+            var intent = true
+            let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+                makeTransport: { _ in master }, emit: { effects.append($0) })
+            controller.onFailure = { _, value in failure = value }
+            controller.onLastPaneClosed = { _ in intent = false }
+            try controller.connect("pod")
+            master.ready()
+            let pane = try XCTUnwrap(effects.first)
+            _ = controller.report(workspace: "pod", generation: pane.generation,
+                pane: try XCTUnwrap(pane.paneID), kind: kind)
+            XCTAssertNil(failure, "client failure requested recovery before its master released the lease")
+            XCTAssertTrue(intent, "a shell that never became usable was treated as deliberate disconnect")
+            master.stopped()
+            XCTAssertEqual(failure, .startup(.launchFailed))
+        }
+    }
+
+    func testEstablishedMasterExitReportsDisruptionWithoutWithdrawingUserIntent() throws {
+        let master = ControlledMaster()
+        var effects: [WorkspaceTerminalEffect] = []
+        var failure: WorkspaceTerminalController.Failure?
+        var intent = true
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) })
+        controller.onFailure = { _, value in failure = value }
+        controller.onLastPaneClosed = { _ in intent = false }
+        try controller.connect("pod")
+        master.ready()
+        let pane = try XCTUnwrap(effects.first)
+        _ = controller.report(workspace: "pod", generation: pane.generation,
+            pane: try XCTUnwrap(pane.paneID), kind: "terminal_output")
+        master.state = .exited
+        master.onExit?(255)
+        XCTAssertEqual(failure, .disruption(255))
+        XCTAssertTrue(intent, "unexpected transport loss was treated as deliberate shell exit")
+    }
+
+    func testExplicitReloadCancelsPendingUnreadyClientFailureRecovery() throws {
+        let first = ControlledMaster(), second = ControlledMaster()
+        var masters = [first, second]
+        var effects: [WorkspaceTerminalEffect] = []
+        var failures: [WorkspaceTerminalController.Failure] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in masters.removeFirst() }, emit: { effects.append($0) })
+        controller.onFailure = { _, failure in failures.append(failure) }
+        try controller.connect("pod")
+        first.ready()
+        let pane = try XCTUnwrap(effects.first)
+        _ = controller.report(workspace: "pod", generation: pane.generation,
+            pane: try XCTUnwrap(pane.paneID), kind: "terminal_launch_failed")
+        try controller.reconnect("pod")
+        first.stopped()
+        XCTAssertTrue(failures.isEmpty, "old client failure consumed the explicit reload's fresh retry budget")
+        XCTAssertEqual(second.state, .starting)
+    }
     func testConnectDuringDisconnectWaitsForCleanupAndOldMasterExit() throws {
         let first = ControlledMaster(), second = ControlledMaster()
         var transports = [first, second]
