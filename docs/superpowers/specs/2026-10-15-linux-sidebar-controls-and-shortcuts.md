@@ -26,7 +26,8 @@ for next tab. No macOS dependency checkout is locally available, so terminal
 engine default bindings outside these application-owned actions are not claimed
 audited or candidates for copying Ghostty behavior into VTE.
 
-Recommended mapping, pending the user's modifier-policy choice:
+Linux-safe mapping, proceeding under the user's instruction to implement the
+documented fixes (Ctrl+Shift preserves the terminal's ordinary Ctrl keys):
 
 | Action | macOS source | Linux |
 | --- | --- | --- |
@@ -49,8 +50,7 @@ Recommended mapping, pending the user's modifier-policy choice:
 
 Plain Ctrl+C/V/R/B/T and shell key combinations remain terminal input. A literal
 Command-to-Control translation would steal terminal keys; literal Super bindings
-are an alternative but may be intercepted by the desktop. The user has been
-asked to select the modifier policy. Preserve native text editing in fields;
+are an alternative but may be intercepted by the desktop. Preserve native text editing in fields;
 match macOS's protected Quit/Minimize/Hide/Close handling during modals. Ineligible
 recognized workspace commands must not accidentally mutate another workspace or
 start a stopped pod. Quit and Close use existing orderly shutdown, not direct
