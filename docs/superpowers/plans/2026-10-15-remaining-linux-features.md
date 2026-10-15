@@ -117,6 +117,21 @@ warnings; this check is not evidence of physical keyboard/IME or banner behavior
 Host X11 acceptance remains separate (private Xvfb X11 is covered). No GTK input
 method override is configured in the current environment; no IME changes made.
 
+User-approved production checkpoint after M05: optimized frontend/backend from
+code commit 4c9034c built with the global Ubuntu 26.04 Swift 6.4.1 toolchain.
+Staged bundle: build/linux-production-bundle-next (inactive output only).
+Package: build/devspace_0.7.1_amd64.deb; approved Git maintainer identity and
+GPL/Swift/ICU notices were verified in the archive, with host-derived dependencies
+including libc6 >= 2.43 and libxml2-16 >= 2.14.1. Assembly16 and relocated-runtime1
+passed; staged executables match the optimized build byte for byte. Debian
+dependency scanning emitted nonfatal unversioned-private-Swift/unused-link warnings.
+Package SHA-256: de02ec5c2333687d408466a827c49f62ea9b18914bf7915d9a977df9620cddc0.
+The pre-existing uncommitted licensing-text edits in assemble-linux.py were
+preserved and used, not staged into feature commits. The running production app
+was neither replaced nor closed, and the package was not installed. Clean-host
+installation, current-head CI/macOS and the remaining M07 acceptance are NOT
+claimed. This approved build checkpoint does not mark the remaining port complete.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.
