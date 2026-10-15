@@ -383,6 +383,49 @@ Read-only PR111 inspection found successful Linux/macOS CI on old remote commit
 23e3fa5, not current local source. No remote changes were made; publishing current
 commits and obtaining current-head CI still requires the pending user approval.
 
+### Live wc-1 acceptance — 2026-10-15
+
+After the user started wc-1, read-only status confirmed Running. Live checks
+completed against the existing optimized backend and current native GTK/VTE
+runner, without changing application code or rebuilding the production bundle:
+
+- Two backend integration tests passed (39.144 seconds): settings/unrelated-hook
+  preservation, real helper notification and ded routing, exact uploaded PNG
+  bytes and generated-file cleanup, plus two independent real PTY shells sharing
+  one ControlPath/generation. Closing the first shell preserved the second's
+  round-trip and disconnect left wc-1 Running.
+- The hook test now also waits for the owned master to close, reads settings
+  independently afterward, verifies the disconnected remote notification forward
+  is gone, preserves unrelated settings/hooks, and checks managed hooks remain
+  only when the peer channel still owns a live notification tunnel.
+- Full native live GTK/VTE acceptance passed (57.489 seconds): shell round-trip,
+  close/reopen with a new pane identity, exact image bytes and cleanup, remote
+  helper to sidebar badge, activation back to the existing wc-1 terminal/focus,
+  and real remote ded to the expected Zed URI captured by a test executable.
+  This is routing/activation evidence, not a physical desktop-banner click or
+  proof that a real Zed application window opened.
+- Final read-only status confirmed wc-1 Running and wc-2 Stopped; the temporary
+  development listener at localhost:17866 was released. No start/stop/recreate/
+  delete operation or project-file mutation was performed. Production untouched.
+
+Initial opt-in failures exposed stale test assumptions, not an application fix:
+the GTK probe sent input before shell handoff (diagnostic mapped=0, one output
+byte), and the backend runner assumed the first injection/notification belonged
+to image paste/wc-1. The test now waits for a mapped terminal and filters events
+by the expected operation/workspace. The failed runs remain in the timing log;
+the successful reruns retain the same real shell/output and PNG assertions.
+The final run used a temporary CLI guard: actual metadata/status, discovery
+limited to wc-1 and confirmed-stopped wc-2 for alternate sidebar selection,
+SSH allowed only for wc-1, all lifecycle commands blocked. The guard was removed.
+
+Post-change fixture/native regression: 110 tests, five opt-in skips, zero
+failures (194.051 seconds). Logs: `.tmp/linux-wc1-backend-live-acceptance.log`,
+`.tmp/linux-wc1-vte-live-acceptance.log`,
+`.tmp/linux-wc1-vte-timing-diagnostic.log`, and
+`.tmp/linux-wc1-harness-regression.log`. Package.resolved restored after SwiftPM.
+Remaining release gaps: physical clipboard/IME/banner behavior, clean Ubuntu26
+installation and current-head Linux/macOS CI; no new .deb or installation.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

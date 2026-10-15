@@ -91,7 +91,7 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
                 controller.requestShutdown()
                 return 1
             }
-            if !context.hostCommandSent, pane.childPID != nil {
+            if !context.hostCommandSent, pane.childPID != nil, gtk_widget_get_mapped(pane.widget) != 0 {
                 pane.feed("unset HISTFILE; printf '\\104\\123\\137\\125\\111\\137\\122\\105\\101\\104\\131\\n'; printf '\\104\\123\\137\\125\\111\\137\\123\\110\\105\\114\\114\\137\\117\\113\\n'\n")
                 context.hostCommandSent = true
             }
