@@ -65,6 +65,11 @@ struct WorkspaceWindowTests {
                 g_object_unref(UnsafeMutableRawPointer(application))
                 return
             }
+            if CommandLine.arguments.dropFirst().contains("handoff") {
+                try testFirstShellHandoff(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
 
             let window = WorkspaceWindow(application: application)
             var commands: [(String, [String: String]?)] = []
@@ -420,7 +425,8 @@ struct WorkspaceWindowTests {
 
     private static func terminalEffect(
         kind: String, workspace: String, generation: UUID, pane: UUID,
-        executable: String? = nil, arguments: [String] = [], message: String? = nil, retrying: Bool? = nil
+        executable: String? = nil, arguments: [String] = [], message: String? = nil, retrying: Bool? = nil,
+        handoffPending: Bool? = nil
     ) throws -> WorkspaceTerminalEffect {
         var object: [String: Any] = [
             "kind": kind,
@@ -432,6 +438,7 @@ struct WorkspaceWindowTests {
             "message": message as Any? ?? NSNull(),
         ]
         object["retrying"] = retrying
+        object["handoffPending"] = handoffPending
         let data = try JSONSerialization.data(withJSONObject: object)
         return try JSONDecoder().decode(WorkspaceTerminalEffect.self, from: data)
     }
@@ -592,6 +599,37 @@ struct WorkspaceWindowTests {
         gtk_dialog_response(UnsafeMutableRawPointer(failed).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_ACCEPT.rawValue)
         try expect(commands.count == count, "backend failure allowed a pending rename to mutate state")
         print("organization=rename-order shortcuts=bounded cancel=nonmutating")
+    }
+
+    private static func testFirstShellHandoff(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let marker = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".tmp/handoff-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
+        let window = WorkspaceWindow(application: application)
+        defer { gtk_window_destroy(window.window) }
+        let workspace = WorkspaceView(id: "pod", provider: "test", source: "", lastUsed: "", state: "Running", error: nil)
+        window.setConnectionStates(["pod": "connecting"])
+        window.update(WorkspaceControllerSnapshot(revision: 1, workspaces: [workspace], selectedID: "pod", layout: Layout(), terminalPanes: []))
+        window.present()
+        let identity = TerminalPaneIdentity(workspaceID: "pod", generation: UUID(), paneID: UUID())
+        window.apply(try terminalEffect(kind: "terminal_launch", workspace: "pod", generation: identity.generation,
+            pane: identity.paneID, executable: "/bin/sh", arguments: ["-c", "printf ready; while IFS= read -r input; do printf '%s' \"$input\" > \"$1\"; printf 'received:%s\\n' \"$input\"; done", "handoff-fixture", marker.path], handoffPending: true))
+        try expect(pumpUntil { window.pane(for: identity)?.text.contains("ready") == true }, "pending shell never produced output")
+        let pane = window.pane(for: identity)!
+        try expect(gtk_widget_get_mapped(pane.widget) == 0, "initial shell accepted user input before managed handoff")
+        let clipboard = gdk_display_get_clipboard(gdk_display_get_default())!
+        gdk_clipboard_set_text(clipboard, "must-not-paste-before-handoff\n")
+        _ = pane.handleKey(keyval: UInt32(GDK_KEY_v), modifiers: GdkModifierType(rawValue: GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue))
+        _ = pumpUntil(timeout: 0.2) { false }
+        try expect(!pane.text.contains("must-not-paste-before-handoff"), "handoff allowed clipboard input into the hidden shell")
+        window.apply(try terminalEffect(kind: "terminal_inject", workspace: "pod", generation: identity.generation,
+            pane: identity.paneID, message: "managed-handoff\r"))
+        try expect(pumpUntil { (try? String(contentsOf: marker, encoding: .utf8)) == "managed-handoff" }, "managed input did not reach the hidden child; text=\(pane.text.debugDescription)")
+        window.apply(try terminalEffect(kind: "terminal_ready", workspace: "pod", generation: identity.generation, pane: identity.paneID))
+        try expect(pumpUntil { gtk_widget_get_mapped(pane.widget) != 0 }, "completed handoff did not reveal the original shell")
+        try expect(pumpUntil { pane.text.contains("received:managed-handoff") }, "revealed shell did not render the managed command output")
+        window.closeTerminal(identity)
+        print("handoff=input-guarded managed-input=allowed ready=revealed")
     }
 
     private static func testClientFailure(_ application: UnsafeMutablePointer<GtkApplication>) throws {

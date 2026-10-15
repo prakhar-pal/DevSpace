@@ -16,6 +16,7 @@ final class WorkspaceWindow {
     private var terminalPanes: [TerminalPaneIdentity: TerminalPane] = [:]
     private var terminalOrder: [TerminalPaneIdentity] = []
     private var activeTerminal: [String: TerminalPaneIdentity] = [:]
+    private var pendingShellHandoffs: Set<TerminalPaneIdentity> = []
     private var terminalRoots: [TerminalPaneIdentity: UnsafeMutablePointer<GtkWidget>] = [:]
     private var retiredTerminalGenerations: [String: Set<UUID>] = [:]
     private var actionsEnabled = true
@@ -284,6 +285,8 @@ final class WorkspaceWindow {
                 onCommand?("terminal_launch_failed", eventPayload(identity))
                 return
             }
+            if effect.handoffPending == true { pendingShellHandoffs.insert(identity) }
+            else { pendingShellHandoffs.remove(identity) }
             guard let pane = TerminalPane(launch: launch, onEvent: { [weak self] kind, payload in
                 if kind == "clipboard_error" { self?.setStatus(payload["message"] ?? "Clipboard image unavailable") }
                 else {
@@ -300,6 +303,10 @@ final class WorkspaceWindow {
             closeTerminal(identity)
         case "terminal_client_failed":
             showClientFailure(identity, message: effect.message ?? "SSH terminal failed", retrying: effect.retrying == true)
+        case "terminal_ready":
+            guard pendingShellHandoffs.remove(identity) != nil else { return }
+            revealSelectedTerminal(focus: identity.workspaceID == snapshot.selectedID)
+            refreshLifecyclePanel()
         case "terminal_inject":
             guard let pane = terminalPanes[identity], let message = effect.message else { return }
             pane.feed(message)
@@ -343,6 +350,7 @@ final class WorkspaceWindow {
     }
 
     func closeTerminal(_ identity: TerminalPaneIdentity, reportExit: Bool = false) {
+        pendingShellHandoffs.remove(identity)
         guard terminalRoots[identity] != nil else { return }
         let pane = terminalPanes.removeValue(forKey: identity)
         let siblings = terminalOrder.filter { $0.workspaceID == identity.workspaceID }
@@ -392,11 +400,12 @@ final class WorkspaceWindow {
         refreshTerminalTabs()
         let selected = snapshot.selectedID.flatMap { activeIdentity(forWorkspace: $0) }
         let selectedPane = selected.flatMap { terminalPanes[$0] }
+        let handingOff = selected.map { pendingShellHandoffs.contains($0) } ?? false
         for (identity, root) in terminalRoots {
-            gtk_widget_set_visible(root, identity == selected ? 1 : 0)
+            gtk_widget_set_visible(root, identity == selected && !handingOff ? 1 : 0)
         }
         let operating = presentedOperation != nil
-        gtk_widget_set_visible(emptyState, selected == nil || operating ? 1 : 0)
+        gtk_widget_set_visible(emptyState, selected == nil || operating || handingOff ? 1 : 0)
         if operating {
             for root in terminalRoots.values { gtk_widget_set_visible(root, 0) }
         }

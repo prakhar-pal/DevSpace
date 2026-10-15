@@ -7,6 +7,7 @@ import Foundation
 // marker-guarded snippet to the pod's rc files (same best-effort `devpod ssh`
 // channel Hooks.inject uses).
 public enum ShellIntegration {
+    public static let restartRemoteShellCommand = "\u{3}\rreset; exec \"${SHELL:-/bin/sh}\" -i\r"
     static let beginMarker = "# >>> devspace shell integration >>>"
     static let endMarker = "# <<< devspace shell integration <<<"
 

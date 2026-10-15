@@ -530,6 +530,19 @@ class BackendIntegrationTests(unittest.TestCase):
         self.assertEqual(len([frame for frame in self.frames if frame["kind"] == "platform_open_zed"]), 1,
                          "ded must not wake a stopped workspace")
 
+    def test_invalid_claude_settings_do_not_block_independent_shell_integration(self):
+        self.request("poll")
+        remote_home = self.directory / "remote-home"
+        settings = remote_home / ".claude/settings.json"
+        settings.parent.mkdir(parents=True)
+        original = "{broken settings"
+        settings.write_text(original)
+        response = self.request("install_hooks", workspace_id="pod")
+        self.assertEqual(response["kind"], "error")
+        self.assertEqual(settings.read_text(), original)
+        self.assertTrue((remote_home / ".bashrc").is_file(), "Claude hook failure prevented shell integration")
+        self.assertIn("ded()", (remote_home / ".bashrc").read_text())
+
     def test_hook_installation_preserves_settings_and_is_idempotent(self):
         self.request("poll")
         remote_home = self.directory / "remote-home"

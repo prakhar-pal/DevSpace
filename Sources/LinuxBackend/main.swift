@@ -158,7 +158,7 @@ terminals.onConnectionChange = {
     if handshaken && !stopping { _ = sendSnapshot(nil, from: controller) }
 }
 
-terminals.onFirstOutput = { workspace, _ in
+terminals.onFirstOutput = { workspace, generation in
     if let recovery = sshRecoveries[workspace] {
         recovery.budget.didConnect()
         recovery.generation = UUID()
@@ -167,8 +167,11 @@ terminals.onFirstOutput = { workspace, _ in
     }
     if stateNotifyGate.confirmSSH(workspace) { emitStateNotification(workspace, event: "started") }
     if integrationJobs.values.contains(where: { $0.workspace == workspace }) { return false }
-    do { try installIntegration(workspace, requestID: nil) }
-    catch { _ = send(BackendProtocolMessage(kind: "platform_error", payload: ["message": "Claude integration unavailable: \(error)"])) }
+    do { try installIntegration(workspace, requestID: nil, generation: generation) }
+    catch {
+        _ = terminals.finishShellIntegration(workspace: workspace, generation: generation, succeeded: false)
+        _ = send(BackendProtocolMessage(kind: "platform_error", payload: ["message": "Claude integration unavailable: \(error)"]))
+    }
     return true
 }
 terminals.onDisconnect = { workspace, _ in
@@ -263,9 +266,8 @@ private func emitStateNotification(_ workspace: String, event: String) {
     _ = sendSnapshot(nil, from: controller)
 }
 
-private func installIntegration(_ workspace: String, requestID: String?) throws {
+private func installIntegration(_ workspace: String, requestID: String?, generation: UUID? = nil) throws {
     try Devpod.validateId(workspace)
-    guard !notifyToken.isEmpty, notifyListener != nil else { throw DevpodError("notification listener unavailable") }
     let controlPath = terminals.controlPath(for: workspace)
     guard controller.canInstallIntegration(workspaceID: workspace, ownedControlPath: controlPath) else {
         throw DevpodError("workspace is not running: \(workspace)")
@@ -276,12 +278,20 @@ private func installIntegration(_ workspace: String, requestID: String?) throws 
     // The first-output path always has a ready owned master. The explicit
     // installation command can also be used without an open terminal.
     let id = UUID(), job = IntegrationJob(workspace: workspace, controlPath: controlPath), token = notifyToken
+    let notificationAvailable = !token.isEmpty && notifyListener != nil
     integrationJobs[id] = job
     DispatchQueue.global(qos: .utility).async {
-        let result = Result {
+        let shellResult = Result { try ShellIntegration.inject(job.runner, podID: workspace, token: token) }
+        DispatchQueue.main.async {
+            guard !stopping, !job.cancelled, let generation else { return }
+            let succeeded: Bool
+            if case .success = shellResult { succeeded = true } else { succeeded = false }
+            _ = terminals.finishShellIntegration(workspace: workspace, generation: generation, succeeded: succeeded)
+        }
+        let hooksResult = Result {
+            guard notificationAvailable else { throw DevpodError("notification listener unavailable") }
             try Hooks.inject(job.runner, podID: workspace, token: token,
                              installManualHelper: identity.channel == .development)
-            try ShellIntegration.inject(job.runner, podID: workspace, token: token)
         }
         DispatchQueue.main.async {
             integrationJobs.removeValue(forKey: id)
@@ -291,15 +301,18 @@ private func installIntegration(_ workspace: String, requestID: String?) throws 
                 terminals.retryIntegration(workspace)
                 return
             }
-            switch result {
-            case .success:
+            var failures: [String] = []
+            if case .failure = shellResult { failures.append("Shell integration could not be installed") }
+            if case .failure = hooksResult { failures.append("Claude notification hooks could not be installed; existing invalid settings are left untouched") }
+            if failures.isEmpty {
                 if let requestID { _ = send(BackendProtocolMessage(id: requestID, kind: "completed")) }
-            case .failure:
+            } else {
                 // CLI diagnostics may contain encoded credentials; never forward
                 // installation commands or their raw stderr into UI/logs.
                 _ = send(BackendProtocolMessage(id: requestID, kind: requestID == nil ? "platform_error" : "error",
-                    payload: ["message": "Claude integration could not be installed; existing invalid settings are left untouched"]))
+                    payload: ["message": failures.joined(separator: "; ")]))
             }
+            terminals.retryIntegration(workspace)
         }
     }
 }
@@ -520,7 +533,7 @@ private func handle(_ message: BackendProtocolMessage) {
             try Devpod.validateId(workspace)
             guard controller.snapshot.workspaces.contains(where: { $0.id == workspace && $0.state == "Running" }),
                   !controller.snapshot.operations.contains(where: { $0.workspaceID == workspace }),
-                  terminals.controlPath(for: workspace) != nil else {
+                  terminals.controlPath(for: workspace) != nil, terminals.connectionStates[workspace] == "connected" else {
                 throw DevpodError("new terminal requires a ready SSH session: \(workspace)")
             }
             try terminals.connect(workspace)

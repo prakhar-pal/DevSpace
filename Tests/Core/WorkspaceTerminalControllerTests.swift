@@ -34,6 +34,47 @@ private final class ClientRetryScheduler: SSHTransportScheduling {
 }
 
 final class WorkspaceTerminalControllerTests: XCTestCase {
+    func testFirstShellHandoffRequiresOutputAndSuccessfulIntegrationAndRunsOnce() throws {
+        for succeeds in [true, false] {
+            let master = ControlledMaster(), scheduler = ClientRetryScheduler()
+            var effects: [WorkspaceTerminalEffect] = []
+            let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+                makeTransport: { _ in master }, emit: { effects.append($0) }, scheduler: scheduler)
+            controller.onFirstOutput = { _, _ in true }
+            try controller.connect("pod")
+            master.ready()
+            let launch = try XCTUnwrap(effects.first), pane = try XCTUnwrap(effects.first?.paneID)
+            XCTAssertEqual(launch.handoffPending, true)
+            XCTAssertEqual(controller.connectionStates["pod"], "connecting")
+            _ = controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_output")
+            XCTAssertTrue(controller.finishShellIntegration(workspace: "pod", generation: launch.generation, succeeded: succeeds))
+            XCTAssertEqual(effects.filter { $0.kind == "terminal_inject" }.count, succeeds ? 1 : 0)
+            if succeeds { XCTAssertEqual(effects.first { $0.kind == "terminal_inject" }?.message, "\u{3}\rreset; exec \"${SHELL:-/bin/sh}\" -i\r") }
+            XCTAssertEqual(effects.last?.kind, "terminal_ready")
+            XCTAssertEqual(controller.connectionStates["pod"], "connected")
+            XCTAssertFalse(controller.finishShellIntegration(workspace: "pod", generation: launch.generation, succeeded: true))
+        }
+    }
+
+    func testHandoffTimeoutRevealsOriginalAndRejectsLateOrDisconnectedCompletion() throws {
+        let master = ControlledMaster(), scheduler = ClientRetryScheduler()
+        var effects: [WorkspaceTerminalEffect] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in master }, emit: { effects.append($0) }, scheduler: scheduler)
+        controller.onFirstOutput = { _, _ in true }
+        try controller.connect("pod")
+        master.ready()
+        let launch = try XCTUnwrap(effects.first), pane = try XCTUnwrap(effects.first?.paneID)
+        let timeout = try XCTUnwrap(scheduler.tasks.first { $0.0 == 10 })
+        timeout.1()
+        XCTAssertEqual(effects.last?.kind, "terminal_ready")
+        _ = controller.report(workspace: "pod", generation: launch.generation, pane: pane, kind: "terminal_output")
+        XCTAssertFalse(controller.finishShellIntegration(workspace: "pod", generation: launch.generation, succeeded: true))
+        controller.disconnect("pod")
+        XCTAssertFalse(controller.finishShellIntegration(workspace: "pod", generation: launch.generation, succeeded: true))
+        XCTAssertFalse(effects.contains { $0.kind == "terminal_inject" }, "late integration overwrote a revealed or disconnected shell")
+    }
+
     func testFailedClientBeforeMasterExitPreservesDisruptionRecoveryIntent() throws {
         let master = ControlledMaster(), scheduler = ClientRetryScheduler()
         var effects: [WorkspaceTerminalEffect] = []

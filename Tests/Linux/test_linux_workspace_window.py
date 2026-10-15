@@ -130,6 +130,14 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("organization=rename-order shortcuts=bounded cancel=nonmutating", result.stdout)
 
+    def test_first_shell_handoff_guards_input_until_ready(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "handoff"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=12)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("handoff=input-guarded managed-input=allowed ready=revealed", result.stdout)
+
     def test_client_failure_preserves_exit_status_and_retry_slot(self):
         environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
         environment.pop("WAYLAND_DISPLAY", None)

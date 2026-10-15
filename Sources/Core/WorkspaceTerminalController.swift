@@ -10,6 +10,7 @@ public struct WorkspaceTerminalEffect: Codable, Equatable, Sendable {
     public let arguments: [String]
     public let message: String?
     public var retrying: Bool? = nil
+    public var handoffPending: Bool? = nil
 }
 
 /// Called on the controller event queue. An old master retains its lease until
@@ -38,6 +39,8 @@ public final class WorkspaceTerminalController {
         var afterStop: [() -> Void] = []
         var clientAttempts: [UUID: Int] = [:]
         var clientRetryTokens: [UUID: UUID] = [:]
+        var initialPane: UUID?
+        var handoffPending = false
         init(_ transport: SSHTransportControlling) { self.transport = transport }
     }
 
@@ -69,7 +72,7 @@ public final class WorkspaceTerminalController {
 
     public var connectionStates: [String: String] {
         connections.mapValues { connection in
-            connection.stopping ? "disconnecting" : connection.panes.isEmpty ? "connecting" : "connected"
+            connection.stopping ? "disconnecting" : (connection.panes.isEmpty || connection.handoffPending) ? "connecting" : "connected"
         }
     }
 
@@ -92,6 +95,23 @@ public final class WorkspaceTerminalController {
         guard let connection = connections[workspace], !connection.stopping,
               !connection.integrationStarted, !connection.producedOutput.isEmpty else { return }
         connection.integrationStarted = onFirstOutput?(workspace, connection.generation) ?? true
+    }
+
+    @discardableResult
+    public func finishShellIntegration(workspace: String, generation: UUID, succeeded: Bool) -> Bool {
+        guard let connection = connections[workspace], connection.generation == generation,
+              !connection.stopping, connection.handoffPending,
+              let pane = connection.initialPane, connection.panes.keys.contains(pane) else { return false }
+        if WorkspaceController.terminalHandoffAction(integrationSucceeded: succeeded,
+            sshProducedOutput: connection.producedOutput.contains(pane)) == .restartRemoteShellThenReveal {
+            _ = injectText(workspace: workspace, generation: generation, pane: pane,
+                text: ShellIntegration.restartRemoteShellCommand)
+        }
+        connection.handoffPending = false
+        emit(WorkspaceTerminalEffect(kind: "terminal_ready", workspaceID: workspace, generation: generation,
+            paneID: pane, executable: nil, arguments: [], message: nil))
+        onConnectionChange?()
+        return true
     }
 
     public func controlPath(for workspace: String) -> String? {
@@ -260,6 +280,9 @@ public final class WorkspaceTerminalController {
         connection.producedOutput.remove(pane)
         let attempts = connection.clientAttempts[pane] ?? 0
         let retrying = attempts < SSHRecoveryBudget.startupDelays.count
+        if !retrying, connection.initialPane == pane {
+            _ = finishShellIntegration(workspace: workspace, generation: connection.generation, succeeded: false)
+        }
         emit(WorkspaceTerminalEffect(kind: "terminal_client_failed", workspaceID: workspace,
             generation: connection.generation, paneID: pane, executable: nil, arguments: [],
             message: retrying ? "Reconnecting SSH terminal…" : "SSH terminal failed (exit \(exitCode)).", retrying: retrying))
@@ -279,11 +302,22 @@ public final class WorkspaceTerminalController {
     private func launchPane(_ workspace: String, _ connection: Connection, paneID: UUID = UUID()) {
         let pane = paneID
         connection.panes[pane] = .some(nil)
+        if connection.initialPane == nil {
+            connection.initialPane = pane
+            connection.handoffPending = onFirstOutput != nil
+            if connection.handoffPending {
+                let generation = connection.generation
+                scheduler.schedule(after: 10) { [weak self] in
+                    _ = self?.finishShellIntegration(workspace: workspace, generation: generation, succeeded: false)
+                }
+            }
+        }
         emit(WorkspaceTerminalEffect(kind: "terminal_launch", workspaceID: workspace,
             generation: connection.generation, paneID: pane, executable: "/usr/bin/ssh",
             arguments: SSH.clientArgs(podID: workspace, proxyCommand: connection.transport.proxyCommand,
                 controlPath: connection.transport.controlPath,
-                bundleIdentifier: identity.channel.applicationIdentifier), message: nil))
+                bundleIdentifier: identity.channel.applicationIdentifier), message: nil,
+            handoffPending: connection.handoffPending && connection.initialPane == pane))
     }
 
     private func stop(_ workspace: String, _ connection: Connection) {

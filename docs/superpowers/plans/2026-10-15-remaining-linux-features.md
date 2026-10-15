@@ -267,6 +267,19 @@ tests passed after observing the failed-client-before-master race and VTE's lost
 exit status. New retry state clears on real output. First-shell handoff and the
 other five remaining review concerns are still being addressed.
 
+First-shell handoff/independent-integration review fixes verified: shell
+installation runs independently before Claude hooks, so invalid settings remain
+untouched without disabling ded/OSC 7. The first pane stays input-guarded until
+successful, generation-bound integration sends the unchanged macOS shell-restart
+command, or a 10-second timeout/failure reveals the original. Late completion
+cannot restart a revealed/replaced shell. Retry exhaustion also reveals its
+failure slot. Core37 controller/shell tests, three focused backend cases, both
+dev products, and the native input-guard/handoff test passed. The native probe
+uses a child marker plus Return bytes to verify hidden PTY delivery independently
+of VTE's deferred unmapped rendering, then verifies output after reveal. No real
+workspace shell was restarted. Remaining review fixes: provisioning/poll gating,
+creation discovery and expanded hidden-list scrolling.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.
