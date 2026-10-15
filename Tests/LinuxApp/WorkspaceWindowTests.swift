@@ -30,6 +30,16 @@ struct WorkspaceWindowTests {
                 throw TestFailure("GTK application registration failed")
             }
 
+            if CommandLine.arguments.dropFirst().contains("native-keys") {
+                try testNativeKeys(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
+            if CommandLine.arguments.dropFirst().contains("sidebar-controls") {
+                try testSidebarControls(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
             if CommandLine.arguments.dropFirst().contains("lifecycle") {
                 try testLifecycleControls(application)
                 g_object_unref(UnsafeMutableRawPointer(application))
@@ -556,6 +566,162 @@ struct WorkspaceWindowTests {
         try expect(pumpUntil { commands.last?.1?["workspace_id"] == "pod-39" }, "scrolled workspace could not be selected")
         try expect(!commands.contains { ["start", "stop"].contains($0.0) }, "scrolling/selection changed workspace lifecycle")
         print("sidebar=scrollable last-workspace=selectable lifecycle=unchanged")
+    }
+
+    private static func testNativeKeys(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let keys = try NativeKeyInput()
+        let window = WorkspaceWindow(application: application)
+        defer { gtk_window_destroy(window.window) }
+        let workspaces = (1...9).map { WorkspaceView(id: "pod\($0)", provider: "test", source: "", lastUsed: "",
+            state: $0 == 1 ? "Running" : "Stopped", error: nil) }
+        window.setConnectionStates(["pod1": "connected"])
+        window.update(WorkspaceControllerSnapshot(revision: 1, workspaces: workspaces, selectedID: "pod1",
+            layout: Layout(order: workspaces.map(\.id)), terminalPanes: []))
+        window.present()
+        var commands: [(String, [String: String]?)] = []
+        window.onCommand = { commands.append(($0, $1)) }
+        let generation = UUID(), first = UUID()
+        let program = """
+        import os,tty
+        tty.setraw(0)
+        print('READY',flush=True)
+        while True:
+            b=os.read(0,1)
+            if not b: break
+            print('BYTE:'+b.hex(),end='\\r\\n',flush=True)
+        """
+        func launch(_ id: UUID) throws {
+            try window.apply(terminalEffect(kind: "terminal_launch", workspace: "pod1", generation: generation,
+                pane: id, executable: "/usr/bin/python3", arguments: ["-u", "-c", program]))
+        }
+        try launch(first)
+        let pane = window.pane(forWorkspace: "pod1")!
+        try expect(pumpUntil { pane.text.contains("READY") }, "native key terminal did not start")
+        _ = gtk_widget_grab_focus(pane.widget)
+        let root = gtk_window_get_child(window.window)!
+        let sidebar = gtk_widget_get_first_child(root)!
+        keys.press(["Control_L", "Shift_L", "b"], in: window.window)
+        try expect(pumpUntil { gtk_widget_get_visible(sidebar) == 0 }, "real Ctrl+Shift+B did not reach the app from terminal focus")
+        keys.press(["Control_L", "Shift_L", "b"], in: window.window)
+        try expect(pumpUntil { gtk_widget_get_visible(sidebar) != 0 }, "real sidebar shortcut did not restore the sidebar")
+        for (key, kind) in [("r", "reconnect"), ("o", "open_zed"), ("t", "new_terminal")] {
+            commands.removeAll()
+            keys.press(["Control_L", "Shift_L", key], in: window.window)
+            try expect(pumpUntil { commands.contains { $0.0 == kind } }, "real shortcut did not deliver \(kind)")
+            try expect(commands.filter { $0.0 == kind }.count == 1, "real shortcut duplicated \(kind)")
+        }
+        for number in 1...9 {
+            commands.removeAll()
+            keys.press(["Control_L", "Shift_L", "\(number)"], in: window.window)
+            try expect(pumpUntil { commands.contains { $0.0 == "select" && $0.1?["workspace_id"] == "pod\(number)" } }, "shifted workspace shortcut \(number) did not arrive")
+        }
+        commands.removeAll()
+        keys.press(["Control_L", "Shift_L", "Alt_L", "Down"], in: window.window)
+        try expect(pumpUntil { commands.contains { $0.0 == "move_down" } }, "real reorder shortcut did not arrive")
+        keys.press(["Caps_Lock"], in: window.window)
+        keys.press(["Control_L", "Shift_L", "o"], in: window.window)
+        try expect(pumpUntil { commands.contains { $0.0 == "open_zed" } }, "Caps Lock broke app shortcut")
+        keys.press(["Caps_Lock"], in: window.window)
+        for (key, byte) in [("c", "03"), ("v", "16"), ("r", "12"), ("b", "02"), ("t", "14")] {
+            keys.press(["Control_L", key], in: window.window)
+            try expect(pumpUntil { pane.text.contains("BYTE:\(byte)") }, "plain Ctrl+\(key) was swallowed instead of reaching the PTY; focus-terminal=\(gtk_window_get_focus(window.window) == pane.widget) controlled-output=\(pane.text.suffix(500))")
+        }
+        let clipboard = gdk_display_get_clipboard(gdk_display_get_default())!
+        vte_terminal_select_all(UnsafeMutableRawPointer(pane.widget).assumingMemoryBound(to: VteTerminal.self))
+        keys.press(["Control_L", "Shift_L", "c"], in: window.window)
+        _ = pumpUntil(timeout: 0.1) { false }
+        try expect(try readClipboardText(clipboard).contains("READY"), "native copy did not copy the VTE selection")
+        gdk_clipboard_set_text(clipboard, "native")
+        keys.press(["Control_L", "Shift_L", "v"], in: window.window)
+        try expect(pumpUntil { pane.text.contains("BYTE:6e") && pane.text.contains("BYTE:65") }, "native paste did not reach the PTY")
+        _ = gtk_widget_grab_focus(namedWidget("select-workspace-pod1", in: root)!)
+        gdk_clipboard_set_text(clipboard, "side")
+        keys.press(["Control_L", "Shift_L", "v"], in: window.window)
+        try expect(pumpUntil { pane.text.contains("BYTE:73") }, "copy/paste shortcut stopped working when sidebar owned focus")
+        let second = UUID()
+        try launch(second)
+        try expect(pumpUntil { window.pane(forWorkspace: "pod1")?.text.contains("READY") == true }, "second terminal did not start")
+        keys.press(["Control_L", "Tab"], in: window.window)
+        try expect(pumpUntil { window.pane(forWorkspace: "pod1") === pane }, "native Ctrl+Tab next-tab binding is missing")
+        keys.press(["Control_L", "Page_Down"], in: window.window)
+        try expect(pumpUntil { window.pane(forWorkspace: "pod1")?.identity.paneID == second }, "native next-tab compatibility binding failed")
+        keys.press(["Control_L", "Page_Up"], in: window.window)
+        try expect(pumpUntil { window.pane(forWorkspace: "pod1") === pane }, "native previous-tab binding failed")
+        keys.press(["Control_L", "Shift_L", "h"], in: window.window)
+        try expect(pumpUntil { gtk_widget_get_visible(UnsafeMutableRawPointer(window.window).assumingMemoryBound(to: GtkWidget.self)) == 0 }, "native Hide shortcut is missing")
+        window.present()
+        try expect(pumpUntil { gtk_widget_get_mapped(pane.widget) != 0 }, "hidden window did not reactivate with its terminal")
+        keys.press(["Control_L", "Shift_L", "m"], in: window.window)
+        _ = pumpUntil(timeout: 0.1) { false }
+        try expect(!pane.text.contains("BYTE:0d"), "Minimize shortcut leaked a Return into the shell")
+        _ = gtk_widget_activate(namedWidget("new-workspace", in: root)!)
+        let dialog = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(dialog)) }
+        let entry = namedWidget("workspace-repository", in: gtk_window_get_child(dialog)!)!
+        let commandCount = commands.count
+        keys.press(["Return"], in: dialog)
+        _ = pumpUntil(timeout: 0.1) { false }
+        try expect(commands.count == commandCount, "empty modal submission bypassed validation")
+        keys.press(["Control_L", "Shift_L", "b"], in: dialog)
+        _ = pumpUntil(timeout: 0.1) { false }
+        try expect(gtk_widget_get_visible(sidebar) != 0, "app shortcut escaped a modal")
+        gtk_editable_set_text(OpaquePointer(entry), "https://example.invalid/new.git")
+        keys.press(["Return"], in: dialog)
+        try expect(pumpUntil { commands.contains { $0.0 == "create" } }, "native Return did not confirm a valid modal form")
+        window.setActionsEnabled(true)
+        // A pending create is intentionally guarded; use a fresh dialog type
+        // to check native cancellation without pretending provisioning finished.
+        _ = gtk_widget_activate(namedWidget("workspace-guide", in: root)!)
+        let guide = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(guide)) }
+        keys.press(["Control_L", "Shift_L", "h"], in: guide)
+        try expect(pumpUntil { gtk_widget_get_visible(UnsafeMutableRawPointer(guide).assumingMemoryBound(to: GtkWidget.self)) == 0
+            && gtk_widget_get_visible(UnsafeMutableRawPointer(window.window).assumingMemoryBound(to: GtkWidget.self)) == 0 }, "modal Hide left a window visible")
+        window.present()
+        try expect(pumpUntil { gtk_widget_get_mapped(UnsafeMutableRawPointer(guide).assumingMemoryBound(to: GtkWidget.self)) != 0 }, "reactivation lost the hidden modal")
+        keys.press(["Control_L", "Shift_L", "w"], in: guide)
+        try expect(pumpUntil { gtk_widget_get_visible(UnsafeMutableRawPointer(guide).assumingMemoryBound(to: GtkWidget.self)) == 0 }, "native Close did not cancel the modal")
+        try expect(gtk_widget_get_visible(UnsafeMutableRawPointer(window.window).assumingMemoryBound(to: GtkWidget.self)) != 0,
+            "closing a modal also closed the main window")
+        _ = gtk_widget_activate(namedWidget("workspace-guide", in: root)!)
+        let escapeGuide = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(escapeGuide)) }
+        keys.press(["Escape"], in: escapeGuide)
+        try expect(pumpUntil { gtk_widget_get_visible(UnsafeMutableRawPointer(escapeGuide).assumingMemoryBound(to: GtkWidget.self)) == 0 }, "native Escape did not dismiss Guide")
+        print("native-keys=delivered terminal=preserved modal=owned")
+    }
+
+    private static func testSidebarControls(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let window = WorkspaceWindow(application: application)
+        defer { gtk_window_destroy(window.window) }
+        let workspaces = ["pod", "other", "hidden"].map { WorkspaceView(id: $0, provider: "test", source: "",
+            lastUsed: "", state: $0 == "pod" ? "Running" : "Stopped", error: nil) }
+        window.update(WorkspaceControllerSnapshot(revision: 1, workspaces: workspaces, selectedID: "pod",
+            layout: Layout(hidden: ["hidden"]), terminalPanes: []))
+        var commands: [(String, [String: String]?)] = []
+        window.onCommand = { commands.append(($0, $1)) }
+        window.present()
+        let root = gtk_window_get_child(window.window)!
+        try expect(pumpUntil { gtk_widget_get_mapped(root) != 0 }, "sidebar window did not map")
+        for name in ["workspace-menu-pod", "workspace-menu-other", "workspace-menu-hidden", "new-workspace", "workspace-guide", "stop-workspace"] {
+            guard let button = namedWidget(name, in: root) else { throw TestFailure("missing sidebar action button: \(name)") }
+            try expect(gtk_widget_has_css_class(button, "flat") == 0, "sidebar action still has label-like flat styling: \(name)")
+            try expect(gtk_widget_get_focusable(button) != 0, "sidebar action is not keyboard focusable")
+        }
+        let menu = namedWidget("workspace-menu-other", in: root)!
+        _ = gtk_widget_activate(menu)
+        try expect(pumpUntil { namedWidget("hide-workspace", in: root) != nil }, "three-dot button did not open the existing menu")
+        try expect(commands.isEmpty && window.snapshot.selectedID == "pod", "opening an unselected row's menu selected or connected it")
+        _ = gtk_widget_activate(namedWidget("hide-workspace", in: root)!)
+        try expect(pumpUntil { commands.last?.0 == "hide" }, "menu action did not fire")
+        try expect(commands.count == 1 && commands[0].1?["workspace_id"] == "other", "menu action targeted the selected row instead of its own row")
+        window.setActionsEnabled(false)
+        let disabled = namedWidget("workspace-menu-other", in: root)!
+        try expect(gtk_widget_is_sensitive(disabled) == 0, "disabled sidebar menu is still interactive")
+        _ = gtk_widget_activate(disabled)
+        _ = pumpUntil(timeout: 0.1) { false }
+        try expect(commands.count == 1, "disabled menu emitted a command")
+        print("sidebar-controls=visible framed target=nonselecting disabled=safe")
     }
 
     private static func testWorkspaceOrganization(_ application: UnsafeMutablePointer<GtkApplication>) throws {

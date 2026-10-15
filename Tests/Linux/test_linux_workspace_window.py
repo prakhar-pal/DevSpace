@@ -81,7 +81,8 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
             "-I", str(ROOT / "Sources/CPTY/include"),
             "-I", str(ROOT / "Sources/LinuxGTK"), "-I", str(ROOT / "Sources/LinuxVTE"),
             "-module-cache-path", str(cls.build / f"{output_name}-module-cache"),
-            *map(str, app_sources), str(ROOT / test_source), "-o", str(cls.build / output_name),
+            *map(str, app_sources), str(ROOT / "Tests/LinuxApp/NativeKeyInput.swift"),
+            str(ROOT / test_source), "-o", str(cls.build / output_name),
         ]
         for flag in cls.pkg_cflags:
             command.extend(["-Xcc", flag])
@@ -121,6 +122,45 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=12)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("sidebar=scrollable last-workspace=selectable lifecycle=unchanged", result.stdout)
+
+    def test_real_key_delivery_with_terminal_focus_and_modal_ownership(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none",
+                           DEVSPACE_PRIVATE_KEY_TEST="1")
+        environment.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "native-keys"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=25)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("native-keys=delivered terminal=preserved modal=owned", result.stdout)
+
+    def test_native_window_commands_use_orderly_backend_shutdown(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none",
+                           DEVSPACE_PRIVATE_KEY_TEST="1")
+        environment.pop("WAYLAND_DISPLAY", None)
+        for mode in ("native-window-quit", "native-window-modal-quit", "native-window-close"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory(dir=self.build) as temporary:
+                events = Path(temporary) / "events"
+                environment["DEVSPACE_TEST_EVENTS"] = str(events)
+                # Portal children can inherit pipe FDs after the app exits;
+                # wait for the actual runner, not unrelated captured-pipe EOF.
+                with (Path(temporary) / "output").open("w+") as output:
+                    result = subprocess.run(["xvfb-run", "-a", "dbus-run-session", "--", str(self.app_runner),
+                        shutil.which("python3") or "/usr/bin/python3", str(ROOT / "Tests/Linux/fixtures/linux_ui_backend_peer.py"), mode],
+                        cwd=ROOT, env=environment, stdout=output, stderr=subprocess.STDOUT, text=True, timeout=15)
+                    output.seek(0)
+                    log = output.read()
+                self.assertEqual(result.returncode, 0, log)
+                self.assertIn("native-window-command=delivered shutdown=orderly", log)
+                requests = [json.loads(row)["kind"] for row in events.read_text().splitlines()]
+                self.assertEqual(requests.count("shutdown"), 1)
+                self.assertFalse(set(requests) & {"start", "stop", "recreate", "delete"})
+
+    def test_sidebar_action_buttons_and_targeted_menu(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "sidebar-controls"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=12)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("sidebar-controls=visible framed target=nonselecting disabled=safe", result.stdout)
 
     def test_friendly_names_ordering_and_modal_shortcut_isolation(self):
         environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")

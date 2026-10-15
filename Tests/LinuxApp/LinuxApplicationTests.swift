@@ -28,6 +28,7 @@ private final class TestContext {
     var hostDedSent = false
     var hostIntegrationVerified = false
     var failure: String?
+    var nativeKeys: NativeKeyInput?
     var exitCode: Int32 = 1
 
     init(python: String, fixture: String, mode: String, application: UnsafeMutablePointer<GtkApplication>) {
@@ -55,6 +56,7 @@ private func activate(_ rawApplication: UnsafeMutableRawPointer?, _ data: Unsafe
     context.controller = controller
     do {
         try controller.start()
+        if context.mode.hasPrefix("native-window-") { context.nativeKeys = try NativeKeyInput() }
         _ = g_timeout_add(10, testTick, Unmanaged.passUnretained(context).toOpaque())
     } catch {
         context.failure = "start failed: \(error)"
@@ -67,6 +69,42 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
     guard let data else { return 0 }
     let context = Unmanaged<TestContext>.fromOpaque(data).takeUnretainedValue()
     guard let controller = context.controller, let window = controller.window else { return 1 }
+    if context.mode.hasPrefix("native-window-") {
+        if Date().timeIntervalSince(context.startedAt) > 8 && context.failure == nil {
+            context.failure = "native window shortcut did not complete orderly shutdown: \(context.mode)"
+            controller.requestShutdown()
+        }
+        guard controller.backend.state == .ready, window.workspaceCount == 1,
+              gtk_widget_get_mapped(UnsafeMutableRawPointer(window.window).assumingMemoryBound(to: GtkWidget.self)) != 0 else { return 1 }
+        if !context.connectSent {
+            context.connectSent = true
+            if context.mode.contains("modal") {
+                let root = gtk_window_get_child(window.window)!
+                _ = gtk_widget_activate(namedWidget(root, name: "new-workspace")!)
+            }
+        }
+        if !context.hostCommandSent {
+            var target = window.window
+            if context.mode.contains("modal") {
+                let windows = gtk_window_get_toplevels()!
+                var dialog: UnsafeMutablePointer<GtkWindow>?
+                for index in 0..<g_list_model_get_n_items(windows) {
+                    guard let raw = g_list_model_get_item(windows, index) else { continue }
+                    let candidate = raw.assumingMemoryBound(to: GtkWindow.self)
+                    if gtk_window_get_transient_for(candidate) == window.window,
+                       gtk_widget_get_mapped(raw.assumingMemoryBound(to: GtkWidget.self)) != 0 {
+                        dialog = candidate
+                    }
+                    g_object_unref(raw)
+                }
+                guard let dialog else { return 1 }
+                target = dialog
+            }
+            context.hostCommandSent = true
+            context.nativeKeys?.press(["Control_L", "Shift_L", context.mode.hasSuffix("close") ? "w" : "q"], in: target)
+        }
+        return 1
+    }
     if context.mode == "host" {
         if Date().timeIntervalSince(context.startedAt) > 90 && context.failure == nil {
             let pane = window.pane(forWorkspace: context.fixture)
@@ -541,6 +579,11 @@ struct LinuxApplicationTests {
         _ = g_signal_connect_data(application, "activate", callback,
                                   Unmanaged.passUnretained(context).toOpaque(), nil, GConnectFlags(rawValue: 0))
         _ = g_application_run(UnsafeMutableRawPointer(application).assumingMemoryBound(to: GApplication.self), 0, nil)
+        if context.mode.hasPrefix("native-window-"), context.failure == nil, context.hostCommandSent,
+           context.controller?.backend.state == .stopped {
+            print("native-window-command=delivered shutdown=orderly")
+            exit(EXIT_SUCCESS)
+        }
         if let failure = context.failure {
             fputs("LinuxApplicationTests: \(failure)\n", stderr)
             exit(EXIT_FAILURE)

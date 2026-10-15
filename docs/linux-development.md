@@ -182,9 +182,21 @@ fresh status and never start stopped workspaces.
 
 Linux shortcuts: Ctrl+Shift+1–9 selects visible workspaces; Ctrl+Shift+B toggles
 the sidebar; Ctrl+Shift+R reloads SSH; Ctrl+Shift+O opens the active folder in
-Zed; Ctrl+Shift+T creates a terminal; Ctrl+PageUp/PageDown cycles tabs;
+Zed; Ctrl+Shift+T creates a terminal; Ctrl+Tab selects the next terminal and
+Ctrl+PageUp/PageDown selects the previous/next terminal;
 Ctrl+Shift+Alt+Up/Down reorders the selected workspace. Copy/paste uses
-Ctrl+Shift+C/V. Editable fields and modal dialogs retain their keyboard input.
+Ctrl+Shift+C/V and targets the active terminal even when a sidebar row owns
+focus. Ctrl+Shift+Q quits, Ctrl+Shift+W closes the active window/dialog,
+Ctrl+Shift+M minimizes, and Ctrl+Shift+H hides the window; reopening DevSpace
+restores it. Quit/Minimize/Hide/Close remain available during dialogs. Return
+submits a valid form and Escape cancels/closes a dialog. Other application
+shortcuts do not override editable fields or modal input; ordinary terminal
+Ctrl+C/V/R/B/T remain shell input. These are Linux Ctrl+Shift shortcuts, not
+Super/Windows-key bindings.
+
+Each sidebar row has an always-visible vertical-three-dots (⋮) menu button;
+right-click remains available. Opening its menu does not select/connect that
+workspace. New, Guide, Stop and menu controls use native GTK button styling.
 
 An SSH connection error clears when that workspace successfully opens a new
 terminal. Connecting another workspace does not clear the failed workspace's

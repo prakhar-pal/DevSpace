@@ -116,16 +116,19 @@ final class WorkspaceWindow {
             let button = gtk_button_new_with_label(title)!
             gtk_widget_set_name(button, name)
             gtk_widget_set_hexpand(button, 1)
-            gtk_widget_add_css_class(button, "flat")
             connectAction(button, context: WorkspaceActionContext(window: self, kind: kind, payload: [:]))
             gtk_box_append(footerBox, button)
             if kind == "new_workspace" { newWorkspaceButton = button }
         }
         gtk_box_append(sidebar, footer)
         refreshLifecyclePanel()
+        installKeyController(on: UnsafeMutableRawPointer(window).assumingMemoryBound(to: GtkWidget.self))
+    }
+
+    private func installKeyController(on widget: UnsafeMutablePointer<GtkWidget>) {
         let keys = gtk_event_controller_key_new()!
         gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE)
-        gtk_widget_add_controller(rootWidget, keys)
+        gtk_widget_add_controller(widget, keys)
         let callback = unsafeBitCast(
             devspaceLinuxWindowKeyPressed as @convention(c)
                 (UnsafeMutableRawPointer?, UInt32, UInt32, UInt32, UnsafeMutableRawPointer?) -> Int32,
@@ -141,6 +144,7 @@ final class WorkspaceWindow {
 
     func present() {
         gtk_window_present(window)
+        if let renameDialog { gtk_window_present(UnsafeMutableRawPointer(renameDialog).assumingMemoryBound(to: GtkWindow.self)) }
     }
 
     func setConnectionStates(_ states: [String: String]) {
@@ -152,13 +156,36 @@ final class WorkspaceWindow {
     func handleShortcut(keyval: UInt32, modifiers: GdkModifierType) -> Bool {
         let allowed = GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue
         let relevant = allowed | GDK_ALT_MASK.rawValue | GDK_SUPER_MASK.rawValue
+        let key = gdk_keyval_to_lower(keyval)
+        // Like macOS, app/window commands remain available when a dialog or
+        // editable field owns all other keyboard input.
+        if modifiers.rawValue & relevant == allowed {
+            switch key {
+            case UInt32(GDK_KEY_q):
+                if let application = gtk_window_get_application(window) {
+                    g_action_group_activate_action(OpaquePointer(UnsafeMutableRawPointer(application)), "quit", nil)
+                }
+                return true
+            case UInt32(GDK_KEY_m):
+                gtk_window_minimize(window)
+                return true
+            case UInt32(GDK_KEY_h):
+                if let renameDialog { gtk_widget_set_visible(renameDialog, 0) }
+                gtk_widget_set_visible(UnsafeMutableRawPointer(window).assumingMemoryBound(to: GtkWidget.self), 0)
+                return true
+            case UInt32(GDK_KEY_w):
+                gtk_window_close(renameDialog.map { UnsafeMutableRawPointer($0).assumingMemoryBound(to: GtkWindow.self) } ?? window)
+                return true
+            default: break
+            }
+        }
         guard actionsEnabled, renameDialog == nil else { return false }
         if let focus = gtk_window_get_focus(window),
            g_type_check_instance_is_a(UnsafeMutableRawPointer(focus).assumingMemoryBound(to: GTypeInstance.self), gtk_editable_get_type()) != 0 {
             return false
         }
         if modifiers.rawValue & relevant == GDK_CONTROL_MASK.rawValue,
-           keyval == UInt32(GDK_KEY_Page_Up) || keyval == UInt32(GDK_KEY_Page_Down),
+           [UInt32(GDK_KEY_Tab), UInt32(GDK_KEY_Page_Up), UInt32(GDK_KEY_Page_Down)].contains(keyval),
            let selected = snapshot.selectedID, canMutateTerminal(selected) {
             let panes = terminalOrder.filter { $0.workspaceID == selected }
             guard panes.count > 1 else { return false }
@@ -176,11 +203,11 @@ final class WorkspaceWindow {
             return true
         }
         guard modifiers.rawValue & relevant == allowed else { return false }
-        if let focus = gtk_window_get_focus(window),
-           g_type_check_instance_is_a(UnsafeMutableRawPointer(focus).assumingMemoryBound(to: GTypeInstance.self), gtk_editable_get_type()) != 0 {
-            return false
+        if key == UInt32(GDK_KEY_c) || key == UInt32(GDK_KEY_v),
+           let selected = snapshot.selectedID, canMutateTerminal(selected),
+           let pane = pane(forWorkspace: selected) {
+            return pane.handleKey(keyval: keyval, modifiers: modifiers)
         }
-        let key = gdk_keyval_to_lower(keyval)
         if key == UInt32(GDK_KEY_b), let root = gtk_window_get_child(window),
            let sidebar = gtk_widget_get_first_child(root) {
             let visible: Int32 = gtk_widget_get_visible(sidebar) == 0 ? 1 : 0
@@ -592,13 +619,19 @@ final class WorkspaceWindow {
             let stop = gtk_button_new_from_icon_name("media-playback-stop-symbolic")!
             gtk_widget_set_name(stop, "stop-workspace")
             gtk_widget_set_tooltip_text(stop, "Stop \(alias ?? workspace.id)")
-            gtk_widget_add_css_class(stop, "flat")
             gtk_widget_set_sensitive(stop, actionsEnabled && !busy ? 1 : 0)
             connectAction(stop, context: WorkspaceActionContext(
                 window: self, kind: "stop", payload: ["workspace_id": workspace.id]
             ))
             gtk_box_append(container, stop)
         }
+        let menu = gtk_button_new_from_icon_name("view-more-symbolic")!
+        gtk_widget_set_name(menu, "workspace-menu-\(workspace.id)")
+        gtk_widget_set_tooltip_text(menu, "More options for \(alias ?? workspace.id)")
+        gtk_widget_set_sensitive(menu, actionsEnabled ? 1 : 0)
+        connectAction(menu, context: WorkspaceActionContext(window: self, kind: "menu",
+            payload: ["workspace_id": workspace.id]))
+        gtk_box_append(container, menu)
         gtk_box_append(destination ?? workspaceRows, UnsafeMutableRawPointer(container).assumingMemoryBound(to: GtkWidget.self))
     }
 
@@ -762,6 +795,7 @@ final class WorkspaceWindow {
         gtk_window_set_transient_for(modal, window)
         gtk_window_set_modal(modal, 1)
         gtk_window_set_destroy_with_parent(modal, 1)
+        installKeyController(on: widget)
         gtk_window_set_default_size(modal, kind == "guide" ? 560 : 460, kind == "guide" ? 520 : -1)
         let contentWidget = gtk_dialog_get_content_area(dialog)!
         let content = UnsafeMutableRawPointer(contentWidget).assumingMemoryBound(to: GtkBox.self)
@@ -792,13 +826,15 @@ final class WorkspaceWindow {
             for text in [
                 "Ctrl+Shift+1–9 — Select a visible workspace", "Ctrl+Shift+B — Toggle sidebar",
                 "Ctrl+Shift+R — Reload SSH session", "Ctrl+Shift+O — Open active folder in Zed",
-                "Ctrl+Shift+T — New terminal", "Ctrl+PageUp / PageDown — Previous / next terminal",
+                "Ctrl+Shift+T — New terminal", "Ctrl+Tab — Next terminal", "Ctrl+PageUp / PageDown — Previous / next terminal",
                 "Ctrl+Shift+C / V — Copy selection / paste text or image",
+                "Ctrl+Shift+Q / W — Quit app / close active window",
+                "Ctrl+Shift+M / H — Minimize / hide window (reopen DevSpace to show it)",
                 "Ctrl+Shift+Alt+Up / Down — Reorder selected workspace", "Esc — Close this guide",
                 "Running workspaces connect automatically at launch. Connect reopens a disconnected session; stopped workspaces are never awakened automatically.",
                 "Start opens a stopped workspace. Stop shuts it down. Exiting the last shell only disconnects SSH.",
-                "New provisions from a repository. Right-click a workspace for Recreate; confirmation is required before replacing its container. Provisioning logs and cancellation appear in the main pane.",
-                "Right-click for friendly names, Move Up/Down and Hide/Show. The selected hidden workspace stays reachable when Hidden is collapsed.",
+                "New provisions from a repository. Use a workspace's ⋮ menu for Recreate; confirmation is required before replacing its container. Provisioning logs and cancellation appear in the main pane.",
+                "Use ⋮ or right-click for friendly names, Move Up/Down and Hide/Show. The selected hidden workspace stays reachable when Hidden is collapsed.",
                 "New Terminal shares the existing SSH connection. Tabs keep their shell and scrollback, use working-directory titles and appear only when multiple shells are open.",
                 "Images are uploaded to the active workspace and their paths inserted into its shell. Open in Zed follows the active terminal folder when available.",
                 "Claude Code hooks are installed on connection and removed on disconnect. Notifications and sidebar badges report completion or requests for input; selecting a workspace clears its badge."
@@ -893,6 +929,7 @@ final class WorkspaceWindow {
         gtk_window_set_transient_for(modal, window)
         gtk_window_set_modal(modal, 1)
         gtk_window_set_destroy_with_parent(modal, 1)
+        installKeyController(on: widget)
         gtk_window_set_default_size(modal, 380, -1)
         let contentWidget = gtk_dialog_get_content_area(dialog)!
         let content = UnsafeMutableRawPointer(contentWidget).assumingMemoryBound(to: GtkBox.self)
@@ -1038,6 +1075,12 @@ private func devspaceLinuxWorkspaceAction(_ button: UnsafeMutableRawPointer?, _ 
     guard let data else { return }
     let context = Unmanaged<WorkspaceActionContext>.fromOpaque(data).takeUnretainedValue()
     guard let button, gtk_widget_is_sensitive(button.assumingMemoryBound(to: GtkWidget.self)) != 0 else { return }
+    if context.kind == "menu", let workspace = context.payload["workspace_id"] {
+        let source = button.assumingMemoryBound(to: GtkWidget.self)
+        context.window?.showWorkspaceMenu(workspace, relativeTo: source,
+            x: Double(gtk_widget_get_width(source)) / 2, y: Double(gtk_widget_get_height(source)))
+        return
+    }
     if let popover = gtk_widget_get_ancestor(button.assumingMemoryBound(to: GtkWidget.self), gtk_popover_get_type()) {
         gtk_popover_popdown(UnsafeMutableRawPointer(popover).assumingMemoryBound(to: GtkPopover.self))
     }
