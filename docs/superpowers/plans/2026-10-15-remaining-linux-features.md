@@ -323,6 +323,32 @@ full Linux rerun and refreshed optimized frontend are required before bundling.
 wc-1 was rechecked read-only and remains Stopped. Existing production PIDs were
 confirmed under build/linux-production-bundle, not the inactive next output.
 
+Final local handoff verified, source code 6b806cb: Core252 passed (one opt-in
+skip); fixture-only Linux109 passed (four opt-in skips); optimized products and
+relocated optimized-runtime1 passed. Production bundle refreshed at
+build/linux-production-bundle-next, without a new .deb or installation. Its two
+executables match the release build byte-for-byte. The approved copyright
+inventory was copied from packaging/debian/copyright into share/doc/devspace
+alongside GPL, Swift and complete ICU notices and compared byte-for-byte.
+Frontend SHA-256: 181c85a88be57c9dd8d7d94584684d35ee4bcf9aef28ad00d743840b99d4901c.
+Backend SHA-256: 4edc97fe459fdeba0c8096328cab1f5bce58a7156f95c6876ee42e4b256504f8.
+The old M05 .deb retains its recorded de02ec5c... SHA-256 and was not rebuilt.
+The current dev bundle was rebuilt and reopened; host process checks confirmed
+new DevSpaceDev/DevSpaceDevBackend alongside the unchanged production PIDs
+3442857/3442951 under build/linux-production-bundle. The new production bundle
+was NOT launched, replaced into the daily-driver path or installed. Host GTK
+still reports the previously observed EGL, stale accessibility-bus and slider
+warnings; no renderer/input-method changes were inferred from them.
+
+All source-feature milestones and eight final-review fixes are implemented and
+committed locally. Remaining acceptance is explicit: wc-1 remains Stopped, so
+live hooks/image/multi-shell checks are pending; physical IME/banner/clipboard,
+clean Ubuntu26 installation and current-head macOS/Linux CI are unclaimed.
+Updating existing PR111 is awaiting the user's asynchronous publishing approval;
+the feature branch is preserved without a push/merge. The existing local stack
+tracks only feat/gnu-linux against main and the open PR111. No worktree or new
+compiler was created. Package.resolved was restored after the final Swift builds.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.
