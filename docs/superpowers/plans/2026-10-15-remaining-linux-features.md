@@ -59,6 +59,16 @@ rebuilt. Tests clean their generated PNGs, including the failing oversized case.
 M03 remains open for editor discovery/fallback parity and live acceptance;
 M04–M10 are not implemented. No release build/installation is claimed.
 
+M03 third increment: Linux editor discovery now honors absolute PATH entries
+first, then standard user/system Zed install locations. A private-home native
+GTK test failed for a user install outside PATH before the fix, then passed;
+it also verifies PATH override precedence and exact remote URL delivery without
+launching the user's editor. GTK8 passed (one opt-in live skip, including the
+backend regression suite); development products and bundle rebuilt. Missing and
+nonzero-exit Zed remain nonfatal. Fallback policy/stale-request parity and live
+acceptance still remain before M03 completion. Per the latest user instruction,
+open the development build after each verified milestone, preserving production.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

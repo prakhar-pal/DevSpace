@@ -303,9 +303,25 @@ final class LinuxApplicationController {
             window?.setStatus("Invalid remote editor link")
             return
         }
+        let environment = ProcessInfo.processInfo.environment
+        var candidates = (environment["PATH"] ?? "").split(separator: ":")
+            .filter { $0.hasPrefix("/") }.map { "\($0)/zed" }
+        if let home = environment["HOME"], home.hasPrefix("/") {
+            candidates += ["\(home)/.local/bin/zed", "\(home)/.local/zed.app/bin/zed"]
+        }
+        candidates += ["/usr/local/bin/zed", "/usr/bin/zed"]
+        guard let cli = candidates.first(where: {
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: $0, isDirectory: &isDirectory)
+                && !isDirectory.boolValue && FileManager.default.isExecutableFile(atPath: $0)
+        }) else {
+            window?.setStatus("Could not launch Zed; install it and add it to PATH")
+            return
+        }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["zed", url]
+        process.executableURL = URL(fileURLWithPath: cli)
+        process.arguments = [url]
+        process.standardInput = FileHandle.nullDevice
         do {
             try process.run()
             editorProcesses.append(process)

@@ -58,7 +58,7 @@ for line in sys.stdin:
         send({"version": 1, "id": request["id"], "kind": "completed"})
     elif kind == "terminal_output":
         send({"version": 1, "kind": "platform_error", "payload": {"message": "fixture SSH error"}})
-        if sys.argv[1:] == ["zed-failure"]:
+        if sys.argv[1:] in (["zed-failure"], ["zed-success"]):
             send({"version": 1, "kind": "platform_open_zed", "payload": {"url": "ssh://fixture-pod.devpod/tmp/project"}})
         stale = "00000000-0000-0000-0000-000000000003"
         for effect in (

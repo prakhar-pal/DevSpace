@@ -199,6 +199,9 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
                 return 1
             }
             guard pane.text.contains("received:editor-error-probe") else { return 1 }
+        } else if context.mode == "zed-success" {
+            guard let record = ProcessInfo.processInfo.environment["DEVSPACE_TEST_ZED_RECORD"],
+                  FileManager.default.fileExists(atPath: record) else { return 1 }
         } else if !context.notificationActivated {
             let actions = OpaquePointer(UnsafeMutableRawPointer(context.application))
             guard g_action_group_has_action(actions, "activate-workspace") != 0 else {

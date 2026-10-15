@@ -157,6 +157,7 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
                     executable.write_text("#!/bin/sh\nexit 37\n")
                     executable.chmod(0o755)
                 environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+                environment["HOME"] = str(tools)
                 environment.pop("WAYLAND_DISPLAY", None)
                 result = subprocess.run([
                     "xvfb-run", "-a", "/usr/bin/env", f"PATH={tools}", str(self.app_runner),
@@ -165,6 +166,33 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
                 ], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("zed-failure=visible terminal=round-trip actions=enabled", result.stdout)
+
+    def test_zed_user_install_is_discovered_without_path_and_path_override_wins(self):
+        for override in (False, True):
+            with self.subTest(path_override=override), tempfile.TemporaryDirectory(dir=self.build) as temporary:
+                home = Path(temporary)
+                user_bin = home / ".local/bin"
+                user_bin.mkdir(parents=True)
+                path_bin = home / "tools"
+                path_bin.mkdir()
+                record = home / "editor-request"
+                for directory, label in ((user_bin, "user"), (path_bin, "override")):
+                    if directory == path_bin and not override:
+                        continue
+                    executable = directory / "zed"
+                    executable.write_text(f'#!/bin/sh\nprintf "{label}:%s\\n" "$1" > "$DEVSPACE_TEST_ZED_RECORD"\n')
+                    executable.chmod(0o755)
+                environment = dict(os.environ, HOME=str(home), DEVSPACE_TEST_ZED_RECORD=str(record),
+                                   G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+                environment.pop("WAYLAND_DISPLAY", None)
+                result = subprocess.run([
+                    "xvfb-run", "-a", "/usr/bin/env", f"PATH={path_bin}", str(self.app_runner),
+                    shutil.which("python3") or "/usr/bin/python3",
+                    str(ROOT / "Tests/Linux/fixtures/linux_ui_backend_peer.py"), "zed-success",
+                ], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                label = "override" if override else "user"
+                self.assertEqual(record.read_text(), f"{label}:ssh://fixture-pod.devpod/tmp/project\n")
 
     @unittest.skipUnless(os.environ.get("DEVSPACE_HOST_UI_WORKSPACE"),
                          "opt-in authorized real workspace through GTK/VTE")
