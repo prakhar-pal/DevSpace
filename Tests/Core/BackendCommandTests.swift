@@ -16,7 +16,7 @@ final class BackendCommandTests: XCTestCase {
             BackendProtocolMessage(id: "request", kind: "start", payload: ["workspace_id": "pod"]),
             runner: runner
         )
-        XCTAssertEqual(runner.arguments, [["up", "--ide", "none", "--", "pod"]])
+        XCTAssertEqual(runner.arguments, [["--log-output", "raw", "up", "--ide", "none", "--", "pod"]])
         XCTAssertEqual(response.id, "request")
         XCTAssertEqual(response.kind, "completed")
     }
@@ -36,6 +36,15 @@ final class BackendCommandTests: XCTestCase {
             BackendProtocolMessage(kind: "create", payload: ["repository": "/path with spaces", "workspace_id": "new"]),
             runner: runner
         )
-        XCTAssertEqual(runner.arguments, [["up", "--ide", "none", "--id", "new", "--", "/path with spaces"]])
+        XCTAssertEqual(runner.arguments, [["--log-output", "raw", "up", "--ide", "none", "--id", "new", "--", "/path with spaces"]])
+    }
+
+    func testAllLifecycleCommandsRequestUnformattedLogsForPlainTextProgress() throws {
+        for kind in ["start", "stop", "recreate", "delete", "create"] {
+            let arguments = try BackendWorkspaceCommands.arguments(BackendProtocolMessage(
+                kind: kind, payload: ["workspace_id": "pod", "repository": "https://example.invalid/new.git"]))
+            XCTAssertEqual(Array(arguments.prefix(2)), ["--log-output", "raw"], kind)
+            XCTAssertEqual(arguments.last, kind == "create" ? "https://example.invalid/new.git" : "pod")
+        }
     }
 }

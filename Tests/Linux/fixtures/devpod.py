@@ -10,6 +10,9 @@ import subprocess
 
 state_file = Path(os.environ["DEVSPACE_TEST_STATE"])
 args = sys.argv[1:]
+raw_logging = args[:2] == ["--log-output", "raw"]
+if raw_logging:
+    args = args[2:]
 
 def slow_operation():
     if not state_file.with_name("slow").exists():
@@ -66,7 +69,7 @@ elif args == ["up", "--ide", "none", "--", "pod"]:
         elif state_file.with_name("large-output").exists():
             print("x" * 65536 + "\nPreparing λ界🙂", flush=True)
         else:
-            print("Preparing λ界🙂", flush=True)
+            print("Preparing λ界🙂" if raw_logging else "\x1b[0;1;36mPreparing λ界🙂\x1b[0m", flush=True)
         print("Checking provider", file=sys.stderr, flush=True)
         time.sleep(30)
     state_file.write_text("Running")

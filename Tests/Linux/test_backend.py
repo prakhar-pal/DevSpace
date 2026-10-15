@@ -386,6 +386,17 @@ class BackendIntegrationTests(unittest.TestCase):
         self.assertEqual(self.response_for(running_request)["kind"], "cancelled")
         self.assertEqual(self.snapshot_request("snapshot")["operations"], [])
 
+    def test_provisioning_log_is_plain_text_without_ansi_controls(self):
+        self.begin_slow_command()
+        deadline = time.monotonic() + 5
+        while True:
+            active = self.snapshot_request("snapshot").get("operations", [])
+            if active and "Checking provider" in active[0]["output"]:
+                break
+            self.assertLess(time.monotonic(), deadline, "provisioning log did not arrive")
+        self.assertIn("Preparing λ界🙂", active[0]["output"])
+        self.assertNotIn("\x1b", active[0]["output"], "ANSI formatting leaked into the plain-text progress panel")
+
     def test_conflicting_operation_is_rejected_without_queueing(self):
         self.begin_slow_command()
         running_request = str(self.sequence)

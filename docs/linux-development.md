@@ -168,6 +168,11 @@ until Close is pressed. Successful creation/recreation reconnects only after
 confirmed Running status. Friendly names and sidebar organization are saved
 without changing DevPod IDs.
 
+Lifecycle-command progress is plain text, not a terminal: the backend requests
+DevPod's `--log-output raw` format so CLI colour escapes do not appear in the
+GTK progress panel or retained failure output. macOS's PTY-rendered logs keep
+their existing formatting.
+
 Additional terminals explicitly share one owned SSH master. Normal Connect,
 polling and selection do not create duplicate shells. The tab strip appears
 only with multiple panes, uses working-directory titles (numbers until known),

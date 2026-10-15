@@ -32,6 +32,8 @@ public enum BackendWorkspaceCommands {
             default: throw DevpodError("unsupported workspace command: \(message.kind)")
             }
         }
-        return args
+        // Backend progress is plain text, unlike macOS's PTY-rendered logs.
+        // Ask DevPod not to emit ANSI formatting into the GTK log label.
+        return ["--log-output", "raw"] + args
     }
 }
