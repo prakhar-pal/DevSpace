@@ -634,11 +634,16 @@ private func handle(_ message: BackendProtocolMessage) {
                     )
                     seenDefinitive = plan.seenDefinitive
                     autoConnect = plan.autoConnect
-                    for id in Array(starting) where views.contains(where: { $0.id == id && $0.state == "Running" }) {
+                    let activeOperations = controller.snapshot.operations
+                    let busyWorkspaces = Set(activeOperations.compactMap(\.workspaceID))
+                    let creating = activeOperations.contains { $0.kind == "create" }
+                    for id in Array(starting) where !busyWorkspaces.contains(id)
+                        && views.contains(where: { $0.id == id && $0.state == "Running" }) {
                         starting.remove(id)
                     }
                     terminals.reconcile(views)
-                    for workspace in plan.connect where !terminals.openedWorkspaces.contains(workspace) && sshRecoveries[workspace] == nil {
+                    for workspace in plan.connect where !creating && !busyWorkspaces.contains(workspace)
+                        && !terminals.openedWorkspaces.contains(workspace) && sshRecoveries[workspace] == nil {
                         do { try beginConnection(workspace) }
                         catch { _ = send(BackendProtocolMessage(kind: "platform_error", payload: [
                             "message": "Could not connect to running workspace \(workspace): \(error)",

@@ -280,6 +280,15 @@ of VTE's deferred unmapped rendering, then verifies output after reveal. No real
 workspace shell was restarted. Remaining review fixes: provisioning/poll gating,
 creation discovery and expanded hidden-list scrolling.
 
+Provisioning/poll review fix verified: Running status cannot open SSH while its
+Start/Recreate is active; an active Create conservatively holds new poll-driven
+connections until its target is known/completed. Starting intent is not cleared
+merely by an early Running report. The controlled regression first observed a
+connecting transport during running Start, then passed alongside Start-readiness
+and successful-Recreate regressions (three backend cases; backend product built).
+Creation discovery and hidden scrolling remain open. New discovery regressions
+are RED for early completion/transient-list failure; they are not passing evidence.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

@@ -314,6 +314,24 @@ class BackendIntegrationTests(unittest.TestCase):
         self.assertEqual(self.request("shutdown")["kind"], "stopped")
         self.assertTrue((self.directory / "cleaned").exists(), "shutdown acknowledged before command cleanup")
 
+    def test_running_status_during_start_cannot_open_ssh_before_completion(self):
+        (self.directory / "state").write_text("Stopped")
+        self.request("poll")
+        self.begin_slow_command()
+        operation_id = str(self.sequence)
+        (self.directory / "state").write_text("Running")
+        self.request("poll")
+        self.request("poll")
+        response = self.request("snapshot")
+        snapshot = json.loads(response["payload"]["json"])
+        self.assertEqual(snapshot["operations"][0]["kind"], "start")
+        self.assertNotIn("pod", json.loads(response["payload"]["connections"]),
+                         "Running status opened SSH while Start was still provisioning")
+        self.request("cancel", request_id=operation_id)
+        self.assertEqual(self.response_for(operation_id)["kind"], "cancelled")
+        self.request("poll")
+        self.assertNotIn("pod", json.loads(self.request("snapshot")["payload"]["connections"]))
+
     def test_connect_and_reload_reject_busy_workspaces(self):
         self.request("poll")
         self.begin_slow_command()
