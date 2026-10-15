@@ -349,6 +349,40 @@ the feature branch is preserved without a push/merge. The existing local stack
 tracks only feat/gnu-linux against main and the open PR111. No worktree or new
 compiler was created. Package.resolved was restored after the final Swift builds.
 
+### Automated acceptance and release verification — 2026-10-15
+
+Fresh verification of local source e9597ab and production bundle
+`build/linux-production-20261015-124312` completed without implementation changes:
+
+- Core: 252 tests, one opt-in skip, zero failures (19.291 seconds).
+- Full Linux fixture/native acceptance: 109 tests, four opt-in skips, zero
+  failures (260.657 seconds); log `.tmp/linux-acceptance-current.log`.
+- Optimized-runtime relocation and isolated backend handshake: one test passed;
+  log `.tmp/linux-release-acceptance-current.log`.
+- Actual dev and production binaries: private Xvfb/private-D-Bus coexistence,
+  repeated activation with one backend per channel and controlled teardown
+  passed; log `.tmp/linux-channel-acceptance-current.log`. The initial invocation
+  skipped because its single-prefix assumption did not locate the separate dev
+  bundle; the rerun supplied both actual paths and executed the test successfully.
+- Controlled terminal/quit acceptance on the physical host's Wayland and X11
+  displays passed, one test each (72.810/79.278 seconds), using private buses
+  and no physical clipboard access; logs `.tmp/linux-host-wayland-acceptance.log`
+  and `.tmp/linux-host-x11-acceptance.log`.
+- Both production executables match optimized build outputs byte-for-byte,
+  retaining the previously recorded frontend/backend SHA-256 hashes. Their ldd
+  outputs resolve all dependencies without a repository-local toolchain;
+  `desktop-file-validate` passed and the copyright inventory matches its source.
+- No production launch, installation, shutdown, real workspace lifecycle change
+  or new distributable .deb occurred; the existing .deb SHA-256 is unchanged.
+  Package.resolved was restored after SwiftPM removed the macOS-only lockfile.
+
+Read-only host DevPod status confirms wc-1 is Stopped, so real SSH/hook/image/
+multi-shell acceptance remains unavailable without starting an authorized pod.
+Physical IME/banner/clipboard and clean Ubuntu26 installation remain unverified.
+Read-only PR111 inspection found successful Linux/macOS CI on old remote commit
+23e3fa5, not current local source. No remote changes were made; publishing current
+commits and obtaining current-head CI still requires the pending user approval.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.
