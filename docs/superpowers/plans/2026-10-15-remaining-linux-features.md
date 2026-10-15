@@ -289,6 +289,13 @@ and successful-Recreate regressions (three backend cases; backend product built)
 Creation discovery and hidden scrolling remain open. New discovery regressions
 are RED for early completion/transient-list failure; they are not passing evidence.
 
+Expanded-hidden review fix verified: hidden rows now have a height-bounded native
+scroller above the footer, preserving the existing width propagation and selected
+hidden-row rule. A forty-hidden-workspace native regression first found no scroll
+path, then passed alongside visible-row scrolling and hide/show terminal-preservation
+checks (three native GTK cases). Creation discovery is the remaining review item;
+its three Swift policy tests pass, but backend integration is not yet implemented.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

@@ -70,6 +70,11 @@ struct WorkspaceWindowTests {
                 g_object_unref(UnsafeMutableRawPointer(application))
                 return
             }
+            if CommandLine.arguments.dropFirst().contains("hidden-scrolling") {
+                try testHiddenWorkspaceScrolling(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
 
             let window = WorkspaceWindow(application: application)
             var commands: [(String, [String: String]?)] = []
@@ -599,6 +604,28 @@ struct WorkspaceWindowTests {
         gtk_dialog_response(UnsafeMutableRawPointer(failed).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_ACCEPT.rawValue)
         try expect(commands.count == count, "backend failure allowed a pending rename to mutate state")
         print("organization=rename-order shortcuts=bounded cancel=nonmutating")
+    }
+
+    private static func testHiddenWorkspaceScrolling(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let window = WorkspaceWindow(application: application)
+        defer { gtk_window_destroy(window.window) }
+        let workspaces = (1...40).map { WorkspaceView(id: "hidden-\($0)", provider: "test", source: "", lastUsed: "", state: "Stopped", error: nil) }
+        window.update(WorkspaceControllerSnapshot(revision: 1, workspaces: workspaces, selectedID: "hidden-40",
+            layout: Layout(hidden: workspaces.map(\.id), hiddenCollapsed: false), terminalPanes: []))
+        window.present()
+        let root = gtk_window_get_child(window.window)!
+        try expect(pumpUntil { gtk_widget_get_mapped(root) != 0 }, "hidden-list window did not map")
+        guard let scroll = namedWidget("hidden-workspaces-scroll", in: root) else { throw TestFailure("expanded hidden rows have no scroll path") }
+        let adjustment = gtk_scrolled_window_get_vadjustment(OpaquePointer(scroll))!
+        try expect(pumpUntil { gtk_adjustment_get_upper(adjustment) > gtk_adjustment_get_page_size(adjustment) }, "expanded hidden list is not bounded and scrollable")
+        try expect(gtk_widget_get_height(root) <= 900, "hidden rows forced an oversized window")
+        gtk_adjustment_set_value(adjustment, gtk_adjustment_get_upper(adjustment))
+        var commands: [(String, [String: String]?)] = []
+        window.onCommand = { commands.append(($0, $1)) }
+        _ = gtk_widget_activate(namedWidget("select-workspace-hidden-40", in: root)!)
+        try expect(pumpUntil { commands.last?.0 == "select" && commands.last?.1?["workspace_id"] == "hidden-40" }, "last hidden workspace is not selectable")
+        try expect(namedWidget("new-workspace", in: root).map { gtk_widget_get_mapped($0) != 0 } == true, "hidden expansion lost the sidebar footer")
+        print("hidden=scrollable window=bounded footer=reachable")
     }
 
     private static func testFirstShellHandoff(_ application: UnsafeMutablePointer<GtkApplication>) throws {

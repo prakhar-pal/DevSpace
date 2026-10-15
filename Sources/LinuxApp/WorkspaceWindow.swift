@@ -77,7 +77,15 @@ final class WorkspaceWindow {
         gtk_box_append(sidebar, notificationWarningLabel)
         hiddenWorkspaceRows = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 8)!)
             .assumingMemoryBound(to: GtkBox.self)
-        gtk_box_append(sidebar, UnsafeMutableRawPointer(hiddenWorkspaceRows).assumingMemoryBound(to: GtkWidget.self))
+        let hiddenScroll = gtk_scrolled_window_new()!
+        gtk_widget_set_name(hiddenScroll, "hidden-workspaces-scroll")
+        gtk_scrolled_window_set_policy(OpaquePointer(hiddenScroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
+        gtk_scrolled_window_set_propagate_natural_width(OpaquePointer(hiddenScroll), 1)
+        gtk_scrolled_window_set_propagate_natural_height(OpaquePointer(hiddenScroll), 1)
+        gtk_scrolled_window_set_min_content_height(OpaquePointer(hiddenScroll), 0)
+        gtk_scrolled_window_set_max_content_height(OpaquePointer(hiddenScroll), 240)
+        gtk_scrolled_window_set_child(OpaquePointer(hiddenScroll), UnsafeMutableRawPointer(hiddenWorkspaceRows).assumingMemoryBound(to: GtkWidget.self))
+        gtk_box_append(sidebar, hiddenScroll)
 
         let separator = gtk_separator_new(GTK_ORIENTATION_VERTICAL)!
         terminalContainer = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)!)
