@@ -129,7 +129,7 @@ final class WorkspaceWindow {
             guard pane(forWorkspace: workspace.id) != nil else { return false }
             onCommand?("reconnect", ["workspace_id": workspace.id])
         } else {
-            var payload = ["workspace_id": workspace.id]
+            var payload = ["workspace_id": workspace.id, "explicit_directory": "false"]
             if let directory = pane(forWorkspace: workspace.id)?.currentDirectory { payload["directory"] = directory }
             onCommand?("open_zed", payload)
         }

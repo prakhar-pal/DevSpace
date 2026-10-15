@@ -305,11 +305,13 @@ private func startNotifyListener() -> [String: String] {
             DispatchQueue.main.async {
                 guard !stopping,
                       controller.snapshot.workspaces.contains(where: { $0.id == payload.podID && $0.state == "Running" }),
+                      !controller.snapshot.operations.contains(where: { $0.workspaceID == payload.podID }),
                       (try? Devpod.validateId(payload.podID)) != nil,
                       payload.path.hasPrefix("/"), !payload.path.contains("\0") else { return }
                 _ = send(BackendProtocolMessage(kind: "platform_open_zed", payload: [
                     "workspace_id": payload.podID,
                     "url": SSH.zedRemoteURL(podID: payload.podID, workdir: payload.path),
+                    "explicit_directory": "true",
                 ]))
             }
         })
@@ -348,7 +350,7 @@ private func handle(_ message: BackendProtocolMessage) {
                 "workspace_id": workspace,
                 "url": SSH.zedRemoteURL(podID: workspace,
                     workdir: SSH.zedWorkdir(currentDirectory: directory, fallback: SSH.workdir(podID: workspace))),
-                "explicit_directory": directory == nil ? "false" : "true",
+                "explicit_directory": directory == nil || message.payload?["explicit_directory"] == "false" ? "false" : "true",
             ]))
             _ = send(BackendProtocolMessage(id: message.id, kind: "completed"))
         } catch {

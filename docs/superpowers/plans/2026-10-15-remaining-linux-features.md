@@ -69,6 +69,22 @@ nonzero-exit Zed remain nonfatal. Fallback policy/stale-request parity and live
 acceptance still remain before M03 completion. Per the latest user instruction,
 open the development build after each verified milestone, preserving production.
 
+M03 editor fallback implemented: CLI requests always target the workspace URL;
+missing/failing CLI checks for an existing Zed SSH session off the GTK thread.
+An existing session uses the registered Zed desktop application, never DevPod
+provisioning. Otherwise only a non-explicit keyboard request may use
+Devpod.ideArgs; explicit ded folders report a nonfatal error instead of silently
+opening another folder. Keyboard OSC 7 inference is now distinguished from ded.
+Per-workspace generations reject completions after disconnect, reload, stop,
+workspace unavailability and shutdown. GTK11 passed (one opt-in live skip),
+including backend39, exact fallback argv, private desktop activation and a
+delayed-failure-after-disconnect check. Read-only wc-1 status remains Stopped;
+live image/helper/editor acceptance remains pending, not claimed complete.
+Ruling: Linux uses GIO's registered dev.zed.Zed.desktop activation as the native
+counterpart to NSWorkspace activation. Cost: a desktop entry that does not
+honor single-instance activation may behave differently; no DevPod provisioning
+is attempted when an existing remote session is detected.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

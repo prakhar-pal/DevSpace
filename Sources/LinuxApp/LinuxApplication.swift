@@ -2,6 +2,50 @@ import Foundation
 import CGTK
 import DevSpaceCore
 
+private struct EditorRequest: Sendable {
+    let workspace: String
+    let generation = UUID()
+    let url: String
+    let explicitDirectory: Bool
+}
+
+/// Process inspection never blocks GTK. The main loop alone decides whether
+/// a completed probe is still eligible to launch an external application.
+private final class EditorFallbackProbe: @unchecked Sendable {
+    let request: EditorRequest
+    private let lock = NSLock()
+    private var activeSession: Bool?
+
+    init(_ request: EditorRequest) {
+        self.request = request
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/ps")
+            process.arguments = ["axww", "-o", "command="]
+            process.standardInput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            var output = ""
+            if (try? process.run()) != nil {
+                output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                process.waitUntilExit()
+            }
+            try? pipe.fileHandleForReading.close()
+            let active = SSH.zedSessionActive(psOutput: output, podID: request.workspace)
+            lock.lock()
+            activeSession = active
+            lock.unlock()
+        }
+    }
+
+    var result: Bool? {
+        lock.lock()
+        defer { lock.unlock() }
+        return activeSession
+    }
+}
+
 enum LinuxApplicationChannel {
     static func applicationIdentifier(_ channel: String) -> String? {
         switch channel {
@@ -33,7 +77,9 @@ final class LinuxApplicationController {
     private var shutdownStartedAt: Date?
     private var shownBackendFailure = false
     private var pendingImageSources: [String: URL] = [:]
-    private var editorProcesses: [Process] = []
+    private var editorProcesses: [(process: Process, request: EditorRequest, fallback: Bool)] = []
+    private var editorGenerations: [String: UUID] = [:]
+    private var editorFallbacks: [EditorFallbackProbe] = []
 
     init(application: UnsafeMutablePointer<GtkApplication>, channel: String,
          backendExecutableURL: URL? = nil, backendArguments: [String]? = nil) {
@@ -84,6 +130,8 @@ final class LinuxApplicationController {
         }
         do {
             let requestID = try backend.send(kind, payload: payload)
+            if ["stop", "recreate", "disconnect", "reconnect", "terminal_exit"].contains(kind),
+               let workspace = payload?["workspace_id"] { editorGenerations[workspace] = nil }
             if ["connect", "reconnect", "start", "stop"].contains(kind) { window?.setStatus("") }
             if let imageSource { pendingImageSources[requestID] = imageSource }
         } catch {
@@ -95,6 +143,7 @@ final class LinuxApplicationController {
     func requestShutdown() {
         guard !shutdownRequested else { return }
         shutdownRequested = true
+        editorGenerations.removeAll()
         shutdownStartedAt = Date()
         window?.setActionsEnabled(false)
         window?.setStatus("Closing terminal connections…")
@@ -104,13 +153,17 @@ final class LinuxApplicationController {
     @discardableResult
     func pump() -> Int32 {
         for message in backend.takeReceived() { receive(message) }
-        editorProcesses.removeAll { process in
-            guard !process.isRunning else { return false }
-            if process.terminationStatus != 0 {
-                window?.setStatus(process.terminationStatus == 127
-                    ? "Could not launch Zed; install it and add it to PATH"
-                    : "Could not launch Zed (status \(process.terminationStatus))")
+        let completedEditors = editorProcesses.filter { !$0.process.isRunning }
+        editorProcesses.removeAll { !$0.process.isRunning }
+        for item in completedEditors where isCurrentEditorRequest(item.request) {
+            if item.process.terminationStatus != 0 {
+                if item.fallback { window?.setStatus("Could not launch Zed through DevPod") }
+                else { beginEditorFallback(item.request) }
             }
+        }
+        editorFallbacks.removeAll { probe in
+            guard let active = probe.result else { return false }
+            if isCurrentEditorRequest(probe.request) { performEditorFallback(probe.request, sessionActive: active) }
             return true
         }
 
@@ -185,6 +238,10 @@ final class LinuxApplicationController {
                     WorkspaceControllerSnapshot.self, from: Data(json.utf8)
                 )
                 window?.update(snapshot)
+                editorGenerations = editorGenerations.filter { workspace, _ in
+                    snapshot.workspaces.contains { $0.id == workspace && $0.state == "Running" }
+                        && !snapshot.operations.contains { $0.workspaceID == workspace }
+                }
             } catch {
                 window?.setStatus("Workspace backend sent an invalid snapshot")
             }
@@ -197,7 +254,7 @@ final class LinuxApplicationController {
         case "platform_notify":
             sendNotification(message.payload ?? [:])
         case "platform_open_zed":
-            launchZed(message.payload?["url"])
+            launchZed(message.payload ?? [:])
         case let kind where kind.hasPrefix("terminal_"):
             guard let json = message.payload?["json"] else {
                 window?.setStatus("Workspace backend sent an invalid terminal effect")
@@ -298,11 +355,23 @@ final class LinuxApplicationController {
         if let pane = window.pane(forWorkspace: workspaceID) { _ = gtk_widget_grab_focus(pane.widget) }
     }
 
-    private func launchZed(_ url: String?) {
-        guard let url, url.hasPrefix("ssh://") else {
+    private func launchZed(_ payload: [String: String]) {
+        guard let workspace = payload["workspace_id"], (try? Devpod.validateId(workspace)) != nil,
+              let url = payload["url"], let components = URLComponents(string: url),
+              components.scheme == "ssh", components.host == "\(workspace).devpod",
+              components.user == nil, components.password == nil else {
             window?.setStatus("Invalid remote editor link")
             return
         }
+        let request = EditorRequest(workspace: workspace, url: url,
+                                    explicitDirectory: payload["explicit_directory"] != "false")
+        editorGenerations[workspace] = request.generation
+        guard isCurrentEditorRequest(request) else { return }
+        guard let cli = zedCLI() else { beginEditorFallback(request); return }
+        launchEditorProcess(executable: cli, arguments: [url], request: request, fallback: false)
+    }
+
+    private func zedCLI() -> String? {
         let environment = ProcessInfo.processInfo.environment
         var candidates = (environment["PATH"] ?? "").split(separator: ":")
             .filter { $0.hasPrefix("/") }.map { "\($0)/zed" }
@@ -310,23 +379,67 @@ final class LinuxApplicationController {
             candidates += ["\(home)/.local/bin/zed", "\(home)/.local/zed.app/bin/zed"]
         }
         candidates += ["/usr/local/bin/zed", "/usr/bin/zed"]
-        guard let cli = candidates.first(where: {
+        return candidates.first(where: {
             var isDirectory: ObjCBool = false
             return FileManager.default.fileExists(atPath: $0, isDirectory: &isDirectory)
                 && !isDirectory.boolValue && FileManager.default.isExecutableFile(atPath: $0)
-        }) else {
-            window?.setStatus("Could not launch Zed; install it and add it to PATH")
-            return
-        }
+        })
+    }
+
+    private func isCurrentEditorRequest(_ request: EditorRequest) -> Bool {
+        !shutdownRequested && backend.state == .ready
+            && editorGenerations[request.workspace] == request.generation
+            && window?.snapshot.workspaces.contains { $0.id == request.workspace && $0.state == "Running" } == true
+            && window?.snapshot.operations.contains { $0.workspaceID == request.workspace } == false
+    }
+
+    private func launchEditorProcess(executable: String, arguments: [String], request: EditorRequest, fallback: Bool) {
+        guard isCurrentEditorRequest(request) else { return }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: cli)
-        process.arguments = [url]
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
         process.standardInput = FileHandle.nullDevice
         do {
             try process.run()
-            editorProcesses.append(process)
+            editorProcesses.append((process, request, fallback))
         } catch {
-            window?.setStatus("Could not launch Zed; install it and add it to PATH")
+            if fallback { window?.setStatus("Could not launch Zed through DevPod") }
+            else { beginEditorFallback(request) }
+        }
+    }
+
+    private func beginEditorFallback(_ request: EditorRequest) {
+        guard isCurrentEditorRequest(request) else { return }
+        editorFallbacks.removeAll { $0.request.workspace == request.workspace }
+        editorFallbacks.append(EditorFallbackProbe(request))
+    }
+
+    private func performEditorFallback(_ request: EditorRequest, sessionActive: Bool) {
+        if sessionActive {
+            // Like macOS app activation: never run DevPod's provisioning flow
+            // when a remote Zed session already exists.
+            let applications = g_app_info_get_all()
+            defer { g_list_free(applications) }
+            var node = applications
+            var activated = false
+            while let entry = node {
+                if let raw = entry.pointee.data {
+                    let app = OpaquePointer(raw)
+                    if !activated, let id = g_app_info_get_id(app), String(cString: id) == "dev.zed.Zed.desktop" {
+                        var error: UnsafeMutablePointer<GError>?
+                        activated = g_app_info_launch(app, nil, nil, &error) != 0
+                        if let error { g_error_free(error) }
+                    }
+                    g_object_unref(raw)
+                }
+                node = entry.pointee.next
+            }
+            if !activated { window?.setStatus("Could not launch Zed; its existing session must be focused manually") }
+        } else if request.explicitDirectory {
+            window?.setStatus("Could not launch Zed for this folder; install its CLI and try again")
+        } else {
+            launchEditorProcess(executable: "/usr/bin/env", arguments: ["devpod"] + Devpod.ideArgs(request.workspace, ide: "zed"),
+                                request: request, fallback: true)
         }
     }
 

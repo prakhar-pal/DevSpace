@@ -146,6 +146,11 @@ class BackendIntegrationTests(unittest.TestCase):
         events = [frame for frame in self.frames if frame["kind"] == "platform_open_zed"]
         self.assertEqual(events[-1]["payload"]["url"], "ssh://pod.devpod/tmp/a%20b/%CE%B1")
         self.assertEqual(events[-1]["payload"]["explicit_directory"], "true")
+        self.assertEqual(self.request("open_zed", workspace_id="pod", directory="/tmp/a b/α",
+                                      explicit_directory="false")["kind"], "completed")
+        events = [frame for frame in self.frames if frame["kind"] == "platform_open_zed"]
+        self.assertEqual(events[-1]["payload"]["explicit_directory"], "false",
+                         "inferred OSC 7 directory must retain keyboard-launch fallback semantics")
         self.assertEqual(self.request("open_zed", workspace_id="pod", directory="relative")["kind"], "error")
         self.assertEqual(self.request("open_zed", workspace_id="unknown")["kind"], "error")
         (self.directory / "state").write_text("Stopped")
@@ -490,7 +495,8 @@ class BackendIntegrationTests(unittest.TestCase):
         post("pod", token)
         effects = [frame for frame in self.frames if frame["kind"] == "platform_open_zed"]
         self.assertEqual(len(effects), 1, "authenticated ded did not reach the desktop adapter")
-        self.assertEqual(effects[0]["payload"], {"workspace_id": "pod", "url": "ssh://pod.devpod/workspace/a%20b/%CE%B1"})
+        self.assertEqual(effects[0]["payload"], {"workspace_id": "pod", "url": "ssh://pod.devpod/workspace/a%20b/%CE%B1",
+                                               "explicit_directory": "true"})
         self.request("stop", workspace_id="pod")
         self.request("poll")
         post("pod", token)

@@ -58,8 +58,11 @@ for line in sys.stdin:
         send({"version": 1, "id": request["id"], "kind": "completed"})
     elif kind == "terminal_output":
         send({"version": 1, "kind": "platform_error", "payload": {"message": "fixture SSH error"}})
-        if sys.argv[1:] in (["zed-failure"], ["zed-success"]):
-            send({"version": 1, "kind": "platform_open_zed", "payload": {"url": "ssh://fixture-pod.devpod/tmp/project"}})
+        if sys.argv[1:] in (["zed-failure"], ["zed-success"], ["zed-stale"]):
+            send({"version": 1, "kind": "platform_open_zed", "payload": {
+                "workspace_id": workspace, "url": "ssh://fixture-pod.devpod/tmp/project",
+                "explicit_directory": os.environ.get("DEVSPACE_TEST_ZED_EXPLICIT", "true"),
+            }})
         stale = "00000000-0000-0000-0000-000000000003"
         for effect in (
             {"kind": "terminal_inject", "workspaceID": workspace, "generation": stale,

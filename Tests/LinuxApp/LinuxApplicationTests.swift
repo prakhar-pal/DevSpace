@@ -202,6 +202,21 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
         } else if context.mode == "zed-success" {
             guard let record = ProcessInfo.processInfo.environment["DEVSPACE_TEST_ZED_RECORD"],
                   FileManager.default.fileExists(atPath: record) else { return 1 }
+        } else if context.mode == "zed-stale" {
+            guard let record = ProcessInfo.processInfo.environment["DEVSPACE_TEST_ZED_RECORD"],
+                  let started = ProcessInfo.processInfo.environment["DEVSPACE_TEST_ZED_STARTED"],
+                  FileManager.default.fileExists(atPath: started) else { return 1 }
+            if context.failureObservedAt == nil {
+                controller.sendCommand("disconnect", payload: ["workspace_id": "fixture-pod"])
+                context.failureObservedAt = Date()
+                return 1
+            }
+            guard Date().timeIntervalSince(context.failureObservedAt!) > 0.8 else { return 1 }
+            if FileManager.default.fileExists(atPath: record) {
+                context.failure = "stale editor completion launched DevPod after disconnect"
+                controller.requestShutdown()
+                return 1
+            }
         } else if !context.notificationActivated {
             let actions = OpaquePointer(UnsafeMutableRawPointer(context.application))
             guard g_action_group_has_action(actions, "activate-workspace") != 0 else {

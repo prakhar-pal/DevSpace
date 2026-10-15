@@ -158,6 +158,11 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
                     executable.chmod(0o755)
                 environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
                 environment["HOME"] = str(tools)
+                fallback_record = tools / "unexpected-fallback"
+                devpod = tools / "devpod"
+                devpod.write_text('#!/bin/sh\nprintf unexpected > "$DEVSPACE_TEST_ZED_RECORD"\n')
+                devpod.chmod(0o755)
+                environment["DEVSPACE_TEST_ZED_RECORD"] = str(fallback_record)
                 environment.pop("WAYLAND_DISPLAY", None)
                 result = subprocess.run([
                     "xvfb-run", "-a", "/usr/bin/env", f"PATH={tools}", str(self.app_runner),
@@ -166,6 +171,7 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
                 ], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("zed-failure=visible terminal=round-trip actions=enabled", result.stdout)
+                self.assertFalse(fallback_record.exists(), "explicit folder incorrectly used default-folder fallback")
 
     def test_zed_user_install_is_discovered_without_path_and_path_override_wins(self):
         for override in (False, True):
@@ -193,6 +199,85 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 label = "override" if override else "user"
                 self.assertEqual(record.read_text(), f"{label}:ssh://fixture-pod.devpod/tmp/project\n")
+
+    def test_nonexplicit_editor_failure_uses_devpod_fallback_without_blocking_terminal(self):
+        for missing in (False, True):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory(dir=self.build) as temporary:
+                home = Path(temporary)
+                tools = home / "tools"
+                tools.mkdir()
+                if not missing:
+                    executable = tools / "zed"
+                    executable.write_text("#!/bin/sh\nexit 37\n")
+                    executable.chmod(0o755)
+                record = home / "editor-request"
+                devpod = tools / "devpod"
+                devpod.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$DEVSPACE_TEST_ZED_RECORD"\n')
+                devpod.chmod(0o755)
+                environment = dict(os.environ, HOME=str(home), DEVSPACE_TEST_ZED_RECORD=str(record),
+                    DEVSPACE_TEST_ZED_EXPLICIT="false", G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+                environment.pop("WAYLAND_DISPLAY", None)
+                result = subprocess.run([
+                    "xvfb-run", "-a", "/usr/bin/env", f"PATH={tools}", str(self.app_runner),
+                    shutil.which("python3") or "/usr/bin/python3",
+                    str(ROOT / "Tests/Linux/fixtures/linux_ui_backend_peer.py"), "zed-success",
+                ], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(record.read_text(), "up\n--ide\nzed\n--\nfixture-pod\n")
+
+    def test_editor_failure_after_disconnect_cannot_launch_fallback(self):
+        with tempfile.TemporaryDirectory(dir=self.build) as temporary:
+            home = Path(temporary)
+            tools = home / "tools"
+            tools.mkdir()
+            executable = tools / "zed"
+            executable.write_text('#!/bin/sh\nprintf started > "$DEVSPACE_TEST_ZED_STARTED"\n/bin/sleep 0.3\nexit 37\n')
+            executable.chmod(0o755)
+            devpod = tools / "devpod"
+            devpod.write_text('#!/bin/sh\nprintf unexpected > "$DEVSPACE_TEST_ZED_RECORD"\n')
+            devpod.chmod(0o755)
+            environment = dict(os.environ, HOME=str(home), DEVSPACE_TEST_ZED_RECORD=str(home / "fallback"),
+                DEVSPACE_TEST_ZED_STARTED=str(home / "started"), DEVSPACE_TEST_ZED_EXPLICIT="false",
+                G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+            environment.pop("WAYLAND_DISPLAY", None)
+            result = subprocess.run([
+                "xvfb-run", "-a", "/usr/bin/env", f"PATH={tools}", str(self.app_runner),
+                shutil.which("python3") or "/usr/bin/python3",
+                str(ROOT / "Tests/Linux/fixtures/linux_ui_backend_peer.py"), "zed-stale",
+            ], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_existing_zed_session_activates_desktop_app_instead_of_provisioning(self):
+        with tempfile.TemporaryDirectory(dir=self.build) as temporary:
+            home = Path(temporary)
+            tools = home / "tools"
+            tools.mkdir()
+            record = home / "editor-request"
+            for name, value in (("activate-editor", "activated"), ("devpod", "wrong-default-folder")):
+                executable = tools / name
+                executable.write_text(f'#!/bin/sh\nprintf "{value}" > "$DEVSPACE_TEST_ZED_RECORD"\n')
+                executable.chmod(0o755)
+            applications = home / "share/applications"
+            applications.mkdir(parents=True)
+            (applications / "dev.zed.Zed.desktop").write_text(
+                f"[Desktop Entry]\nType=Application\nName=Fixture Zed\nExec={tools / 'activate-editor'}\n")
+            environment = dict(os.environ, HOME=str(home), XDG_DATA_HOME=str(home / "share"),
+                XDG_DATA_DIRS=str(home / "empty"), DEVSPACE_TEST_ZED_RECORD=str(record),
+                DEVSPACE_TEST_ZED_EXPLICIT="false", G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+            environment.pop("WAYLAND_DISPLAY", None)
+            session = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(15)",
+                                        "zed-ssh-session", "fixture-pod.devpod"])
+            try:
+                result = subprocess.run([
+                    "xvfb-run", "-a", "/usr/bin/env", f"PATH={tools}", str(self.app_runner),
+                    shutil.which("python3") or "/usr/bin/python3",
+                    str(ROOT / "Tests/Linux/fixtures/linux_ui_backend_peer.py"), "zed-success",
+                ], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(record.read_text(), "activated")
+            finally:
+                session.terminate()
+                session.wait(timeout=5)
 
     @unittest.skipUnless(os.environ.get("DEVSPACE_HOST_UI_WORKSPACE"),
                          "opt-in authorized real workspace through GTK/VTE")

@@ -106,6 +106,8 @@ struct WorkspaceWindowTests {
             try expect(commands.last?.0 == "open_zed" && commands.last?.1?["workspace_id"] == workspace.id,
                        "editor shortcut did not target the selected workspace")
             try expect(commands.last?.1?["directory"] == "/tmp/a b/α", "editor shortcut lost the active folder")
+            try expect(commands.last?.1?["explicit_directory"] == "false",
+                       "keyboard-inferred folder disabled the normal editor fallback")
             try expect(window.handleShortcut(keyval: UInt32(GDK_KEY_b), modifiers: appModifiers),
                        "sidebar toggle shortcut is missing")
             let shortcutSidebar = gtk_widget_get_first_child(gtk_window_get_child(window.window))!
