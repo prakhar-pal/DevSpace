@@ -199,6 +199,19 @@ portal inherited its pipe; only that confirmed reader was terminated. A fresh
 run using a regular diagnostic log exited zero with the recorded suite result.
 M09/M10 remain, along with the previously recorded release/live acceptance gaps.
 
+M09 implemented: explicit new_terminal requires a ready owned SSH master;
+normal connect remains idempotent. Multiple panes expose a creation-ordered
+tab strip with directory/number titles, close and + controls; a single pane
+retains the chrome-free layout. Ctrl+Shift+T and Ctrl+PageUp/PageDown create
+and cycle tabs. Active identities survive polls and workspace switching;
+closing a sibling preserves its master/generation and the remaining shell.
+Native tab regression first failed for missing shortcut, backend regression
+for unsupported command. Verified: GTK16 (two opt-in skips, backend44),
+WorkspaceTerminalControllerTests21, both development products, and a focused
+native test with independent local shell round-trips and active-tab editor
+directory targeting. No real SSH multi-shell/live hook acceptance is claimed
+while wc-1 remains stopped. M10 is the remaining source-feature milestone.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

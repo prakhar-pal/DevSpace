@@ -350,6 +350,30 @@ final class WorkspaceTerminalControllerTests: XCTestCase {
         XCTAssertFalse(controller.hasOwnedTransports)
     }
 
+    func testAdditionalShellSharesMasterAndClosingItPreservesSibling() throws {
+        let master = ControlledMaster()
+        var mastersCreated = 0
+        var effects: [WorkspaceTerminalEffect] = []
+        let controller = WorkspaceTerminalController(identity: .init(channel: .development),
+            makeTransport: { _ in mastersCreated += 1; return master }, emit: { effects.append($0) })
+        try controller.connect("pod")
+        master.ready()
+        try controller.connect("pod")
+        let launches = effects.filter { $0.kind == "terminal_launch" }
+        XCTAssertEqual(launches.count, 2)
+        XCTAssertEqual(mastersCreated, 1)
+        XCTAssertEqual(launches[0].generation, launches[1].generation)
+        XCTAssertNotEqual(launches[0].paneID, launches[1].paneID)
+        XCTAssertEqual(launches[0].arguments, launches[1].arguments)
+        XCTAssertTrue(controller.report(workspace: "pod", generation: launches[1].generation,
+            pane: try XCTUnwrap(launches[1].paneID), kind: "terminal_exit"))
+        XCTAssertEqual(controller.panes.map(\.id), [launches[0].paneID!])
+        XCTAssertEqual(master.state, .ready)
+        try controller.connect("pod")
+        XCTAssertEqual(controller.panes.count, 2)
+        XCTAssertEqual(mastersCreated, 1)
+    }
+
     func testReadyMasterEmitsClientLaunchWithoutAnotherTunnel() throws {
         let master = ControlledMaster()
         var effects: [WorkspaceTerminalEffect] = []

@@ -587,6 +587,14 @@ class BackendIntegrationTests(unittest.TestCase):
         self.process.stdin.flush()
         self.assertEqual(self.process.wait(timeout=5), 1)
 
+    def test_new_terminal_requires_existing_ready_master_without_provisioning(self):
+        self.request("poll")
+        self.request("disconnect", workspace_id="pod")
+        response = self.request("new_terminal", workspace_id="pod")
+        self.assertEqual(response["kind"], "error")
+        self.assertIn("ready SSH session", response["payload"]["message"])
+        self.assertFalse(any(frame["kind"] == "terminal_launch" for frame in self.frames))
+
     def test_connect_rejects_stopped_workspace_without_starting_ssh(self):
         self.request("stop", workspace_id="pod")
         self.request("poll")

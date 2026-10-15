@@ -514,6 +514,23 @@ private func handle(_ message: BackendProtocolMessage) {
             _ = send(BackendProtocolMessage(id: message.id, kind: "error", payload: ["message": String(describing: error)]))
         }
 
+    case "new_terminal":
+        do {
+            let workspace = message.payload?["workspace_id"] ?? ""
+            try Devpod.validateId(workspace)
+            guard controller.snapshot.workspaces.contains(where: { $0.id == workspace && $0.state == "Running" }),
+                  !controller.snapshot.operations.contains(where: { $0.workspaceID == workspace }),
+                  terminals.controlPath(for: workspace) != nil else {
+                throw DevpodError("new terminal requires a ready SSH session: \(workspace)")
+            }
+            try terminals.connect(workspace)
+            controller.setTerminalPanes(terminals.panes)
+            _ = sendSnapshot(nil, from: controller)
+            _ = send(BackendProtocolMessage(id: message.id, kind: "completed"))
+        } catch {
+            _ = send(BackendProtocolMessage(id: message.id, kind: "error", payload: ["message": String(describing: error)]))
+        }
+
     case "connect", "reconnect", "disconnect":
         do {
             let workspace = message.payload?["workspace_id"] ?? ""

@@ -50,6 +50,11 @@ struct WorkspaceWindowTests {
                 g_object_unref(UnsafeMutableRawPointer(application))
                 return
             }
+            if CommandLine.arguments.dropFirst().contains("tabs") {
+                try testTerminalTabs(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
 
             let window = WorkspaceWindow(application: application)
             var commands: [(String, [String: String]?)] = []
@@ -576,6 +581,64 @@ struct WorkspaceWindowTests {
         gtk_dialog_response(UnsafeMutableRawPointer(failed).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_ACCEPT.rawValue)
         try expect(commands.count == count, "backend failure allowed a pending rename to mutate state")
         print("organization=rename-order shortcuts=bounded cancel=nonmutating")
+    }
+
+    private static func testTerminalTabs(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let window = WorkspaceWindow(application: application)
+        defer { gtk_window_destroy(window.window) }
+        let workspace = WorkspaceView(id: "pod", provider: "test", source: "", lastUsed: "", state: "Running", error: nil)
+        window.setConnectionStates(["pod": "connected"])
+        window.update(WorkspaceControllerSnapshot(revision: 1, workspaces: [workspace], selectedID: "pod", layout: Layout(), terminalPanes: []))
+        window.present()
+        let root = gtk_window_get_child(window.window)!
+        var commands: [(String, [String: String]?)] = []
+        window.onCommand = { commands.append(($0, $1)) }
+        let generation = UUID()
+        let first = TerminalPaneIdentity(workspaceID: "pod", generation: generation, paneID: UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!)
+        let second = TerminalPaneIdentity(workspaceID: "pod", generation: generation, paneID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)
+        func launch(_ identity: TerminalPaneIdentity, name: String) throws {
+            window.apply(try terminalEffect(kind: "terminal_launch", workspace: "pod", generation: generation,
+                pane: identity.paneID, executable: "/bin/sh", arguments: ["-c", "printf '\(name)\\n\\033]7;file://remote/tmp/\(name)\\007'; while IFS= read -r input; do printf '\(name):%s\\n' \"$input\"; done"]))
+        }
+        try launch(first, name: "first")
+        try expect(pumpUntil { window.pane(for: first)?.currentDirectory == "/tmp/first" }, "first tab failed to render")
+        let firstPane = window.pane(for: first)!
+        try expect(namedWidget("terminal-tabs", in: root).map { gtk_widget_get_visible($0) == 0 } ?? true, "single terminal has tab chrome")
+        let modifiers = GdkModifierType(rawValue: GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue)
+        try expect(window.handleShortcut(keyval: UInt32(GDK_KEY_t), modifiers: modifiers)
+            && commands.last?.0 == "new_terminal", "new terminal shortcut is missing")
+        try launch(second, name: "second")
+        try expect(pumpUntil { window.pane(for: second)?.currentDirectory == "/tmp/second" }, "second tab failed to render")
+        let secondPane = window.pane(for: second)!
+        firstPane.feed("one\n")
+        secondPane.feed("two\n")
+        try expect(pumpUntil { firstPane.text.contains("first:one") && secondPane.text.contains("second:two") }, "tab shell round-trips were not independent")
+        try expect(!firstPane.text.contains("second:two") && !secondPane.text.contains("first:one"), "input crossed terminal tabs")
+        try expect(window.pane(forWorkspace: "pod") === secondPane, "new tab did not become active")
+        guard let strip = namedWidget("terminal-tabs", in: root) else { throw TestFailure("multiple terminals have no tab strip") }
+        try expect(gtk_widget_get_visible(strip) != 0 && containsButton("first", in: strip) && containsButton("second", in: strip), "tab titles did not follow working directories")
+        let firstButton = namedWidget("select-terminal-\(first.paneID.uuidString.lowercased())", in: strip)!
+        _ = gtk_widget_activate(firstButton)
+        try expect(pumpUntil { window.pane(forWorkspace: "pod") === firstPane }, "clicking the first tab selected the wrong shell")
+        try expect(window.handleShortcut(keyval: UInt32(GDK_KEY_o), modifiers: modifiers)
+            && commands.last?.1?["directory"] == "/tmp/first", "editor targeting did not follow the active tab")
+        try expect(window.handleShortcut(keyval: UInt32(GDK_KEY_Page_Down), modifiers: GDK_CONTROL_MASK)
+            && window.pane(forWorkspace: "pod") === secondPane, "next-tab shortcut did not follow creation order")
+        try expect(window.handleShortcut(keyval: UInt32(GDK_KEY_Page_Down), modifiers: GDK_CONTROL_MASK)
+            && window.pane(forWorkspace: "pod") === firstPane, "tab navigation did not wrap")
+        window.update(WorkspaceControllerSnapshot(revision: 2, workspaces: [workspace], selectedID: "pod", layout: Layout(), terminalPanes: []))
+        try expect(window.pane(forWorkspace: "pod") === firstPane && window.pane(for: second) === secondPane, "poll recreated a shell or changed the active tab")
+        _ = gtk_widget_activate(namedWidget("close-terminal-\(second.paneID.uuidString.lowercased())", in: strip)!)
+        try expect(pumpUntil { window.terminalCount == 1 }, "closing one tab did not remove only that shell")
+        try expect(window.pane(forWorkspace: "pod") === firstPane && !firstPane.isClosed, "closing a sibling disposed the remaining tab")
+        let third = TerminalPaneIdentity(workspaceID: "pod", generation: generation, paneID: UUID())
+        try launch(third, name: "third")
+        try expect(window.terminalCount == 2, "closing one tab retired the shared connection generation")
+        window.closeTerminal(third, reportExit: true)
+        window.closeTerminal(first, reportExit: true)
+        try expect(commands.filter { $0.0 == "terminal_exit" }.count == 3, "tab closure did not report each shell exit exactly once")
+        try expect(!commands.contains { ["connect", "reconnect", "stop", "start"].contains($0.0) }, "tab operations mutated workspace/master lifecycle")
+        print("tabs=creation-order active=preserved siblings=independent")
     }
 
     private static func testWorkspaceVisibility(_ application: UnsafeMutablePointer<GtkApplication>) throws {
