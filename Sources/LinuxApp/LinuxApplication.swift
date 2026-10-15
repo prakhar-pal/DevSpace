@@ -104,9 +104,11 @@ final class LinuxApplicationController {
         }
         started = true
         let window = WorkspaceWindow(application: application)
+        gtk_window_set_title(window.window, channel == "development" ? "DevSpaceDev" : "DevSpace")
         self.window = window
         window.onCommand = { [weak self] kind, payload in self?.sendCommand(kind, payload: payload) }
         registerNotificationAction()
+        registerQuitAction()
         connectCloseRequest(window)
         window.present()
 
@@ -208,6 +210,7 @@ final class LinuxApplicationController {
     deinit {
         if started {
             g_action_map_remove_action(OpaquePointer(UnsafeMutableRawPointer(application)), "activate-workspace")
+            g_action_map_remove_action(OpaquePointer(UnsafeMutableRawPointer(application)), "quit")
         }
         if pumpSource != 0 { _ = g_source_remove(pumpSource) }
         discardPendingImageSources()
@@ -353,6 +356,16 @@ final class LinuxApplicationController {
         g_object_unref(UnsafeMutableRawPointer(action))
     }
 
+    private func registerQuitAction() {
+        let action = g_simple_action_new("quit", nil)!
+        let callback = unsafeBitCast(devspaceLinuxQuit as @convention(c)
+            (UnsafeMutableRawPointer?, OpaquePointer?, UnsafeMutableRawPointer?) -> Void, to: GCallback.self)
+        _ = g_signal_connect_data(UnsafeMutableRawPointer(action), "activate", callback,
+            Unmanaged.passUnretained(self).toOpaque(), nil, GConnectFlags(rawValue: 0))
+        g_action_map_add_action(OpaquePointer(UnsafeMutableRawPointer(application)), OpaquePointer(UnsafeMutableRawPointer(action)))
+        g_object_unref(UnsafeMutableRawPointer(action))
+    }
+
     fileprivate func activateWorkspace(_ workspaceID: String) {
         guard let window, window.snapshot.workspaces.contains(where: { $0.id == workspaceID }) else { return }
         window.present()
@@ -483,6 +496,12 @@ private func devspaceLinuxActivateWorkspace(_ action: UnsafeMutableRawPointer?, 
 private func devspaceLinuxAppPump(_ data: UnsafeMutableRawPointer?) -> Int32 {
     guard let data else { return 0 }
     return Unmanaged<LinuxApplicationController>.fromOpaque(data).takeUnretainedValue().pump()
+}
+
+@_cdecl("devspace_linux_quit")
+private func devspaceLinuxQuit(_ action: UnsafeMutableRawPointer?, _ parameter: OpaquePointer?, _ data: UnsafeMutableRawPointer?) {
+    guard let data else { return }
+    Unmanaged<LinuxApplicationController>.fromOpaque(data).takeUnretainedValue().requestShutdown()
 }
 
 @_cdecl("devspace_linux_window_close_requested")

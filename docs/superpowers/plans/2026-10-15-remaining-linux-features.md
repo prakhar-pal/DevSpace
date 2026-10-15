@@ -103,6 +103,20 @@ baseline before the change and now verifies the doubled floor plus terminal
 expansion. A later longer name can grow the sidebar without ratcheting its floor.
 M05–M10 remain; M03 live wc-1 acceptance is still pending (Stopped on recheck).
 
+M05 implemented scrolling/orderly-relaunch increment: workspace rows now occupy
+a vertically scrollable, width-propagating GTK pane; a 40-workspace native test
+reproduced missing scrolling before the change and now selects the last row
+without lifecycle commands. The doubled minimum and terminal expansion remain
+covered. Development windows identify themselves as DevSpaceDev. A scoped
+application Quit action routes through existing backend shutdown/cleanup, so
+future development relaunches can close cleanly without process termination.
+GTK13 passed (two opt-in skips, including backend40). The already-compiled native
+controlled terminal also passed on the host Wayland display using a private
+D-Bus session and no physical clipboard access. Host GTK emitted slider-size
+warnings; this check is not evidence of physical keyboard/IME or banner behavior.
+Host X11 acceptance remains separate (private Xvfb X11 is covered). No GTK input
+method override is configured in the current environment; no IME changes made.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

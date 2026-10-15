@@ -35,6 +35,11 @@ struct WorkspaceWindowTests {
                 g_object_unref(UnsafeMutableRawPointer(application))
                 return
             }
+            if CommandLine.arguments.dropFirst().contains("scrolling") {
+                try testSidebarScrolling(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
 
             let window = WorkspaceWindow(application: application)
             var commands: [(String, [String: String]?)] = []
@@ -64,7 +69,7 @@ struct WorkspaceWindowTests {
                 try expect(!containsButton(title, in: root), "sidebar retains extra action: \(title)")
             }
             let sidebarWidget = gtk_widget_get_first_child(root)!
-            let rows = gtk_widget_get_first_child(sidebarWidget)!
+            let rows = namedWidget("workspace-rows", in: sidebarWidget)!
             let firstRow = gtk_widget_get_first_child(rows)!
             let secondRow = gtk_widget_get_next_sibling(firstRow)!
             try expect(gtk_widget_get_next_sibling(secondRow) == nil, "sidebar did not show both workspaces")
@@ -79,7 +84,7 @@ struct WorkspaceWindowTests {
                 kind: "terminal_error", workspace: otherWorkspace.id, generation: UUID(), pane: UUID(),
                 message: "SSH connection failed: readinessTimedOut"
             ))
-            let status = gtk_widget_get_next_sibling(rows)!
+            let status = gtk_widget_get_next_sibling(gtk_widget_get_first_child(sidebarWidget)!)!
             try window.apply(terminalEffect(
                 kind: "terminal_launch", workspace: workspace.id, generation: generation, pane: paneID,
                 executable: "/bin/sh",
@@ -476,6 +481,32 @@ struct WorkspaceWindowTests {
         try expect(namedWidget("start-workspace", in: root) == nil, "unknown state offers Start")
         try expect(namedWidget("stop-workspace", in: root) == nil, "unknown state offers Stop")
         print("start-stop=state-aware operation=visible cancellation=targeted")
+    }
+
+    private static func testSidebarScrolling(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let window = WorkspaceWindow(application: application)
+        defer { gtk_window_destroy(window.window) }
+        let workspaces = (0..<40).map { WorkspaceView(id: "pod-\($0)", provider: "test", source: "", lastUsed: "",
+            state: "Stopped", error: nil) }
+        window.update(WorkspaceControllerSnapshot(revision: 1, workspaces: workspaces, selectedID: "pod-0",
+            layout: Layout(), terminalPanes: []))
+        window.present()
+        let root = gtk_window_get_child(window.window)!
+        guard let scroll = namedWidget("workspace-sidebar-scroll", in: root) else {
+            throw TestFailure("long workspace lists have no scrollable sidebar")
+        }
+        let adjustment = gtk_scrolled_window_get_vadjustment(OpaquePointer(scroll))!
+        try expect(pumpUntil { gtk_adjustment_get_upper(adjustment) > gtk_adjustment_get_page_size(adjustment) },
+                   "workspace list did not constrain itself to the window height")
+        gtk_adjustment_set_value(adjustment, gtk_adjustment_get_upper(adjustment))
+        try expect(pumpUntil { gtk_adjustment_get_value(adjustment) > 0 }, "sidebar cannot scroll to lower workspaces")
+        var commands: [(String, [String: String]?)] = []
+        window.onCommand = { commands.append(($0, $1)) }
+        guard let last = namedWidget("select-workspace-pod-39", in: root) else { throw TestFailure("last workspace is absent") }
+        _ = gtk_widget_activate(last)
+        try expect(pumpUntil { commands.last?.1?["workspace_id"] == "pod-39" }, "scrolled workspace could not be selected")
+        try expect(!commands.contains { ["start", "stop"].contains($0.0) }, "scrolling/selection changed workspace lifecycle")
+        print("sidebar=scrollable last-workspace=selectable lifecycle=unchanged")
     }
 
     private static func namedWidget(_ name: String, in widget: UnsafeMutablePointer<GtkWidget>) -> UnsafeMutablePointer<GtkWidget>? {

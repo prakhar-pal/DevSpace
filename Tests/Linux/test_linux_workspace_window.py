@@ -113,6 +113,28 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("start-stop=state-aware operation=visible cancellation=targeted", result.stdout)
 
+    def test_long_sidebar_scrolls_without_lifecycle_changes(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "scrolling"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=12)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("sidebar=scrollable last-workspace=selectable lifecycle=unchanged", result.stdout)
+
+    @unittest.skipUnless(os.environ.get("DEVSPACE_TEST_HOST_DISPLAY") in ("wayland", "x11"),
+                         "opt-in controlled terminal on host display; no physical clipboard access")
+    def test_controlled_terminal_and_orderly_quit_on_host_display(self):
+        environment = dict(os.environ, GDK_BACKEND=os.environ["DEVSPACE_TEST_HOST_DISPLAY"], GTK_A11Y="none",
+                           G_DEBUG="fatal-criticals")
+        # A private bus prevents the fixture from activating or quitting the
+        # user's real app, even though it uses the development channel ID.
+        result = subprocess.run([
+            "dbus-run-session", "--", str(self.app_runner), shutil.which("python3") or "/usr/bin/python3",
+            str(ROOT / "Tests/Linux/fixtures/linux_ui_backend_peer.py"), "normal",
+        ], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("snapshot=received terminal=opened stale-effects=rejected shutdown=orderly", result.stdout)
+
     def test_backend_snapshot_effects_and_shutdown_reach_the_gtk_window(self):
         events = self.build / "linux-app-events.jsonl"
         environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none",

@@ -47,7 +47,15 @@ final class WorkspaceWindow {
 
         workspaceRows = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 8)!)
             .assumingMemoryBound(to: GtkBox.self)
-        gtk_box_append(sidebar, UnsafeMutableRawPointer(workspaceRows).assumingMemoryBound(to: GtkWidget.self))
+        let rowsWidget = UnsafeMutableRawPointer(workspaceRows).assumingMemoryBound(to: GtkWidget.self)
+        gtk_widget_set_name(rowsWidget, "workspace-rows")
+        let workspaceScroll = gtk_scrolled_window_new()!
+        gtk_widget_set_name(workspaceScroll, "workspace-sidebar-scroll")
+        gtk_widget_set_vexpand(workspaceScroll, 1)
+        gtk_scrolled_window_set_policy(OpaquePointer(workspaceScroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
+        gtk_scrolled_window_set_propagate_natural_width(OpaquePointer(workspaceScroll), 1)
+        gtk_scrolled_window_set_child(OpaquePointer(workspaceScroll), rowsWidget)
+        gtk_box_append(sidebar, workspaceScroll)
         statusLabel = gtk_label_new("")!
         Self.configureSidebarText(statusLabel)
         gtk_label_set_max_width_chars(OpaquePointer(statusLabel), 0)
@@ -322,6 +330,7 @@ final class WorkspaceWindow {
         gtk_box_append(row, UnsafeMutableRawPointer(title).assumingMemoryBound(to: GtkWidget.self))
 
         let button = gtk_button_new()!
+        gtk_widget_set_name(button, "select-workspace-\(workspace.id)")
         button.withMemoryRebound(to: GtkButton.self, capacity: 1) {
             gtk_button_set_child($0, UnsafeMutableRawPointer(row).assumingMemoryBound(to: GtkWidget.self))
         }

@@ -275,7 +275,15 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
         }
         window.closeTerminal(identity, reportExit: true)
         context.terminalClosed = true
-        controller.requestShutdown()
+        if context.mode == "normal" {
+            let actions = OpaquePointer(UnsafeMutableRawPointer(context.application))
+            guard g_action_group_has_action(actions, "quit") != 0 else {
+                context.failure = "application has no orderly Quit action for relaunch"
+                controller.requestShutdown()
+                return 1
+            }
+            g_action_group_activate_action(actions, "quit", nil)
+        } else { controller.requestShutdown() }
     }
 
     if controller.backend.state == .stopped {
