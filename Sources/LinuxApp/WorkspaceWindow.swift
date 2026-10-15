@@ -18,6 +18,7 @@ final class WorkspaceWindow {
     private var terminalErrorWorkspace: String?
     private var connectionStates: [String: String] = [:]
     private var workspaceMenu: UnsafeMutablePointer<GtkWidget>?
+    private var renameDialog: UnsafeMutablePointer<GtkWidget>?
     private(set) var snapshot = WorkspaceControllerSnapshot(
         revision: 0, workspaces: [], selectedID: nil, layout: Layout(), terminalPanes: []
     )
@@ -113,7 +114,17 @@ final class WorkspaceWindow {
     func handleShortcut(keyval: UInt32, modifiers: GdkModifierType) -> Bool {
         let allowed = GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue
         let relevant = allowed | GDK_ALT_MASK.rawValue | GDK_SUPER_MASK.rawValue
-        guard modifiers.rawValue & relevant == allowed, actionsEnabled else { return false }
+        guard actionsEnabled, renameDialog == nil else { return false }
+        if modifiers.rawValue & relevant == allowed | GDK_ALT_MASK.rawValue,
+           keyval == UInt32(GDK_KEY_Up) || keyval == UInt32(GDK_KEY_Down),
+           let selected = snapshot.selectedID {
+            let ids = visibleWorkspaceIDs
+            guard let index = ids.firstIndex(of: selected),
+                  keyval == UInt32(GDK_KEY_Up) ? index > 0 : index < ids.count - 1 else { return false }
+            onCommand?(keyval == UInt32(GDK_KEY_Up) ? "move_up" : "move_down", ["workspace_id": selected])
+            return true
+        }
+        guard modifiers.rawValue & relevant == allowed else { return false }
         if let focus = gtk_window_get_focus(window),
            g_type_check_instance_is_a(UnsafeMutableRawPointer(focus).assumingMemoryBound(to: GTypeInstance.self), gtk_editable_get_type()) != 0 {
             return false
@@ -147,9 +158,7 @@ final class WorkspaceWindow {
             guard pane(forWorkspace: workspace.id) != nil else { return false }
             onCommand?("reconnect", ["workspace_id": workspace.id])
         } else {
-            var payload = ["workspace_id": workspace.id, "explicit_directory": "false"]
-            if let directory = pane(forWorkspace: workspace.id)?.currentDirectory { payload["directory"] = directory }
-            onCommand?("open_zed", payload)
+            onCommand?("open_zed", editorPayload(workspace.id))
         }
         return true
     }
@@ -306,10 +315,18 @@ final class WorkspaceWindow {
         gtk_widget_set_sensitive(UnsafeMutableRawPointer(workspaceRows).assumingMemoryBound(to: GtkWidget.self), enabled ? 1 : 0)
         gtk_widget_set_sensitive(emptyState, enabled ? 1 : 0)
         if let workspaceMenu { gtk_widget_set_sensitive(workspaceMenu, enabled ? 1 : 0) }
+        if let renameDialog {
+            gtk_dialog_set_response_sensitive(UnsafeMutableRawPointer(renameDialog).assumingMemoryBound(to: GtkDialog.self),
+                GTK_RESPONSE_ACCEPT.rawValue, enabled ? 1 : 0)
+        }
     }
 
     deinit {
         dismissWorkspaceMenu()
+        if let renameDialog {
+            gtk_window_destroy(UnsafeMutableRawPointer(renameDialog).assumingMemoryBound(to: GtkWindow.self))
+            g_object_unref(UnsafeMutableRawPointer(renameDialog))
+        }
         g_object_unref(UnsafeMutableRawPointer(emptyState))
     }
 
@@ -444,20 +461,99 @@ final class WorkspaceWindow {
         let box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
         gtk_popover_set_child(UnsafeMutableRawPointer(popover).assumingMemoryBound(to: GtkPopover.self), box)
         let busy = snapshot.operations.contains { $0.workspaceID == workspaceID }
+        func addAction(_ kind: String, _ title: String, enabled: Bool = true, payload: [String: String]? = nil) {
+            let button = gtk_button_new_with_label(title)!
+            gtk_widget_set_name(button, "\(kind)-workspace")
+            gtk_widget_set_sensitive(button, enabled ? 1 : 0)
+            connectAction(button, context: WorkspaceActionContext(window: self, kind: kind,
+                payload: payload ?? ["workspace_id": workspaceID]))
+            gtk_box_append(UnsafeMutableRawPointer(box).assumingMemoryBound(to: GtkBox.self), button)
+        }
+        addAction("rename", "Set friendly name…")
         if pane(forWorkspace: workspaceID) != nil {
             for (kind, label) in [("disconnect", "Disconnect"), ("reconnect", "Reload SSH Session")] {
-                let button = gtk_button_new_with_label(label)!
-                gtk_widget_set_name(button, "\(kind)-workspace")
-                gtk_widget_set_sensitive(button, !busy && workspace.state == "Running"
-                    && connectionStates[workspaceID] != "disconnecting" ? 1 : 0)
-                connectAction(button, context: WorkspaceActionContext(window: self, kind: kind,
-                    payload: ["workspace_id": workspaceID]))
-                gtk_box_append(UnsafeMutableRawPointer(box).assumingMemoryBound(to: GtkBox.self), button)
+                addAction(kind, label, enabled: !busy && workspace.state == "Running"
+                    && connectionStates[workspaceID] != "disconnecting")
             }
-        } else {
-            gtk_box_append(UnsafeMutableRawPointer(box).assumingMemoryBound(to: GtkBox.self), gtk_label_new("No SSH session")!)
         }
+        if let index = visibleWorkspaceIDs.firstIndex(of: workspaceID) {
+            addAction("move_up", "Move Up", enabled: index > 0)
+            addAction("move_down", "Move Down", enabled: index < visibleWorkspaceIDs.count - 1)
+        }
+        if workspace.state == "Running", !busy { addAction("open_zed", "Open in Zed", payload: editorPayload(workspaceID)) }
         gtk_popover_popup(UnsafeMutableRawPointer(popover).assumingMemoryBound(to: GtkPopover.self))
+    }
+
+    private var visibleWorkspaceIDs: [String] {
+        let hidden = Set(snapshot.layout.hidden)
+        return SidebarLayout.displayIDs(order: snapshot.layout.order, workspaces: snapshot.workspaces)
+            .filter { !hidden.contains($0) }
+    }
+
+    private func editorPayload(_ workspace: String) -> [String: String] {
+        var payload = ["workspace_id": workspace, "explicit_directory": "false"]
+        if let directory = pane(forWorkspace: workspace)?.currentDirectory { payload["directory"] = directory }
+        return payload
+    }
+
+    fileprivate func performAction(_ kind: String, payload: [String: String]) {
+        guard actionsEnabled else { return }
+        if kind == "rename", let workspace = payload["workspace_id"] { beginRename(workspace) }
+        else { onCommand?(kind, payload) }
+    }
+
+    private func beginRename(_ workspace: String) {
+        guard snapshot.workspaces.contains(where: { $0.id == workspace }) else { return }
+        if let renameDialog {
+            gtk_window_present(UnsafeMutableRawPointer(renameDialog).assumingMemoryBound(to: GtkWindow.self))
+            return
+        }
+        let widget = gtk_dialog_new()!
+        _ = g_object_ref_sink(UnsafeMutableRawPointer(widget))
+        renameDialog = widget
+        let dialog = UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkDialog.self)
+        let modal = UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkWindow.self)
+        gtk_window_set_title(modal, "Set friendly name")
+        gtk_window_set_transient_for(modal, window)
+        gtk_window_set_modal(modal, 1)
+        gtk_window_set_destroy_with_parent(modal, 1)
+        gtk_window_set_default_size(modal, 380, -1)
+        let contentWidget = gtk_dialog_get_content_area(dialog)!
+        let content = UnsafeMutableRawPointer(contentWidget).assumingMemoryBound(to: GtkBox.self)
+        for setMargin in [gtk_widget_set_margin_top, gtk_widget_set_margin_bottom, gtk_widget_set_margin_start, gtk_widget_set_margin_end] {
+            setMargin(contentWidget, 16)
+        }
+        gtk_box_set_spacing(content, 12)
+        gtk_box_append(content, gtk_label_new("Workspace \(workspace)")!)
+        let entry = gtk_entry_new()!
+        gtk_widget_set_name(entry, "workspace-friendly-name")
+        gtk_editable_set_text(OpaquePointer(entry), snapshot.layout.aliases[workspace] ?? "")
+        gtk_entry_set_activates_default(UnsafeMutableRawPointer(entry).assumingMemoryBound(to: GtkEntry.self), 1)
+        gtk_box_append(content, entry)
+        _ = gtk_dialog_add_button(dialog, "Cancel", GTK_RESPONSE_CANCEL.rawValue)
+        _ = gtk_dialog_add_button(dialog, "Set friendly name", GTK_RESPONSE_ACCEPT.rawValue)
+        gtk_dialog_set_default_response(dialog, GTK_RESPONSE_ACCEPT.rawValue)
+        let callback = unsafeBitCast(devspaceLinuxRenameResponse as @convention(c)
+            (UnsafeMutableRawPointer?, Int32, UnsafeMutableRawPointer?) -> Void, to: GCallback.self)
+        let destroy: GClosureNotify = { data, _ in
+            if let data { Unmanaged<RenameContext>.fromOpaque(data).release() }
+        }
+        _ = g_signal_connect_data(UnsafeMutableRawPointer(widget), "response", callback,
+            Unmanaged.passRetained(RenameContext(window: self, workspace: workspace, entry: entry)).toOpaque(),
+            destroy, GConnectFlags(rawValue: 0))
+        gtk_window_present(modal)
+        _ = gtk_widget_grab_focus(entry)
+    }
+
+    fileprivate func finishRename(workspace: String, entry: UnsafeMutablePointer<GtkWidget>, response: Int32) {
+        guard let dialog = renameDialog else { return }
+        let name = String(cString: gtk_editable_get_text(OpaquePointer(entry))).trimmingCharacters(in: .whitespaces)
+        renameDialog = nil
+        gtk_window_destroy(UnsafeMutableRawPointer(dialog).assumingMemoryBound(to: GtkWindow.self))
+        g_object_unref(UnsafeMutableRawPointer(dialog))
+        if response == GTK_RESPONSE_ACCEPT.rawValue, actionsEnabled, snapshot.workspaces.contains(where: { $0.id == workspace }) {
+            onCommand?("alias", ["workspace_id": workspace, "name": name])
+        }
     }
 
     private func dismissWorkspaceMenu() {
@@ -515,6 +611,24 @@ private final class WorkspaceActionContext {
     }
 }
 
+private final class RenameContext {
+    weak var window: WorkspaceWindow?
+    let workspace: String
+    let entry: UnsafeMutablePointer<GtkWidget>
+    init(window: WorkspaceWindow, workspace: String, entry: UnsafeMutablePointer<GtkWidget>) {
+        self.window = window
+        self.workspace = workspace
+        self.entry = entry
+    }
+}
+
+@_cdecl("devspace_linux_rename_response")
+private func devspaceLinuxRenameResponse(_ dialog: UnsafeMutableRawPointer?, _ response: Int32, _ data: UnsafeMutableRawPointer?) {
+    guard let data else { return }
+    let context = Unmanaged<RenameContext>.fromOpaque(data).takeUnretainedValue()
+    context.window?.finishRename(workspace: context.workspace, entry: context.entry, response: response)
+}
+
 @_cdecl("devspace_linux_workspace_action")
 private func devspaceLinuxWorkspaceAction(_ button: UnsafeMutableRawPointer?, _ data: UnsafeMutableRawPointer?) {
     guard let data else { return }
@@ -523,7 +637,7 @@ private func devspaceLinuxWorkspaceAction(_ button: UnsafeMutableRawPointer?, _ 
     if let popover = gtk_widget_get_ancestor(button.assumingMemoryBound(to: GtkWidget.self), gtk_popover_get_type()) {
         gtk_popover_popdown(UnsafeMutableRawPointer(popover).assumingMemoryBound(to: GtkPopover.self))
     }
-    context.window?.onCommand?(context.kind, context.payload)
+    context.window?.performAction(context.kind, payload: context.payload)
     _ = button
 }
 

@@ -40,6 +40,11 @@ struct WorkspaceWindowTests {
                 g_object_unref(UnsafeMutableRawPointer(application))
                 return
             }
+            if CommandLine.arguments.dropFirst().contains("organization") {
+                try testWorkspaceOrganization(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
 
             let window = WorkspaceWindow(application: application)
             var commands: [(String, [String: String]?)] = []
@@ -507,6 +512,82 @@ struct WorkspaceWindowTests {
         try expect(pumpUntil { commands.last?.1?["workspace_id"] == "pod-39" }, "scrolled workspace could not be selected")
         try expect(!commands.contains { ["start", "stop"].contains($0.0) }, "scrolling/selection changed workspace lifecycle")
         print("sidebar=scrollable last-workspace=selectable lifecycle=unchanged")
+    }
+
+    private static func testWorkspaceOrganization(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let window = WorkspaceWindow(application: application)
+        defer { gtk_window_destroy(window.window) }
+        let workspaces = ["pod", "other"].map { WorkspaceView(id: $0, provider: "test", source: "", lastUsed: "",
+            state: "Running", error: nil) }
+        window.update(WorkspaceControllerSnapshot(revision: 1, workspaces: workspaces, selectedID: "pod",
+            layout: Layout(order: ["pod", "other"], aliases: ["pod": "Old name"]), terminalPanes: []))
+        window.present()
+        var commands: [(String, [String: String]?)] = []
+        window.onCommand = { commands.append(($0, $1)) }
+        let root = gtk_window_get_child(window.window)!
+        try expect(pumpUntil { gtk_widget_get_mapped(root) != 0 }, "organization window did not map")
+        window.showWorkspaceMenu("pod", relativeTo: root)
+        guard let rename = namedWidget("rename-workspace", in: root) else { throw TestFailure("friendly-name action is missing") }
+        _ = gtk_widget_activate(rename)
+        let dialog = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(dialog)) }
+        guard let entry = namedWidget("workspace-friendly-name", in: gtk_window_get_child(dialog)!) else {
+            throw TestFailure("friendly-name dialog has no text entry")
+        }
+        try expect(String(cString: gtk_editable_get_text(OpaquePointer(entry))) == "Old name", "rename did not prefill the saved alias")
+        let modifiers = GdkModifierType(rawValue: GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue)
+        try expect(!window.handleShortcut(keyval: UInt32(GDK_KEY_2), modifiers: modifiers), "workspace shortcut escaped the modal")
+        gtk_editable_set_text(OpaquePointer(entry), " Workspace α ")
+        gtk_dialog_response(UnsafeMutableRawPointer(dialog).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_ACCEPT.rawValue)
+        try expect(commands.last?.0 == "alias" && commands.last?.1?["workspace_id"] == "pod"
+            && commands.last?.1?["name"] == "Workspace α", "rename changed the DevPod ID or lost the Unicode friendly name")
+        window.showWorkspaceMenu("pod", relativeTo: root)
+        guard let up = namedWidget("move_up-workspace", in: root), let down = namedWidget("move_down-workspace", in: root) else {
+            throw TestFailure("workspace ordering actions are missing")
+        }
+        try expect(gtk_widget_is_sensitive(up) == 0 && gtk_widget_is_sensitive(down) != 0, "reorder boundary actions are incorrect")
+        _ = gtk_widget_activate(down)
+        try expect(pumpUntil { commands.last?.0 == "move_down" && commands.last?.1?["workspace_id"] == "pod" },
+                   "Move Down did not target the workspace ID")
+        window.update(WorkspaceControllerSnapshot(revision: 2, workspaces: workspaces, selectedID: "pod",
+            layout: Layout(order: ["other", "pod"], aliases: ["pod": "Workspace α"]), terminalPanes: []))
+        try expect(containsLabel("Workspace α", in: root), "saved alias did not reach the row")
+        let reorder = GdkModifierType(rawValue: modifiers.rawValue | GDK_ALT_MASK.rawValue)
+        try expect(window.handleShortcut(keyval: UInt32(GDK_KEY_Up), modifiers: reorder)
+            && commands.last?.0 == "move_up", "selected-workspace reorder shortcut is missing")
+        try expect(!window.handleShortcut(keyval: UInt32(GDK_KEY_Down), modifiers: reorder), "reorder shortcut exceeded the visible list boundary")
+        window.showWorkspaceMenu("pod", relativeTo: root)
+        _ = gtk_widget_activate(namedWidget("rename-workspace", in: root)!)
+        let cancelled = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(cancelled)) }
+        let count = commands.count
+        gtk_dialog_response(UnsafeMutableRawPointer(cancelled).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_CANCEL.rawValue)
+        try expect(commands.count == count, "cancelling rename changed the workspace")
+        window.showWorkspaceMenu("pod", relativeTo: root)
+        _ = gtk_widget_activate(namedWidget("rename-workspace", in: root)!)
+        let failed = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(failed)) }
+        window.setActionsEnabled(false)
+        gtk_dialog_response(UnsafeMutableRawPointer(failed).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_ACCEPT.rawValue)
+        try expect(commands.count == count, "backend failure allowed a pending rename to mutate state")
+        print("organization=rename-order shortcuts=bounded cancel=nonmutating")
+    }
+
+    private static func activeDialog(for parent: UnsafeMutablePointer<GtkWindow>) -> UnsafeMutablePointer<GtkWindow>? {
+        let windows = gtk_window_get_toplevels()!
+        for index in 0..<g_list_model_get_n_items(windows) {
+            guard let item = g_list_model_get_item(windows, index) else { continue }
+            let window = item.assumingMemoryBound(to: GtkWindow.self)
+            if gtk_window_get_transient_for(window) == parent { return window }
+            g_object_unref(item)
+        }
+        return nil
+    }
+
+    private static func waitForDialog(for parent: UnsafeMutablePointer<GtkWindow>) throws -> UnsafeMutablePointer<GtkWindow> {
+        var dialog: UnsafeMutablePointer<GtkWindow>?
+        try expect(pumpUntil { dialog = activeDialog(for: parent); return dialog != nil }, "friendly-name dialog did not open")
+        return dialog!
     }
 
     private static func namedWidget(_ name: String, in widget: UnsafeMutablePointer<GtkWidget>) -> UnsafeMutablePointer<GtkWidget>? {

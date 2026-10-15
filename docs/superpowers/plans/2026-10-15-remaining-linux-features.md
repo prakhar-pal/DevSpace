@@ -132,6 +132,29 @@ was neither replaced nor closed, and the package was not installed. Clean-host
 installation, current-head CI/macOS and the remaining M07 acceptance are NOT
 claimed. This approved build checkpoint does not mark the remaining port complete.
 
+M04 follow-up discovered during M06 source validation: polling still consumes
+standing autoConnect intent after a failed master or last terminal exit. The
+macOS implementation instead has bounded startup/disruption recovery and
+withdraws intent on deliberate disconnect/exit. Reproduce this with focused
+regressions and port the bounded policy before calling recovery parity complete;
+the earlier M04 checkpoint verifies controls/cleanup ordering, not this gap.
+
+M06 implemented: right-click friendly-name dialog preloads the alias, trims
+whitespace like macOS and leaves DevPod IDs unchanged. Cancel and backend failure
+during editing cannot submit changes, and workspace shortcuts are suppressed
+while modal. Move Up/Down menu eligibility and Ctrl+Shift+Alt+Up/Down are bounded
+to visible workspace order. Open in Zed is also reachable from the row menu and
+uses the same inferred active-directory payload as the keyboard route. Existing
+backend persistence is reused; restart coverage now verifies saved ordering as
+well as aliases. GTK14 passed (one real-workspace skip), including backend40 and
+the controlled host-X11 check; development products built.
+The apparent host-X11 timeout was reproduced with successful native output:
+portal descendants retained captured pipe FDs after the tested app exited. The
+host-display harness now waits for the process, uses anonymous temporary output
+files and cleans only its private process group. It passed without changing the
+app renderer. Host Wayland was covered in M05; physical IME/banner checks remain
+separate. Production artifacts remain the approved M05 code snapshot 4c9034c.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -121,6 +122,14 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("sidebar=scrollable last-workspace=selectable lifecycle=unchanged", result.stdout)
 
+    def test_friendly_names_ordering_and_modal_shortcut_isolation(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "organization"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=12)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("organization=rename-order shortcuts=bounded cancel=nonmutating", result.stdout)
+
     @unittest.skipUnless(os.environ.get("DEVSPACE_TEST_HOST_DISPLAY") in ("wayland", "x11"),
                          "opt-in controlled terminal on host display; no physical clipboard access")
     def test_controlled_terminal_and_orderly_quit_on_host_display(self):
@@ -128,12 +137,35 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
                            G_DEBUG="fatal-criticals")
         # A private bus prevents the fixture from activating or quitting the
         # user's real app, even though it uses the development channel ID.
-        result = subprocess.run([
-            "dbus-run-session", "--", str(self.app_runner), shutil.which("python3") or "/usr/bin/python3",
-            str(ROOT / "Tests/Linux/fixtures/linux_ui_backend_peer.py"), "normal",
-        ], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("snapshot=received terminal=opened stale-effects=rejected shutdown=orderly", result.stdout)
+        # Portal descendants can inherit captured pipe FDs after the app and
+        # bus launcher exit. Wait for the actual child, not unrelated EOF.
+        with tempfile.TemporaryFile(mode="w+t", dir=self.build) as stdout, \
+                tempfile.TemporaryFile(mode="w+t", dir=self.build) as stderr:
+            process = subprocess.Popen([
+                "dbus-run-session", "--", str(self.app_runner), shutil.which("python3") or "/usr/bin/python3",
+                str(ROOT / "Tests/Linux/fixtures/linux_ui_backend_peer.py"), "normal",
+            ], cwd=ROOT, env=environment, stdout=stdout, stderr=stderr, start_new_session=True)
+            timed_out = False
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+            finally:
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=5)
+            stdout.seek(0)
+            stderr.seek(0)
+            output, errors = stdout.read(), stderr.read()
+        self.assertFalse(timed_out, "controlled host-display test timed out:\n" + output + errors)
+        self.assertEqual(process.returncode, 0, output + errors)
+        self.assertIn("snapshot=received terminal=opened stale-effects=rejected shutdown=orderly", output)
 
     def test_backend_snapshot_effects_and_shutdown_reach_the_gtk_window(self):
         events = self.build / "linux-app-events.jsonl"

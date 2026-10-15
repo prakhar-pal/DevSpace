@@ -270,6 +270,17 @@ class BackendIntegrationTests(unittest.TestCase):
         self.assertEqual(reordered["layout"]["order"], ["other", "pod"])
         collapsed = self.snapshot_request("collapse_hidden")
         self.assertTrue(collapsed["layout"]["hidden_collapsed"])
+        self.request("shutdown")
+        self.process.communicate(timeout=5)
+        self.process = subprocess.Popen([str(BACKEND), "--channel", "development", "--notify-port", "0"],
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, text=True, env=self.environment)
+        self.read_buffer = b""
+        self.frames = []
+        self.assertEqual(self.request("handshake")["kind"], "ready")
+        restored = self.snapshot_request("snapshot")["layout"]
+        self.assertEqual(restored["order"], ["other", "pod"])
+        self.assertTrue(restored["hidden_collapsed"])
 
     def test_alias_edit_rejects_unknown_workspace_without_changing_layout(self):
         self.request("poll")
