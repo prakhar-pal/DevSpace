@@ -2,11 +2,13 @@
 
 Linux is a small, native DevSpace GTK application. GTK4 owns the
 window/sidebar, and VTE is only the terminal renderer/input widget. DevSpace
-application, backend protocol, and lifecycle logic remain Swift. The macOS
-SwiftUI/libghostty app is unchanged. See the
+application, backend protocol, and lifecycle logic remain Swift. macOS retains
+its SwiftUI/libghostty frontend. See the
 [Linux UI design](superpowers/specs/2026-10-13-devspace-owned-linux-ui-design.md)
 and [implementation plan](superpowers/plans/2026-10-13-devspace-owned-linux-ui.md).
 The architecture choice is recorded in [ADR 0002](adr/0002-linux-swift-gtk-vte.md).
+The [remaining-feature plan](superpowers/plans/2026-10-15-remaining-linux-features.md)
+records milestone implementation and outstanding host/release acceptance.
 
 ## Dependencies
 
@@ -124,9 +126,10 @@ The permission-denial Core test requires an unprivileged user and explicitly
 skips under root, which can bypass Unix file read permissions. Other hook
 preservation tests still run in the CI container.
 
-The workflow does not produce a production `.deb` while project/runtime
-copyright coverage and maintainer metadata are missing. The existing macOS
-job remains in the same workflow.
+The workflow verifies synthetic package assembly rather than publishing a
+production `.deb`. The real package uses the copyright manifest and approved
+maintainer above and is built separately with release approval. The existing
+macOS job remains in the same workflow.
 
 ## Ownership and behavior
 
@@ -138,10 +141,12 @@ are never sent through the backend control pipe. Terminal identities include
 workspace, pane, and connection generation so delayed events cannot target a
 replacement pane. Closing a terminal does not stop its workspace.
 
-The sidebar lists every DevPod as a selectable row without extra action
-buttons or a heading; the terminal area has no title or Close bar.
-The sidebar sizes to its workspace names, with long names capped at 24
-characters of natural width; status messages wrap within that width.
+The sidebar lists DevPods as compact selectable rows without a heading, with
+a Stop icon for running workspaces and New/Guide at the bottom. Rows scroll
+vertically. Its minimum width is established once at twice the original
+content-sized width; longer names may grow it without ratcheting that minimum.
+Names wrap with a 24-character natural-width cap; status messages wrap too.
+The single-terminal view has no workspace title or Close bar.
 Rows show a
 green dot for running DevPods and a grey dot for stopped
 or unresolved DevPods; selection is indicated by the row highlight. Status
@@ -149,9 +154,32 @@ refresh runs automatically. Running DevPods connect on startup
 and retain their terminals and notification hooks in the background; the right
 pane displays only the selected workspace's terminal. Clicking a sidebar row
 switches the displayed terminal without restarting its shell. The first running
-workspace is selected automatically; selecting a stopped workspace shows the
-empty terminal area. Reconnect remains available through Ctrl+Shift+R in a
-terminal.
+workspace is selected automatically. A stopped workspace offers Start; a
+disconnected running workspace offers Connect. Start, Stop and provisioning
+show live output. Right-click a row for Disconnect, Reload SSH Session, New
+Terminal, Set friendly name, Move Up/Down, Hide/Show, Open in Zed or Recreate,
+with session/busy-state eligibility. Hiding never disconnects or stops a pod;
+the collapsed Hidden section keeps its selected row reachable.
+
+New accepts a repository and optional DevPod ID; Recreate requires confirmation
+before replacing a container. Provisioning logs appear even without a selected
+workspace, cancellation targets only its request, and failed output remains
+until Close is pressed. Successful creation/recreation reconnects only after
+confirmed Running status. Friendly names and sidebar organization are saved
+without changing DevPod IDs.
+
+Additional terminals explicitly share one owned SSH master. Normal Connect,
+polling and selection do not create duplicate shells. The tab strip appears
+only with multiple panes, uses working-directory titles (numbers until known),
+and preserves each shell's state while switching. Closing the last shell only
+disconnects SSH. Startup and disruption recovery are bounded; retries check
+fresh status and never start stopped workspaces.
+
+Linux shortcuts: Ctrl+Shift+1–9 selects visible workspaces; Ctrl+Shift+B toggles
+the sidebar; Ctrl+Shift+R reloads SSH; Ctrl+Shift+O opens the active folder in
+Zed; Ctrl+Shift+T creates a terminal; Ctrl+PageUp/PageDown cycles tabs;
+Ctrl+Shift+Alt+Up/Down reorders the selected workspace. Copy/paste uses
+Ctrl+Shift+C/V. Editable fields and modal dialogs retain their keyboard input.
 
 An SSH connection error clears when that workspace successfully opens a new
 terminal. Connecting another workspace does not clear the failed workspace's
@@ -160,8 +188,8 @@ error.
 The first window is empty until a running workspace connects; it does not
 launch a local shell. Development and
 production have distinct application IDs. Linux feature parity with macOS
-libghostty remains a later effort; tabs/splits and a Ghostty-style settings
-surface are out of scope.
+libghostty rendering remains a later effort; splits and a Ghostty-style settings
+surface remain out of scope.
 
 Text selection/paste use VTE/GTK.
 The terminal takes its default text, background, cursor and selection colours

@@ -97,11 +97,11 @@ def main():
         if args.icu_license:
             shutil.copyfile(args.icu_license, documentation / "icu-LICENSE.txt")
         (documentation / "licensing.txt").write_text(
-            "DevSpace-owned source code: GPL-3.0-or-later. See LICENSE.\n"
+            "DevSpace-owned source code and custom app icons: GPL-3.0-or-later. See LICENSE.\n"
             "Third-party components retain their own licenses. The Swift toolchain\n"
             "license is provided separately; it is not a complete third-party inventory.\n"
             "Supplied ICU notices are preserved separately in icu-LICENSE.txt.\n"
-            "Artwork licensing requires separate coverage.\n"
+            "The Debian package copyright manifest records the binary inventory.\n"
         )
         launcher = bundle / "bin" / command
         launcher.write_text(f'''#!/bin/sh
