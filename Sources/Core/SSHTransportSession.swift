@@ -435,6 +435,10 @@ public final class SSHTransportSession {
                     return
                 }
                 guard self.generation == newGeneration, self.state == .starting else { return }
+                guard let proxy else {
+                    self.reportStartFailure(.launchFailed, generation: newGeneration)
+                    return
+                }
                 self.proxyCommand = proxy
                 self.launchMaster(generation: newGeneration)
             }

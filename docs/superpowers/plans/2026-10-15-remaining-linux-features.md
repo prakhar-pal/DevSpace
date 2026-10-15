@@ -155,6 +155,16 @@ files and cleans only its private process group. It passed without changing the
 app renderer. Host Wayland was covered in M05; physical IME/banner checks remain
 separate. Production artifacts remain the approved M05 code snapshot 4c9034c.
 
+M04 recovery follow-up, first verified fix: a resolved-but-missing DevPod proxy
+previously launched SSH with the original host configuration, without the safe
+no-start-services proxy override. A real controlled-transport regression observed
+that launch before the guard, then passed with zero master launches and a terminal
+launch failure. Core236 passed (one opt-in skip); the backend rebuilt. Resolution
+that was not requested and valid resolved proxies retain their existing behavior.
+The bounded-recovery protocol regression is now RED (only one attempt occurs
+without a poll; macOS requires two bounded startup retries); it is the next task,
+not included as a passing result in this fix.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

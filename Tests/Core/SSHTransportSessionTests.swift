@@ -91,6 +91,23 @@ final class SSHTransportSessionTests: XCTestCase {
         XCTAssertEqual(session.state, .ready)
     }
 
+    func testMissingResolvedDevpodProxyCannotLaunchUsingUnmodifiedHostConfiguration() {
+        var completion: ((String?) -> Void)?
+        var launches = 0
+        var failure: SSHTransportSession.StartError?
+        let session = SSHTransportSession(podID: "wc-1", proxyCommand: nil,
+            controlPath: "/tmp/devspace-test/socket",
+            launch: { _, _ in launches += 1; return ManualProcess() },
+            check: { _, done in done(false) }, scheduler: ManualScheduler(),
+            prepare: { done in completion = done; return ManualProcess() })
+        session.onStartError = { failure = $0 }
+        session.start()
+        completion?(nil)
+        XCTAssertEqual(launches, 0, "missing safe DevPod proxy fell back to the user's original SSH configuration")
+        XCTAssertEqual(failure, .launchFailed)
+        XCTAssertEqual(session.state, .exited)
+    }
+
     func testStoppingDuringConfigResolutionWaitsAndCannotLaunchMaster() {
         let resolver = ManualProcess()
         var resolved: ((String?) -> Void)?
