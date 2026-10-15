@@ -132,6 +132,7 @@ final class LinuxApplicationController {
         }
         do {
             let requestID = try backend.send(kind, payload: payload)
+            window?.operationSubmitted(id: requestID, kind: kind, payload: payload)
             if ["stop", "recreate", "disconnect", "reconnect", "terminal_exit"].contains(kind),
                let workspace = payload?["workspace_id"] { editorGenerations[workspace] = nil }
             if ["connect", "reconnect", "start", "stop"].contains(kind) { window?.setStatus("") }
@@ -254,8 +255,10 @@ final class LinuxApplicationController {
                 window?.setStatus("Workspace backend sent an invalid snapshot")
             }
         case "completed", "cancelled":
+            window?.operationFinished(id: message.id)
             if !shutdownRequested { nextPollDate = .distantPast }
         case "error", "platform_error":
+            window?.operationFinished(id: message.id, error: message.payload?["message"] ?? "Workspace operation failed")
             window?.setStatus(message.payload?["message"] ?? "Workspace operation failed")
         case "platform_info":
             if let text = message.payload?["message"] { window?.setStatus(text) }

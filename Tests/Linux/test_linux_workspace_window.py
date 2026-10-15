@@ -191,6 +191,17 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0, output + errors)
         self.assertIn("snapshot=received terminal=opened stale-effects=rejected shutdown=orderly", output)
 
+    def test_pending_provisioning_and_retained_failure_reach_the_gtk_window(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        for mode in ("provisioning", "provisioning-recreate"):
+            with self.subTest(mode=mode):
+                result = subprocess.run(["xvfb-run", "-a", str(self.app_runner), shutil.which("python3") or "/usr/bin/python3",
+                    str(ROOT / "Tests/Linux/fixtures/linux_ui_backend_peer.py"), mode],
+                    cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("provisioning pending=guarded failure-log=retained polling=stable", result.stdout)
+
     def test_backend_snapshot_effects_and_shutdown_reach_the_gtk_window(self):
         events = self.build / "linux-app-events.jsonl"
         environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none",

@@ -9,6 +9,7 @@ generation = "00000000-0000-0000-0000-000000000001"
 pane = "00000000-0000-0000-0000-000000000002"
 workspace = "fixture-pod"
 events_path = os.environ.get("DEVSPACE_TEST_EVENTS")
+provisioning_failed = False
 
 
 def send(frame):
@@ -43,11 +44,24 @@ for line in sys.stdin:
             "notify_error": "fixture listener unavailable",
         }})
     elif kind == "poll":
-        frame = snapshot(1)
+        frame = snapshot(4 if provisioning_failed else 1)
         frame["id"] = request["id"]
         send(frame)
         if sys.argv[1:] == ["crash"]:
             break
+    elif kind in ("create", "recreate") and sys.argv[1:] in (["provisioning"], ["provisioning-recreate"]):
+        frame = snapshot(2)
+        value = json.loads(frame["payload"]["json"])
+        value["operations"] = [{"id": request["id"], "kind": kind, "state": "running",
+                                "output": "Provisioning λ界🙂"}]
+        if kind == "recreate":
+            value["operations"][0]["workspaceID"] = workspace
+        frame["payload"]["json"] = json.dumps(value)
+        send(frame)
+        send(snapshot(3))
+        send({"version": 1, "id": request["id"], "kind": "error",
+              "payload": {"message": "fixture provisioning rejected"}})
+        provisioning_failed = True
     elif kind == "connect":
         effect = {"kind": "terminal_launch", "workspaceID": workspace,
                   "generation": generation, "paneID": pane,

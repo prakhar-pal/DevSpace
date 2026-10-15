@@ -6,6 +6,14 @@ public struct WorkspaceOperationDescriptor: Codable, Equatable, Sendable {
     public let workspaceID: String?
     public let state: String
     public let output: String
+
+    public init(id: String, kind: String, workspaceID: String?, state: String, output: String) {
+        self.id = id
+        self.kind = kind
+        self.workspaceID = workspaceID
+        self.state = state
+        self.output = output
+    }
 }
 
 /// Called on the controller's main queue. Each operation owns its CLI runner,

@@ -224,6 +224,22 @@ an enabled footer and now verifies it is disabled; the malformed provisioning
 snapshot fixture was corrected to include required badges. M10 is NOT complete:
 retained failure output and the pre-snapshot duplicate-submit window remain next.
 
+M10 source implementation completed: the application records create/recreate
+request IDs immediately, blocking duplicate submission before the first backend
+snapshot. Streamed output survives operation removal and failed replies, remains
+visible after polling, and is dismissed explicitly; finished failures cannot be
+cancelled. Native controller regressions observed both the pending-submit gap
+and lost logs before fixes, and cover Create/Recreate failure dismissal. Empty
+repositories now disable Create as on macOS, with submit-time validation retained.
+Verified: GTK18 (two opt-in skips, including backend45), Core244 (one opt-in skip),
+both default-engine development products and relocatable dev bundle, assembly16.
+The first full Core attempt was blocked by sandbox CFSocket denial and stalled;
+only its identified XCTest/SwiftPM processes were terminated. A fresh run with
+local socket permission passed all 244 tests. No production process was stopped.
+All planned source features are now implemented. Final fresh review, current
+CI/macOS and the previously listed clean-host/live/physical-input acceptance
+remain; source completion is not a claim of full release acceptance.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

@@ -150,6 +150,52 @@ private func testTick(_ data: UnsafeMutableRawPointer?) -> Int32 {
         }
         return 1
     }
+    if context.mode == "provisioning" || context.mode == "provisioning-recreate" {
+        let root = gtk_window_get_child(window.window)!
+        if window.workspaceCount == 1 && !context.connectSent {
+            context.connectSent = true
+            let recreate = context.mode == "provisioning-recreate"
+            controller.sendCommand(recreate ? "recreate" : "create", payload: recreate
+                ? ["workspace_id": "fixture-pod"] : ["repository": "https://example.invalid/new.git"])
+            if recreate { window.showWorkspaceMenu("fixture-pod", relativeTo: root) }
+            if let action = namedWidget(root, name: recreate ? "recreate-workspace" : "new-workspace"), gtk_widget_is_sensitive(action) != 0 {
+                context.failure = "creation allows duplicate submission before its first backend snapshot"
+                controller.requestShutdown()
+            }
+        }
+        if containsLabel(root, containing: "fixture provisioning rejected") && context.failure == nil {
+            if !context.notificationActivated {
+                controller.sendCommand("poll")
+                context.notificationActivated = true
+            } else if window.snapshot.revision >= 4 {
+                if !context.hostCommandSent {
+                    guard containsLabel(root, containing: "Provisioning λ界🙂"),
+                          namedWidget(root, name: "cancel-operation") == nil,
+                          let dismiss = namedWidget(root, name: "dismiss-operation") else {
+                        context.failure = "failed provisioning discarded output or still exposes cancellation after polling"
+                        controller.requestShutdown()
+                        return 1
+                    }
+                    _ = gtk_widget_activate(dismiss)
+                    context.hostCommandSent = true
+                } else if !containsLabel(root, containing: "Provisioning λ界🙂"),
+                    namedWidget(root, name: "new-workspace").map({ gtk_widget_is_sensitive($0) != 0 }) == true {
+                    context.exitCode = 0
+                    print("provisioning pending=guarded failure-log=retained polling=stable")
+                    controller.requestShutdown()
+                }
+            }
+        }
+        if Date().timeIntervalSince(context.startedAt) > 8 && context.failure == nil {
+            context.failure = "provisioning result did not reach the UI"
+            controller.requestShutdown()
+        }
+        if controller.backend.state == .stopped {
+            g_application_quit(UnsafeMutableRawPointer(context.application).assumingMemoryBound(to: GApplication.self))
+            return 0
+        }
+        return 1
+    }
     if context.mode == "crash" {
         if case .failed = controller.backend.state {
             if context.failureObservedAt == nil { context.failureObservedAt = Date() }
@@ -410,6 +456,16 @@ private func setPrivateClipboardImage() -> Bool {
     gdk_clipboard_set_texture(clipboard, texture)
     g_object_unref(UnsafeMutableRawPointer(texture))
     return true
+}
+
+private func namedWidget(_ widget: UnsafeMutablePointer<GtkWidget>, name: String) -> UnsafeMutablePointer<GtkWidget>? {
+    if String(cString: gtk_widget_get_name(widget)) == name { return widget }
+    var child = gtk_widget_get_first_child(widget)
+    while let current = child {
+        if let result = namedWidget(current, name: name) { return result }
+        child = gtk_widget_get_next_sibling(current)
+    }
+    return nil
 }
 
 private func countWidgets(_ widget: UnsafeMutablePointer<GtkWidget>, cssName: String) -> Int {

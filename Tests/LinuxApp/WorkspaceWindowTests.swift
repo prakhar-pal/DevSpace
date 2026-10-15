@@ -603,6 +603,8 @@ struct WorkspaceWindowTests {
         let dialog = try waitForDialog(for: window.window)
         defer { g_object_unref(UnsafeMutableRawPointer(dialog)) }
         let content = gtk_window_get_child(dialog)!
+        let accept = gtk_dialog_get_widget_for_response(UnsafeMutableRawPointer(dialog).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_ACCEPT.rawValue)!
+        try expect(gtk_widget_is_sensitive(accept) == 0, "Create is enabled for an empty repository")
         guard let repository = namedWidget("workspace-repository", in: content),
               let identifier = namedWidget("workspace-id", in: content) else { throw TestFailure("creation fields are missing") }
         let modifiers = GdkModifierType(rawValue: GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue)
