@@ -53,8 +53,8 @@ final class WorkspaceWindow {
         gtk_widget_set_hexpand(sidebarWidget, 0)
         gtk_widget_set_margin_top(sidebarWidget, 16)
         gtk_widget_set_margin_bottom(sidebarWidget, 16)
-        gtk_widget_set_margin_start(sidebarWidget, 8)
-        gtk_widget_set_margin_end(sidebarWidget, 8)
+        gtk_widget_set_margin_start(sidebarWidget, 16)
+        gtk_widget_set_margin_end(sidebarWidget, 16)
 
         workspaceRows = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 8)!)
             .assumingMemoryBound(to: GtkBox.self)
@@ -69,6 +69,7 @@ final class WorkspaceWindow {
         gtk_box_append(sidebar, workspaceScroll)
         statusLabel = gtk_label_new("")!
         Self.configureSidebarText(statusLabel)
+        gtk_widget_set_visible(statusLabel, 0)
         gtk_label_set_max_width_chars(OpaquePointer(statusLabel), 0)
         gtk_box_append(sidebar, statusLabel)
         notificationWarningLabel = gtk_label_new("")!
@@ -97,6 +98,7 @@ final class WorkspaceWindow {
         let tabs = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4)!
         terminalTabs = UnsafeMutableRawPointer(tabs).assumingMemoryBound(to: GtkBox.self)
         gtk_widget_set_name(tabs, "terminal-tabs")
+        for margin in [gtk_widget_set_margin_top, gtk_widget_set_margin_bottom, gtk_widget_set_margin_start, gtk_widget_set_margin_end] { margin(tabs, 8) }
         gtk_widget_set_visible(tabs, 0)
         gtk_box_append(terminalContainer, tabs)
 
@@ -110,7 +112,8 @@ final class WorkspaceWindow {
         gtk_box_append(root, separator)
         gtk_box_append(root, terminalWidget)
         gtk_window_set_child(window, rootWidget)
-        let footer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4)!
+        let footer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        gtk_widget_set_margin_top(footer, 8)
         sidebarFooter = footer
         let footerBox = UnsafeMutableRawPointer(footer).assumingMemoryBound(to: GtkBox.self)
         for (kind, title, name) in [("new_workspace", "New", "new-workspace"), ("guide", "Guide", "workspace-guide")] {
@@ -427,16 +430,25 @@ final class WorkspaceWindow {
         terminalPanes.removeValue(forKey: identity)?.dispose()
         let box = UnsafeMutableRawPointer(root).assumingMemoryBound(to: GtkBox.self)
         clear(box)
-        gtk_box_append(box, gtk_label_new(message)!)
+        let contentWidget = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12)!
+        let content = UnsafeMutableRawPointer(contentWidget).assumingMemoryBound(to: GtkBox.self)
+        for margin in [gtk_widget_set_margin_top, gtk_widget_set_margin_bottom, gtk_widget_set_margin_start, gtk_widget_set_margin_end] { margin(contentWidget, 24) }
+        gtk_box_append(box, contentWidget)
+        gtk_box_append(content, Self.panelMessage(message))
+        let actionsWidget = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        let actions = UnsafeMutableRawPointer(actionsWidget).assumingMemoryBound(to: GtkBox.self)
+        gtk_widget_set_halign(actionsWidget, GTK_ALIGN_START)
+        gtk_box_append(content, actionsWidget)
         if !retrying {
             let retry = gtk_button_new_with_label("Retry")!
+            gtk_widget_add_css_class(retry, "suggested-action")
             gtk_widget_set_name(retry, "retry-terminal-\(identity.paneID.uuidString.lowercased())")
             connectAction(retry, context: WorkspaceActionContext(window: self, kind: "terminal_retry", payload: eventPayload(identity)))
-            gtk_box_append(box, retry)
+            gtk_box_append(actions, retry)
         }
         let close = gtk_button_new_with_label("Close")!
         connectAction(close, context: WorkspaceActionContext(window: self, kind: "close_terminal", payload: eventPayload(identity)))
-        gtk_box_append(box, close)
+        gtk_box_append(actions, close)
         revealSelectedTerminal()
         refreshLifecyclePanel()
     }
@@ -484,7 +496,7 @@ final class WorkspaceWindow {
             gtk_widget_set_name(button, "select-terminal-\(identity.paneID.uuidString.lowercased())")
             gtk_widget_set_hexpand(button, 1)
             gtk_widget_set_tooltip_text(button, directory ?? "Terminal \(index + 1)")
-            if activeTerminal[workspace] == identity { gtk_widget_add_css_class(button, "suggested-action") }
+            if activeTerminal[workspace] == identity { gtk_widget_set_state_flags(button, GTK_STATE_FLAG_CHECKED, 0) }
             connectAction(button, context: WorkspaceActionContext(window: self, kind: "select_terminal", payload: eventPayload(identity)))
             gtk_box_append(terminalTabs, button)
             let close = gtk_button_new_from_icon_name("window-close-symbolic")!
@@ -508,6 +520,7 @@ final class WorkspaceWindow {
     func setStatus(_ message: String) {
         terminalErrorWorkspace = nil
         gtk_label_set_text(OpaquePointer(statusLabel), message)
+        gtk_widget_set_visible(statusLabel, message.isEmpty ? 0 : 1)
     }
 
     func operationSubmitted(id: String, kind: String, payload: [String: String]?) {
@@ -604,7 +617,8 @@ final class WorkspaceWindow {
             gtk_button_set_child($0, UnsafeMutableRawPointer(row).assumingMemoryBound(to: GtkWidget.self))
         }
         gtk_widget_add_css_class(button, "flat")
-        if selected { gtk_widget_add_css_class(button, "suggested-action") }
+        // Selection is snapshot-owned, not a primary action or a local toggle.
+        if selected { gtk_widget_set_state_flags(button, GTK_STATE_FLAG_CHECKED, 0) }
         gtk_widget_set_sensitive(button, actionsEnabled ? 1 : 0)
         connectAction(button, context: WorkspaceActionContext(
             window: self, kind: "select", payload: ["workspace_id": workspace.id]
@@ -620,7 +634,7 @@ final class WorkspaceWindow {
             Unmanaged.passRetained(WorkspaceActionContext(window: self, kind: "menu",
                 payload: ["workspace_id": workspace.id])).toOpaque(), destroy, GConnectFlags(rawValue: 0))
         gtk_widget_add_controller(button, gesture)
-        let container = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0)!)
+        let container = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!)
             .assumingMemoryBound(to: GtkBox.self)
         gtk_widget_set_hexpand(button, 1)
         gtk_box_append(container, button)
@@ -649,6 +663,7 @@ final class WorkspaceWindow {
         let box = UnsafeMutableRawPointer(emptyState).assumingMemoryBound(to: GtkBox.self)
         clear(box)
         gtk_widget_set_margin_top(emptyState, 24)
+        gtk_widget_set_margin_bottom(emptyState, 24)
         gtk_widget_set_margin_start(emptyState, 24)
         gtk_widget_set_margin_end(emptyState, 24)
         if let newWorkspaceButton {
@@ -657,7 +672,7 @@ final class WorkspaceWindow {
         let workspace = snapshot.workspaces.first(where: { $0.id == snapshot.selectedID })
         if let operation = presentedOperation {
             let name = operation.workspaceID.flatMap { snapshot.layout.aliases[$0] ?? $0 } ?? "New workspace"
-            gtk_box_append(box, gtk_label_new("\(operation.kind.capitalized): \(name) — \(operation.state)")!)
+            gtk_box_append(box, Self.panelMessage("\(operation.kind.capitalized): \(name) — \(operation.state)"))
             let output = gtk_label_new(operation.output)!
             gtk_label_set_xalign(OpaquePointer(output), 0)
             gtk_label_set_yalign(OpaquePointer(output), 0)
@@ -670,12 +685,14 @@ final class WorkspaceWindow {
             gtk_box_append(box, scroll)
             if operation.state == "failed" {
                 let close = gtk_button_new_with_label("Close")!
+                gtk_widget_set_halign(close, GTK_ALIGN_START)
                 gtk_widget_set_name(close, "dismiss-operation")
                 connectAction(close, context: WorkspaceActionContext(window: self, kind: "dismiss_operation",
                     payload: ["workspace_id": operation.kind == "create" ? "" : operation.workspaceID ?? ""]))
                 gtk_box_append(box, close)
             } else if ["start", "create", "recreate"].contains(operation.kind) {
                 let cancel = gtk_button_new_with_label(operation.state == "cancelling" ? "Cancelling…" : "Cancel")!
+                gtk_widget_set_halign(cancel, GTK_ALIGN_START)
                 gtk_widget_set_name(cancel, "cancel-operation")
                 gtk_widget_set_sensitive(cancel, actionsEnabled && operation.state != "cancelling" ? 1 : 0)
                 connectAction(cancel, context: WorkspaceActionContext(window: self, kind: "cancel", payload: ["request_id": operation.id]))
@@ -685,12 +702,14 @@ final class WorkspaceWindow {
             return
         }
         guard let workspace else {
-            gtk_box_append(box, gtk_label_new("Select a workspace to open its terminal.")!)
+            gtk_box_append(box, Self.panelMessage("Select a workspace to open its terminal."))
             return
         }
         if workspace.state == "Stopped" {
-            gtk_box_append(box, gtk_label_new("Workspace stopped")!)
+            gtk_box_append(box, Self.panelMessage("Workspace stopped"))
             let start = gtk_button_new_with_label("Start")!
+            gtk_widget_add_css_class(start, "suggested-action")
+            gtk_widget_set_halign(start, GTK_ALIGN_START)
             gtk_widget_set_name(start, "start-workspace")
             gtk_widget_set_sensitive(start, actionsEnabled ? 1 : 0)
             connectAction(start, context: WorkspaceActionContext(
@@ -701,17 +720,36 @@ final class WorkspaceWindow {
             let phase = connectionStates[workspace.id]
             let connecting = phase == "connecting" || phase == "disconnecting"
             if workspace.state == "Running" {
-                gtk_box_append(box, gtk_label_new(phase == "disconnecting" ? "Disconnecting SSH session…"
-                    : connecting ? "Connecting to workspace…" : "Workspace is running. Connect to open its terminal.")!)
+                gtk_box_append(box, Self.panelMessage(phase == "disconnecting" ? "Disconnecting SSH session…"
+                    : connecting ? "Connecting to workspace…" : "Workspace is running. Connect to open its terminal."))
                 let connect = gtk_button_new_with_label(connecting ? "Connecting…" : "Connect")!
+                gtk_widget_add_css_class(connect, "suggested-action")
+                gtk_widget_set_halign(connect, GTK_ALIGN_START)
                 gtk_widget_set_name(connect, "connect-workspace")
                 gtk_widget_set_sensitive(connect, actionsEnabled && !connecting ? 1 : 0)
                 connectAction(connect, context: WorkspaceActionContext(window: self, kind: "connect",
                     payload: ["workspace_id": workspace.id]))
                 gtk_box_append(box, connect)
-            } else { gtk_box_append(box, gtk_label_new("Checking workspace status…")!) }
+            } else { gtk_box_append(box, Self.panelMessage("Checking workspace status…")) }
         }
         revealSelectedTerminal()
+    }
+
+    private static func panelMessage(_ text: String) -> UnsafeMutablePointer<GtkWidget> {
+        let label = gtk_label_new(text)!
+        gtk_label_set_xalign(OpaquePointer(label), 0)
+        gtk_label_set_wrap(OpaquePointer(label), 1)
+        gtk_label_set_wrap_mode(OpaquePointer(label), PANGO_WRAP_WORD_CHAR)
+        return label
+    }
+
+    private static func padDialogActions(_ dialog: UnsafeMutablePointer<GtkDialog>, response: Int32) {
+        guard let button = gtk_dialog_get_widget_for_response(dialog, response),
+              let actions = gtk_widget_get_parent(button) else { return }
+        gtk_widget_set_margin_start(actions, 20)
+        gtk_widget_set_margin_end(actions, 20)
+        gtk_widget_set_margin_bottom(actions, 20)
+        gtk_box_set_spacing(UnsafeMutableRawPointer(actions).assumingMemoryBound(to: GtkBox.self), 8)
     }
 
     func showWorkspaceMenu(_ workspaceID: String, relativeTo source: UnsafeMutablePointer<GtkWidget>, x: Double = 0, y: Double = 0) {
@@ -729,10 +767,15 @@ final class WorkspaceWindow {
             gtk_popover_set_pointing_to(UnsafeMutableRawPointer(popover).assumingMemoryBound(to: GtkPopover.self), &rectangle)
         }
         let box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
+        for margin in [gtk_widget_set_margin_top, gtk_widget_set_margin_bottom, gtk_widget_set_margin_start, gtk_widget_set_margin_end] { margin(box, 4) }
         gtk_popover_set_child(UnsafeMutableRawPointer(popover).assumingMemoryBound(to: GtkPopover.self), box)
         let busy = isWorkspaceBusy(workspaceID)
         func addAction(_ kind: String, _ title: String, enabled: Bool = true, payload: [String: String]? = nil) {
             let button = gtk_button_new_with_label(title)!
+            gtk_widget_add_css_class(button, "flat")
+            if let label = gtk_button_get_child(UnsafeMutableRawPointer(button).assumingMemoryBound(to: GtkButton.self)) {
+                gtk_label_set_xalign(OpaquePointer(label), 0)
+            }
             gtk_widget_set_name(button, "\(kind)-workspace")
             gtk_widget_set_sensitive(button, enabled ? 1 : 0)
             connectAction(button, context: WorkspaceActionContext(window: self, kind: kind,
@@ -809,25 +852,24 @@ final class WorkspaceWindow {
         gtk_window_set_default_size(modal, kind == "guide" ? 560 : 460, kind == "guide" ? 520 : -1)
         let contentWidget = gtk_dialog_get_content_area(dialog)!
         let content = UnsafeMutableRawPointer(contentWidget).assumingMemoryBound(to: GtkBox.self)
-        for margin in [gtk_widget_set_margin_top, gtk_widget_set_margin_bottom, gtk_widget_set_margin_start, gtk_widget_set_margin_end] { margin(contentWidget, 16) }
+        for margin in [gtk_widget_set_margin_top, gtk_widget_set_margin_bottom, gtk_widget_set_margin_start, gtk_widget_set_margin_end] { margin(contentWidget, 20) }
         gtk_box_set_spacing(content, 12)
         var repository: UnsafeMutablePointer<GtkWidget>?
         var identifier: UnsafeMutablePointer<GtkWidget>?
         if kind == "create" {
-            gtk_box_append(content, gtk_label_new("Provision a workspace from a Git repository.")!)
-            gtk_box_append(content, gtk_label_new("Repository URL")!)
+            gtk_box_append(content, Self.panelMessage("Provision a workspace from a Git repository."))
+            gtk_box_append(content, Self.panelMessage("Repository URL"))
             repository = gtk_entry_new()!
             gtk_widget_set_name(repository!, "workspace-repository")
             gtk_entry_set_activates_default(UnsafeMutableRawPointer(repository!).assumingMemoryBound(to: GtkEntry.self), 1)
             gtk_box_append(content, repository!)
-            gtk_box_append(content, gtk_label_new("DevPod ID (optional)")!)
+            gtk_box_append(content, Self.panelMessage("DevPod ID (optional)"))
             identifier = gtk_entry_new()!
             gtk_widget_set_name(identifier!, "workspace-id")
             gtk_entry_set_activates_default(UnsafeMutableRawPointer(identifier!).assumingMemoryBound(to: GtkEntry.self), 1)
             gtk_box_append(content, identifier!)
         } else if kind == "recreate" {
-            let warning = gtk_label_new("DevPod will replace the existing container and provision the workspace again. The current terminal session will disconnect.")!
-            gtk_label_set_wrap(OpaquePointer(warning), 1)
+            let warning = Self.panelMessage("DevPod will replace the existing container and provision the workspace again. The current terminal session will disconnect.")
             gtk_box_append(content, warning)
         } else {
             let scroll = gtk_scrolled_window_new()!
@@ -865,9 +907,10 @@ final class WorkspaceWindow {
         else {
             _ = gtk_dialog_add_button(dialog, "Cancel", GTK_RESPONSE_CANCEL.rawValue)
             let accept = gtk_dialog_add_button(dialog, kind == "create" ? "Create" : "Recreate", GTK_RESPONSE_ACCEPT.rawValue)!
-            if kind == "recreate" { gtk_widget_add_css_class(accept, "destructive-action") }
+            gtk_widget_add_css_class(accept, kind == "recreate" ? "destructive-action" : "suggested-action")
             gtk_dialog_set_default_response(dialog, GTK_RESPONSE_ACCEPT.rawValue)
         }
+        Self.padDialogActions(dialog, response: kind == "guide" ? GTK_RESPONSE_CLOSE.rawValue : GTK_RESPONSE_ACCEPT.rawValue)
         let context = WorkspaceDialogContext(window: self, kind: kind, workspace: workspace,
             repository: repository, identifier: identifier, error: error)
         let callback = unsafeBitCast(devspaceLinuxWorkspaceDialogResponse as @convention(c)
@@ -944,17 +987,19 @@ final class WorkspaceWindow {
         let contentWidget = gtk_dialog_get_content_area(dialog)!
         let content = UnsafeMutableRawPointer(contentWidget).assumingMemoryBound(to: GtkBox.self)
         for setMargin in [gtk_widget_set_margin_top, gtk_widget_set_margin_bottom, gtk_widget_set_margin_start, gtk_widget_set_margin_end] {
-            setMargin(contentWidget, 16)
+            setMargin(contentWidget, 20)
         }
         gtk_box_set_spacing(content, 12)
-        gtk_box_append(content, gtk_label_new("Workspace \(workspace)")!)
+        gtk_box_append(content, Self.panelMessage("Workspace \(workspace)"))
         let entry = gtk_entry_new()!
         gtk_widget_set_name(entry, "workspace-friendly-name")
         gtk_editable_set_text(OpaquePointer(entry), snapshot.layout.aliases[workspace] ?? "")
         gtk_entry_set_activates_default(UnsafeMutableRawPointer(entry).assumingMemoryBound(to: GtkEntry.self), 1)
         gtk_box_append(content, entry)
         _ = gtk_dialog_add_button(dialog, "Cancel", GTK_RESPONSE_CANCEL.rawValue)
-        _ = gtk_dialog_add_button(dialog, "Set friendly name", GTK_RESPONSE_ACCEPT.rawValue)
+        let accept = gtk_dialog_add_button(dialog, "Set friendly name", GTK_RESPONSE_ACCEPT.rawValue)!
+        gtk_widget_add_css_class(accept, "suggested-action")
+        Self.padDialogActions(dialog, response: GTK_RESPONSE_ACCEPT.rawValue)
         gtk_dialog_set_default_response(dialog, GTK_RESPONSE_ACCEPT.rawValue)
         let callback = unsafeBitCast(devspaceLinuxRenameResponse as @convention(c)
             (UnsafeMutableRawPointer?, Int32, UnsafeMutableRawPointer?) -> Void, to: GCallback.self)
@@ -1010,7 +1055,13 @@ final class WorkspaceWindow {
     }
 
     private func clear(_ box: UnsafeMutablePointer<GtkBox>) {
-        while let child = gtk_widget_get_first_child(UnsafeMutableRawPointer(box).assumingMemoryBound(to: GtkWidget.self)) {
+        let widget = UnsafeMutableRawPointer(box).assumingMemoryBound(to: GtkWidget.self)
+        // Release focus before destroying its owner. A newly focused selectable
+        // label may otherwise inspect the old, already-finalized focus widget.
+        if let focus = gtk_window_get_focus(window), gtk_widget_is_ancestor(focus, widget) != 0 {
+            gtk_window_set_focus(window, nil)
+        }
+        while let child = gtk_widget_get_first_child(widget) {
             gtk_box_remove(box, child)
         }
     }

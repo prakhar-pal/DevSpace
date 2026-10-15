@@ -30,6 +30,16 @@ struct WorkspaceWindowTests {
                 throw TestFailure("GTK application registration failed")
             }
 
+            if CommandLine.arguments.dropFirst().contains("spacing") {
+                try testSpacing(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
+            if CommandLine.arguments.dropFirst().contains("button-roles") {
+                try testButtonRoles(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
             if CommandLine.arguments.dropFirst().contains("native-keys") {
                 try testNativeKeys(application)
                 g_object_unref(UnsafeMutableRawPointer(application))
@@ -469,6 +479,199 @@ struct WorkspaceWindowTests {
         return try JSONDecoder().decode(WorkspaceTerminalEffect.self, from: data)
     }
 
+    private static func testSpacing(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let window = WorkspaceWindow(application: application)
+        defer { gtk_window_destroy(window.window) }
+        let stopped = WorkspaceView(id: "pod", provider: "test", source: "", lastUsed: "", state: "Stopped", error: nil)
+        let running = WorkspaceView(id: "running", provider: "test", source: "", lastUsed: "", state: "Running", error: nil)
+        var layout = Layout()
+        layout.aliases["running"] = "A longer workspace name that must not overlap its controls"
+        window.update(WorkspaceControllerSnapshot(revision: 1, workspaces: [stopped, running], selectedID: "pod", layout: layout, terminalPanes: []))
+        window.present()
+        let root = gtk_window_get_child(window.window)!
+        let start = namedWidget("start-workspace", in: root)!
+        let panel = gtk_widget_get_parent(start)!
+        try expect(pumpUntil { gtk_widget_get_width(start) > 0 }, "Start was not allocated")
+        try capturePresentation(window.window, name: "stopped")
+        try expect(gtk_widget_get_width(start) < gtk_widget_get_width(panel) / 2,
+                   "Start stretches across the workspace panel instead of fitting its label")
+        try expect(gtk_widget_get_margin_bottom(panel) >= 16, "action panel has no bottom inset")
+        let rowButton = namedWidget("select-workspace-running", in: root)!
+        let stop = namedWidget("stop-workspace", in: root)!
+        let menu = namedWidget("workspace-menu-running", in: root)!
+        let row = gtk_widget_get_parent(rowButton)!
+        var selectionBounds = graphene_rect_t(), stopBounds = graphene_rect_t(), menuBounds = graphene_rect_t()
+        try expect(gtk_widget_compute_bounds(rowButton, row, &selectionBounds) != 0
+            && gtk_widget_compute_bounds(stop, row, &stopBounds) != 0
+            && gtk_widget_compute_bounds(menu, row, &menuBounds) != 0, "row controls have no bounds")
+        try expect(stopBounds.origin.x > selectionBounds.origin.x + selectionBounds.size.width
+            && menuBounds.origin.x > stopBounds.origin.x + stopBounds.size.width,
+                   "workspace selection, Stop and menu controls touch")
+        window.showWorkspaceMenu("running", relativeTo: menu)
+        try expect(pumpUntil { namedWidget("rename-workspace", in: root).map { gtk_widget_get_mapped($0) != 0 } == true }, "menu did not map")
+        let rename = namedWidget("rename-workspace", in: root)!
+        try expect(gtk_widget_has_css_class(rename, "flat") != 0, "popover actions still look like stacked standalone buttons")
+        _ = gtk_widget_activate(rename)
+        let dialog = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(dialog)) }
+        let content = gtk_dialog_get_content_area(UnsafeMutableRawPointer(dialog).assumingMemoryBound(to: GtkDialog.self))!
+        try expect(gtk_widget_get_margin_start(content) >= 20 && gtk_widget_get_margin_end(content) >= 20,
+                   "dialog content is cramped against its edges")
+        try capturePresentation(dialog, name: "rename")
+        let accept = gtk_dialog_get_widget_for_response(UnsafeMutableRawPointer(dialog).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_ACCEPT.rawValue)!
+        let dialogWidget = UnsafeMutableRawPointer(dialog).assumingMemoryBound(to: GtkWidget.self)
+        try expect(pumpUntil { gtk_widget_get_width(accept) > 0 }, "dialog actions did not map")
+        var acceptBounds = graphene_rect_t()
+        try expect(gtk_widget_compute_bounds(accept, dialogWidget, &acceptBounds) != 0
+            && Float(gtk_widget_get_width(dialogWidget)) - acceptBounds.origin.x - acceptBounds.size.width >= 16
+            && Float(gtk_widget_get_height(dialogWidget)) - acceptBounds.origin.y - acceptBounds.size.height >= 16,
+                   "dialog action buttons touch the right or bottom window edge")
+        gtk_dialog_response(UnsafeMutableRawPointer(dialog).assumingMemoryBound(to: GtkDialog.self), GTK_RESPONSE_CANCEL.rawValue)
+        window.update(WorkspaceControllerSnapshot(revision: 2, workspaces: [stopped, running], selectedID: "running", layout: layout, terminalPanes: []))
+        let connect = namedWidget("connect-workspace", in: root)!
+        try expect(pumpUntil { gtk_widget_get_width(connect) > 0 }, "Connect did not map")
+        try expect(gtk_widget_get_width(connect) < gtk_widget_get_width(gtk_widget_get_parent(connect)) / 2,
+                   "Connect stretches across the workspace panel")
+        try capturePresentation(window.window, name: "running")
+        print("spacing=separated actions=content-sized dialogs=padded")
+    }
+
+    private static func testButtonRoles(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let window = WorkspaceWindow(application: application)
+        defer { gtk_window_destroy(window.window) }
+        let stopped = WorkspaceView(id: "pod", provider: "test", source: "", lastUsed: "", state: "Stopped", error: nil)
+        let running = WorkspaceView(id: "pod", provider: "test", source: "", lastUsed: "", state: "Running", error: nil)
+        func update(_ workspace: WorkspaceView, revision: UInt64) {
+            window.update(WorkspaceControllerSnapshot(revision: revision, workspaces: [workspace], selectedID: "pod", layout: Layout(), terminalPanes: []))
+        }
+        update(stopped, revision: 1)
+        window.present()
+        let root = gtk_window_get_child(window.window)!
+        let start = namedWidget("start-workspace", in: root)!
+        try expect(gtk_widget_has_css_class(start, "suggested-action") != 0, "Start is not the primary action for a stopped workspace")
+        let selection = namedWidget("select-workspace-pod", in: root)!
+        try expect(gtk_widget_has_css_class(selection, "suggested-action") == 0,
+                   "workspace selection still competes with the primary action")
+        try expect(gtk_widget_get_state_flags(selection).rawValue & GTK_STATE_FLAG_CHECKED.rawValue != 0, "selected workspace has no native selection styling")
+        _ = gtk_widget_activate(selection)
+        update(stopped, revision: 2)
+        try expect(gtk_widget_get_state_flags(namedWidget("select-workspace-pod", in: root)!).rawValue & GTK_STATE_FLAG_CHECKED.rawValue != 0,
+                   "reactivation or an unchanged poll cleared workspace selection")
+        try capturePresentation(window.window, name: "primary-start")
+        _ = gtk_widget_activate(namedWidget("new-workspace", in: root)!)
+        let create = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(create)) }
+        let createDialog = UnsafeMutableRawPointer(create).assumingMemoryBound(to: GtkDialog.self)
+        let confirm = gtk_dialog_get_widget_for_response(createDialog, GTK_RESPONSE_ACCEPT.rawValue)!
+        let cancel = gtk_dialog_get_widget_for_response(createDialog, GTK_RESPONSE_CANCEL.rawValue)!
+        try expect(gtk_widget_has_css_class(confirm, "suggested-action") != 0 && gtk_widget_is_sensitive(confirm) == 0,
+                   "Create lacks primary styling or bypasses input validation")
+        try expect(gtk_widget_has_css_class(cancel, "suggested-action") == 0 && gtk_widget_has_css_class(cancel, "destructive-action") == 0,
+                   "Cancel is not a neutral secondary action")
+        let repository = namedWidget("workspace-repository", in: gtk_window_get_child(create)!)!
+        try expect(gtk_label_get_xalign(OpaquePointer(gtk_widget_get_prev_sibling(repository)!)) == 0,
+                   "repository label is centered instead of aligned with its input")
+        gtk_editable_set_text(OpaquePointer(repository), "https://example.invalid/project.git")
+        try expect(gtk_widget_is_sensitive(confirm) != 0, "valid primary action remains disabled")
+        try capturePresentation(create, name: "create")
+        gtk_dialog_response(createDialog, GTK_RESPONSE_CANCEL.rawValue)
+        window.showWorkspaceMenu("pod", relativeTo: selection)
+        _ = gtk_widget_activate(namedWidget("rename-workspace", in: root)!)
+        let rename = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(rename)) }
+        let renameDialog = UnsafeMutableRawPointer(rename).assumingMemoryBound(to: GtkDialog.self)
+        try expect(gtk_widget_has_css_class(gtk_dialog_get_widget_for_response(renameDialog, GTK_RESPONSE_ACCEPT.rawValue), "suggested-action") != 0,
+                   "friendly-name confirmation is not primary")
+        gtk_dialog_response(renameDialog, GTK_RESPONSE_CANCEL.rawValue)
+        window.showWorkspaceMenu("pod", relativeTo: selection)
+        _ = gtk_widget_activate(namedWidget("recreate-workspace", in: root)!)
+        let recreate = try waitForDialog(for: window.window)
+        defer { g_object_unref(UnsafeMutableRawPointer(recreate)) }
+        let recreateDialog = UnsafeMutableRawPointer(recreate).assumingMemoryBound(to: GtkDialog.self)
+        let destructive = gtk_dialog_get_widget_for_response(recreateDialog, GTK_RESPONSE_ACCEPT.rawValue)!
+        try expect(gtk_widget_has_css_class(destructive, "destructive-action") != 0
+            && gtk_widget_has_css_class(destructive, "suggested-action") == 0, "Recreate lost its destructive distinction")
+        try capturePresentation(recreate, name: "recreate")
+        gtk_dialog_response(recreateDialog, GTK_RESPONSE_CANCEL.rawValue)
+        update(running, revision: 3)
+        try expect(gtk_widget_has_css_class(namedWidget("connect-workspace", in: root), "suggested-action") != 0, "Connect is not primary")
+        try expect(gtk_widget_has_css_class(namedWidget("stop-workspace", in: root), "suggested-action") == 0, "Stop competes with Connect")
+        window.setConnectionStates(["pod": "connected"])
+        let generation = UUID(), first = UUID(), second = UUID()
+        for pane in [first, second] {
+            window.apply(try terminalEffect(kind: "terminal_launch", workspace: "pod", generation: generation,
+                pane: pane, executable: "/bin/sh", arguments: ["-c", "printf ready; exec sleep 30"]))
+        }
+        let tab = namedWidget("select-terminal-\(second.uuidString.lowercased())", in: root)!
+        try expect(gtk_widget_has_css_class(tab, "suggested-action") == 0
+            && gtk_widget_get_state_flags(tab).rawValue & GTK_STATE_FLAG_CHECKED.rawValue != 0, "active tab uses primary-action styling instead of selection")
+        window.apply(try terminalEffect(kind: "terminal_client_failed", workspace: "pod", generation: generation,
+            pane: second, message: "SSH connection failed. Retry to reconnect this terminal.", retrying: false))
+        let retry = namedWidget("retry-terminal-\(second.uuidString.lowercased())", in: root)!
+        try expect(gtk_widget_has_css_class(retry, "suggested-action") != 0, "Retry is not primary")
+        try capturePresentation(window.window, name: "retry")
+        let retryActions = gtk_widget_get_parent(retry)!
+        try expect(pumpUntil { gtk_widget_get_width(retry) > 0 }, "Retry did not map")
+        try expect(gtk_widget_get_width(retryActions) < gtk_widget_get_width(gtk_widget_get_parent(retryActions)) / 2,
+                   "Retry and Close stretch across the failure panel")
+        let failureClose = gtk_widget_get_next_sibling(retry)!
+        try expect(gtk_widget_has_css_class(failureClose, "suggested-action") == 0, "failure Close is not secondary")
+        window.apply(try terminalEffect(kind: "terminal_launch", workspace: "pod", generation: generation,
+            pane: second, executable: "/bin/sh", arguments: ["-c", "printf recovered; exec sleep 30"]))
+        let recovered = window.pane(forWorkspace: "pod")!
+        let terminalRoot = gtk_widget_get_parent(recovered.widget)!
+        try expect(gtk_widget_get_margin_start(terminalRoot) == 0 && gtk_widget_get_margin_top(terminalRoot) == 0,
+                   "retry recovery leaves panel padding around VTE")
+        gtk_window_set_default_size(window.window, 680, 420)
+        let windowWidget = UnsafeMutableRawPointer(window.window).assumingMemoryBound(to: GtkWidget.self)
+        try expect(pumpUntil { gtk_widget_get_width(windowWidget) <= 700 }, "window could not shrink for wrapped-error verification")
+        let longMessage = "SSH connection failed while waiting for the workspace to become ready. Check the provider status and network connection, then retry this terminal without starting another workspace."
+        window.apply(try terminalEffect(kind: "terminal_client_failed", workspace: "pod", generation: generation,
+            pane: second, message: longMessage, retrying: false))
+        let narrowRetry = namedWidget("retry-terminal-\(second.uuidString.lowercased())", in: root)!
+        try expect(pumpUntil { gtk_widget_get_mapped(narrowRetry) != 0 && gtk_widget_get_width(narrowRetry) > 0 },
+                   "wrapped failure pushed Retry out of the narrow panel")
+        try capturePresentation(window.window, name: "narrow-error")
+        window.closeTerminal(TerminalPaneIdentity(workspaceID: "pod", generation: generation, paneID: first))
+        window.closeTerminal(TerminalPaneIdentity(workspaceID: "pod", generation: generation, paneID: second))
+        window.update(WorkspaceControllerSnapshot(revision: 4, workspaces: [running], selectedID: "pod", layout: Layout(), terminalPanes: [],
+            operations: [WorkspaceOperationDescriptor(id: "fixture-operation", kind: "start", workspaceID: "pod", state: "running",
+                output: String(repeating: "Waiting for the DevContainer to become ready. Provider output: λ界🙂\n", count: 30))]))
+        let operationCancel = namedWidget("cancel-operation", in: root)!
+        try expect(pumpUntil { gtk_widget_get_width(operationCancel) > 0 }, "narrow operation Cancel did not map")
+        var cancelBounds = graphene_rect_t()
+        try expect(gtk_widget_compute_bounds(operationCancel, windowWidget, &cancelBounds) != 0
+            && cancelBounds.origin.y + cancelBounds.size.height <= Float(gtk_widget_get_height(windowWidget)) - 16,
+                   "long operation output pushed Cancel past the window bottom")
+        try capturePresentation(window.window, name: "narrow-operation")
+        print("roles=primary-secondary-destructive selection=distinct validation=preserved")
+    }
+
+    private static func capturePresentation(_ window: UnsafeMutablePointer<GtkWindow>, name: String) throws {
+        guard let directory = ProcessInfo.processInfo.environment["DEVSPACE_UI_CAPTURE_DIR"] else { return }
+        let path = URL(fileURLWithPath: directory).appendingPathComponent("\(name).png").path
+        let widget = UnsafeMutableRawPointer(window).assumingMemoryBound(to: GtkWidget.self)
+        try expect(pumpUntil { gtk_widget_get_mapped(widget) != 0 }, "capture window did not map")
+        if let clock = gtk_widget_get_frame_clock(widget) {
+            let frame = gdk_frame_clock_get_frame_counter(clock)
+            gtk_widget_queue_draw(widget)
+            try expect(pumpUntil { gdk_frame_clock_get_frame_counter(clock) > frame }, "capture did not render a fresh frame")
+        }
+        try expect(pumpUntil {
+            let width = gtk_widget_get_width(widget), height = gtk_widget_get_height(widget)
+            guard width > 0, height > 0, let renderer = gtk_native_get_renderer(OpaquePointer(UnsafeMutableRawPointer(window))) else { return false }
+            let paintable = gtk_widget_paintable_new(widget)!
+            defer { g_object_unref(UnsafeMutableRawPointer(paintable)) }
+            let snapshot = gtk_snapshot_new()!
+            gdk_paintable_snapshot(paintable, snapshot, Double(width), Double(height))
+            guard let node = gtk_snapshot_free_to_node(snapshot) else { return false }
+            defer { gsk_render_node_unref(node) }
+            guard let texture = gsk_renderer_render_texture(renderer, node, nil) else { return false }
+            defer { g_object_unref(UnsafeMutableRawPointer(texture)) }
+            return gdk_texture_save_to_png(texture, path) != 0
+        }, "could not capture mapped \(name) window")
+    }
+
     private static func testLifecycleControls(_ application: UnsafeMutablePointer<GtkApplication>) throws {
         let window = WorkspaceWindow(application: application)
         defer { gtk_window_destroy(window.window) }
@@ -496,6 +699,7 @@ struct WorkspaceWindowTests {
         [{"id":"request-42","kind":"start","workspaceID":"pod","state":"running","output":"Preparing λ界🙂"}]
         """)
         try expect(containsLabel("Preparing λ界🙂", in: root), "operation output is not visible")
+        try capturePresentation(window.window, name: "operation")
         try expect(namedWidget("start-workspace", in: root) == nil, "busy workspace offers another Start")
         guard let cancel = namedWidget("cancel-operation", in: root) else { throw TestFailure("start has no Cancel") }
         _ = gtk_widget_activate(cancel)

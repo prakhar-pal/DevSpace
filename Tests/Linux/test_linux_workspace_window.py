@@ -107,6 +107,30 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("snapshot-identity=stable stale-generation=rejected close=workspace-preserved", result.stdout)
 
+    def test_rendered_spacing_and_content_sized_actions(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        with tempfile.TemporaryFile(mode="w+") as output:
+            result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "spacing"],
+                cwd=ROOT, env=environment, stdout=output, stderr=subprocess.STDOUT, text=True, timeout=15)
+            output.seek(0)
+            log = output.read()
+        self.assertEqual(result.returncode, 0, log)
+        self.assertIn("spacing=separated actions=content-sized dialogs=padded", log)
+
+    def test_button_roles_distinguish_actions_from_selection(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        # Desktop portal children can retain captured pipe descriptors after
+        # the runner exits. Wait for the runner, not unrelated pipe EOF.
+        with tempfile.TemporaryFile(mode="w+") as output:
+            result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "button-roles"],
+                cwd=ROOT, env=environment, stdout=output, stderr=subprocess.STDOUT, text=True, timeout=15)
+            output.seek(0)
+            log = output.read()
+        self.assertEqual(result.returncode, 0, log)
+        self.assertIn("roles=primary-secondary-destructive selection=distinct validation=preserved", log)
+
     def test_start_stop_controls_follow_state_and_operation_lifecycle(self):
         environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
         environment.pop("WAYLAND_DISPLAY", None)
