@@ -473,6 +473,55 @@ release gate; this turn revalidated the current artifacts and external state.
   Ubuntu 24.04 remains deferred. Previous isolated/native/live evidence is
   preserved above, but is not substituted for these missing acceptance gates.
 
+### Clean Ubuntu runtime checkpoint — 2026-10-19
+
+Advanced the independent M07 runtime gate while the terminal transport approval
+remains pending. The existing production bundle was tested, not rebuilt,
+installed on the host, replaced or stopped.
+
+- Used the official Ubuntu Base `ubuntu-base-26.04.1-base-amd64.tar.gz` from
+  `https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/`. Verified its
+  SHA256SUMS and detached signature with the host Ubuntu archive keyring;
+  signing-key fingerprint `843938DF228D22F7B3742BC0D94AA3F0EFE21092`.
+- Installed distribution runtime libraries and Xvfb/D-Bus test utilities into
+  a disposable Bubblewrap rootfs. The test had private network, PID, IPC,
+  display, session bus and temporary home; no host desktop bus/display,
+  workspace credentials, global Swift installation or host library mounts.
+  Mounted `build/linux-production-20261017-005453` read-only at `/opt/devspace`.
+- Confirmed `swift`, `swiftc`, `cc`, `gcc`, `clang`, `make`, `pkg-config` and
+  `devpod` were absent. Both executable `ldd` reports had no missing libraries;
+  Swift/Foundation dependencies resolved from `/opt/devspace/lib`.
+- Actual runtime versions: Ubuntu 26.04.1, libc6 `2.43-2ubuntu2.3`, GTK
+  `4.22.4+ds-0ubuntu0.1`, VTE `0.84.0-2`, libxml2
+  `2.15.2+dfsg-0.1ubuntu0.3`. `dpkg --audit` produced no output.
+- Production backend returned exactly `ready` and `stopped` for the isolated
+  handshake/shutdown requests with `--notify-port 0`; exit 0. The real launcher
+  opened a mapped 1120×720 GTK window and spawned `DevSpaceBackend`.
+  `gapplication action com.prakharp.devspace quit` on the private bus exited 0
+  with no surviving backend child. The complete smoke command exited 0.
+- Rootless limitation: package configuration required root/root ownership
+  overrides for the system-bus launch helper (0754) and ssh-agent (0755), since
+  this single-user namespace cannot map their special groups. Neither helper
+  was exercised. Package maintainer scripts also reported unavailable setcap,
+  group ownership and host sysctl operations. This is not proof of a normal
+  installed-system configuration or SSH-agent integration. No package source
+  or application source was modified for the test.
+- GUI stderr retained EGL/DRI3 and missing accessibility-bus warnings from the
+  headless environment. Successful startup does not establish GPU acceleration
+  or accessibility acceptance. The X11 harness enumerates matching windows to
+  distinguish GTK's unmapped 1×1 helper from the mapped application window.
+
+Evidence and exact smoke scripts: `.tmp/ubuntu26-runtime.an6NTQ/` (runtime,
+dependency, window, child-process and package-configuration logs). The extracted
+rootfs and downloaded image are disposable; preserve the small evidence files,
+not a repository-local toolchain/runtime installation. Artifact hashes remain
+those recorded in the preceding checkpoint.
+
+This completes only the clean-runtime startup/dependency/shutdown portion of
+M07. Installed-app M01–M06 DevPod workflows, real desktop acceptance, the Herdr
+clipboard fix and current-head CI remain unverified/incomplete. No `.deb` was
+built and no PR was published.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.
