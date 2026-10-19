@@ -426,6 +426,53 @@ failures (194.051 seconds). Logs: `.tmp/linux-wc1-backend-live-acceptance.log`,
 Remaining release gaps: physical clipboard/IME/banner behavior, clean Ubuntu26
 installation and current-head Linux/macOS CI; no new .deb or installation.
 
+### Completion checkpoint — 2026-10-19
+
+This checkpoint supersedes historical completion summaries above; those remain
+records of the source and acceptance scope tested at their respective dates.
+The resumed goal remains active, not achieved. The preceding turn explained the
+transport alternatives but did not implement the clipboard fix or complete a
+release gate; this turn revalidated the current artifacts and external state.
+
+- Source at audit start: clean `feat/gnu-linux`, HEAD `a0124a7`. The existing
+  M01–M10 source features and later UI/shortcut fixes are committed, but the
+  newly reported Herdr clipboard interoperability defect is still unfixed.
+- Re-ran the private-display clipboard probe against installed VTE 0.84.0 /
+  GTK 4.22.4. Both BEL- and ST-terminated OSC 52 writes left the clipboard
+  unchanged; native VTE selection and clipboard copy succeeded. Log:
+  `.tmp/linux-goal-20261019-clipboard.log`. This confirms the missing OSC 52
+  integration, not an independent failure to paste externally supplied text.
+- The user requested a TDD fix. The proposed implementation reuses Swift
+  `PTYSession` for terminal I/O while retaining VTE rendering, with bounded,
+  active-terminal clipboard writes and no remote clipboard reads. The subsequent
+  explicit approval request for that transport change has not been answered;
+  the scope comparison and automatic goal continuation are not treated as that
+  approval. No transport implementation has started.
+- Verified production bundle `build/linux-production-20261017-005453` still
+  matches the optimized frontend/backend build outputs byte-for-byte. SHA-256:
+  frontend `645229ca9a7bb4eefafc3c6053a5bccba2d994f6a6e6b3f3501464522420829c`,
+  backend `73d1ce1fdf08c58ae76a52874fcdbce3fc75c1e5839e9335131f5d5361525d81`.
+  `desktop-file-validate` passed and its copyright inventory matches
+  `packaging/debian/copyright`. An isolated invocation of the actual production
+  backend, using its bundled runtime and an ephemeral notification port,
+  returned exactly `ready`, `stopped` for handshake/shutdown and exited 0.
+  No DevPod connection or running-app shutdown was performed.
+- The approved production build/assembly took 33.92 seconds, recorded in
+  `.tmp/linux-production-build.time`. No new release build or installation ran
+  during this audit. The user's instruction to produce bundles without a `.deb`
+  remains in force; the original M07 `.deb` deliverable is deferred, not a reason
+  to build one implicitly.
+- Read-only GitHub inspection: PR #111 remains OPEN on
+  `23e3fa5ed7725a8409f285c019408b1c27378ccf`; Linux GTK/VTE and macOS SwiftPM
+  checks both report SUCCESS for that older head. Local source was 37 commits
+  ahead at audit start. Publishing current commits through `gh stack submit`
+  still needs authorization; those old checks do not verify current-head CI.
+- Remaining acceptance: the Herdr fix and its real clipboard path, physical
+  Wayland input/IME/notification-banner behavior, a real Zed GUI handoff, clean
+  Ubuntu 26.04 installed-app verification, and current-head Linux/macOS CI.
+  Ubuntu 24.04 remains deferred. Previous isolated/native/live evidence is
+  preserved above, but is not substituted for these missing acceptance gates.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.
