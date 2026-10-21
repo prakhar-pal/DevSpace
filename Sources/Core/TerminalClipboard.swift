@@ -30,7 +30,8 @@ public struct TerminalClipboardDecoder {
                 }
             case .osc, .otherString:
                 if pendingEscape && byte == 0x5c || state == .osc && byte == 0x07 {
-                    if state == .osc, !rejected, let text = clipboardText() { writes.append(text) }
+                    if state == .osc, !rejected, (!pendingEscape || byte == 0x5c),
+                       let text = clipboardText() { writes.append(text) }
                     reset()
                 } else if byte == 0x1b {
                     if pendingEscape { rejected = true }
@@ -52,6 +53,7 @@ public struct TerminalClipboardDecoder {
         guard fields.count == 3, fields[0].elementsEqual([0x35, 0x32]),
               fields[1].isEmpty || fields[1].elementsEqual([0x63]),
               let decoded = Data(base64Encoded: Data(fields[2])),
+              decoded.base64EncodedData().elementsEqual(fields[2]),
               decoded.count <= Self.maximumDecodedBytes, !decoded.contains(0),
               let text = String(data: decoded, encoding: .utf8) else { return nil }
         return text

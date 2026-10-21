@@ -2,7 +2,75 @@ import XCTest
 @testable import DevSpaceCore
 
 final class PTYTests: XCTestCase {
+    func testWorkingDirectoryEnvironmentInputAndChildResize() throws {
+        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".tmp/pty-cwd-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pty = PTYSession()
+        let ready = expectation(description: "child ready")
+        ready.assertForOverFulfill = false
+        let exited = expectation(description: "child exited")
+        let buffer = NSMutableData()
+        let lock = NSLock()
+        pty.onOutput = { data in
+            lock.lock(); buffer.append(data); let text = String(decoding: buffer as Data, as: UTF8.self); lock.unlock()
+            if text.contains("READY") { ready.fulfill() }
+        }
+        pty.onExit = { code in XCTAssertEqual(code, 0); exited.fulfill() }
+        let pid = pty.start(path: "/bin/sh", args: ["-c",
+            "stty -echo; printf 'cwd:%s env:%s READY\\n' \"$PWD\" \"$DEVSPACE_PTY_TEST\"; IFS= read -r line; stty size; printf 'received:%s\\n' \"$line\""],
+            cols: 80, rows: 24, extraEnv: ["DEVSPACE_PTY_TEST": "inherited-marker"], workingDirectory: directory.path)
+        XCTAssertNotNil(pid)
+        wait(for: [ready], timeout: 3)
+        pty.resize(cols: 97, rows: 31)
+        pty.write(Data("λ界🙂\n".utf8))
+        wait(for: [exited], timeout: 3)
+        lock.lock(); let text = String(decoding: buffer as Data, as: UTF8.self); lock.unlock()
+        XCTAssertTrue(text.contains("cwd:\(directory.path) env:inherited-marker"), text)
+        XCTAssertTrue(text.contains("31 97"), text)
+        XCTAssertTrue(text.contains("received:λ界🙂"), text)
+    }
+
     #if os(Linux)
+    func testTerminateClosesDescendantsAfterLeaderExits() {
+        let pty = PTYSession()
+        let ready = expectation(description: "descendant ready")
+        ready.assertForOverFulfill = false
+        let exited = expectation(description: "PTY descendant closed")
+        let lock = NSLock()
+        var didExit = false
+        pty.onOutput = { data in if String(decoding: data, as: UTF8.self).contains("READY") { ready.fulfill() } }
+        pty.onExit = { _ in lock.lock(); didExit = true; lock.unlock(); exited.fulfill() }
+        let pid = pty.start(path: "/bin/sh", args: ["-c", "trap '' HUP; sleep 20 & printf READY; read -r line"], cols: 80, rows: 24)
+        defer {
+            lock.lock(); let needsCleanup = !didExit; lock.unlock()
+            if needsCleanup, let pid { kill(-pid, SIGKILL) }
+        }
+        wait(for: [ready], timeout: 2)
+        pty.terminate()
+        wait(for: [exited], timeout: 2)
+    }
+
+    func testTerminateDoesNotLeaveAnIgnoringChildRunning() {
+        let pty = PTYSession()
+        let ready = expectation(description: "ignoring child ready")
+        ready.assertForOverFulfill = false
+        let exited = expectation(description: "ignoring child terminated")
+        let lock = NSLock()
+        var didExit = false
+        pty.onOutput = { data in if String(decoding: data, as: UTF8.self).contains("READY") { ready.fulfill() } }
+        pty.onExit = { _ in lock.lock(); didExit = true; lock.unlock(); exited.fulfill() }
+        let pid = pty.start(path: "/bin/sh", args: ["-c", "trap '' TERM; printf READY; read -r line"], cols: 80, rows: 24)
+        defer {
+            lock.lock(); let needsCleanup = !didExit; lock.unlock()
+            if needsCleanup, let pid { kill(pid, SIGKILL) }
+        }
+        wait(for: [ready], timeout: 2)
+        pty.terminate()
+        wait(for: [exited], timeout: 2)
+    }
+
     func testExitWaitsForOutputCallbackToFinish() {
         let pty = PTYSession()
         let entered = expectation(description: "output callback entered")

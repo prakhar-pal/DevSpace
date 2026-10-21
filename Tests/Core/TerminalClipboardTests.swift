@@ -16,7 +16,7 @@ final class TerminalClipboardTests: XCTestCase {
     func testRejectsQueriesPrimarySelectionMalformedTextAndOversizeThenRecovers() {
         var decoder = TerminalClipboardDecoder()
         let oversized = String(repeating: "YWFh", count: 30_000)
-        for value in ["52;c;?", "52;p;YWJj", "52;c;%%%", "52;c;AA==", "52;c;/w==", "52;c;\(oversized)"] {
+        for value in ["52;c;?", "52;p;YWJj", "52;c;%%%", "52;c;AA==", "52;c;/w==", "52;c;YWJj====", "52;c;YR==", "52;c;YWJ=", "52;c;YWJj\u{1b}", "52;c;\(oversized)"] {
             XCTAssertEqual(decoder.consume(Data("\u{1b}]\(value)\u{7}".utf8)), [])
         }
         XCTAssertEqual(decoder.consume(Data("\u{1b}]52;;YWJj\u{7}".utf8)), ["abc"])
