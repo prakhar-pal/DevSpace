@@ -1,4 +1,4 @@
-# DevSpace — native macOS app build/test interface (pure SwiftPM).
+# DevSpace — native macOS/Linux build/test interface (pure SwiftPM).
 #
 # Builds with `swift build` and hand-assembles the .app bundle (Ronin-style),
 # deliberately avoiding `xcodebuild` so no Xcode simulator components are needed.
@@ -35,10 +35,40 @@ LINUX_ICU_LICENSE ?= $(abspath LICENSES/ICU-76.1.txt)
 LINUX_PACKAGE_VERSION ?= $(shell python3 -c 'import plistlib; print(plistlib.load(open("Info.plist", "rb"))["CFBundleShortVersionString"])')
 LINUX_PACKAGE_ARCH ?= $(shell dpkg --print-architecture)
 LINUX_PACKAGE_OUTPUT ?= build/devspace_$(LINUX_PACKAGE_VERSION)_$(LINUX_PACKAGE_ARCH).deb
+LINUX_INSTALL_PREFIX ?= $(HOME)/.local
+LINUX_INSTALL_BUNDLE ?=
 SWIFT ?= swift
 SWIFTC ?= swiftc
 
-.PHONY: linux-build-dev linux-bundle-dev linux-run linux-package linux-test-core linux-test-protocol linux-test-gtk linux-test
+.PHONY: linux-build-dev linux-bundle-dev linux-run linux-package linux-install linux-test-core linux-test-protocol linux-test-gtk linux-test
+
+install: linux-install
+
+# An explicit bundle skips compilation. Otherwise build a fresh release in an
+# isolated staging directory; installation itself refuses a running destination.
+linux-install:
+	@set -eu; \
+	if [ -n "$(LINUX_INSTALL_BUNDLE)" ]; then \
+	  python3 scripts/install-linux.py --bundle "$(LINUX_INSTALL_BUNDLE)" --prefix "$(LINUX_INSTALL_PREFIX)"; \
+	else \
+	  mkdir -p .tmp; \
+	  work=$$(mktemp -d .tmp/linux-install.XXXXXX); \
+	  had_lock=no; \
+	  if [ -f Package.resolved ]; then cp -p Package.resolved "$$work/Package.resolved"; had_lock=yes; fi; \
+	  restore() { \
+	    if [ "$$had_lock" = yes ]; then cp -p "$$work/Package.resolved" Package.resolved; else rm -f Package.resolved; fi; \
+	    rm -rf "$$work"; \
+	  }; \
+	  trap restore EXIT; \
+	  "$(SWIFT)" build -c release --product DevSpaceLinuxApp --scratch-path "$(LINUX_RELEASE_SCRATCH)"; \
+	  "$(SWIFT)" build -c release --product DevSpaceLinuxBackend --scratch-path "$(LINUX_RELEASE_SCRATCH)"; \
+	  mkdir -p "$$work/prefix/bin"; \
+	  install -m 755 "$(LINUX_RELEASE_SCRATCH)/release/DevSpaceLinuxApp" "$$work/prefix/bin/DevSpaceLinuxApp"; \
+	  install -m 755 "$(LINUX_RELEASE_SCRATCH)/release/DevSpaceLinuxBackend" "$$work/prefix/bin/DevSpaceLinuxBackend"; \
+	  python3 scripts/assemble-linux.py --frontend "$$work/prefix" --backend "$$work/prefix/bin/DevSpaceLinuxBackend" \
+	    --swift-runtime "$(LINUX_SWIFT_RUNTIME)" --swift-license "$(LINUX_SWIFT_LICENSE)" --icu-license "$(LINUX_ICU_LICENSE)" --channel production --output "$$work/bundle"; \
+	  python3 scripts/install-linux.py --bundle "$$work/bundle" --prefix "$(LINUX_INSTALL_PREFIX)"; \
+	fi
 
 linux-build-dev:
 	$(SWIFT) build --product DevSpaceLinuxApp --scratch-path "$(LINUX_SWIFT_SCRATCH)"
@@ -103,7 +133,7 @@ help:
 	@echo "  make build      - Release build + assemble \"DevSpace.app\""
 	@echo "  make test       - run unit tests (swift test)"
 	@echo "  make run        - build-dev and launch the app"
-	@echo "  make install    - release build + install to \$$APP_INSTALL_LOCATION (default /Applications)"
+	@echo "  make install    - release build + install ($(if $(filter Linux,$(shell uname -s)),default ~/.local; LINUX_INSTALL_PREFIX overrides,default /Applications; APP_INSTALL_LOCATION overrides))"
 	@echo "  make clean      - remove build output"
 	@echo "  make linux-build-dev     - build the Swift GTK/VTE frontend and backend"
 	@echo "  make linux-bundle-dev    - assemble a relocatable development bundle"
@@ -135,6 +165,7 @@ run: build-dev
 	@sleep 0.3
 	open "$(APP_DEV)"
 
+ifneq ($(shell uname -s),Linux)
 install: build
 	@if pgrep -fq "$(APP_INSTALL_LOCATION)/DevSpace.app/Contents/MacOS/DevSpace"; then \
 	  echo "error: DevSpace.app at $(APP_INSTALL_LOCATION) is running — quit it first."; exit 1; \
@@ -143,6 +174,7 @@ install: build
 	rm -rf "$(APP_INSTALL_LOCATION)/DevSpace.app"
 	ditto "$(APP_REL)" "$(APP_INSTALL_LOCATION)/DevSpace.app"
 	@echo "✓ installed $(APP_INSTALL_LOCATION)/DevSpace.app"
+endif
 
 clean:
 	swift package clean

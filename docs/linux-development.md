@@ -63,6 +63,47 @@ deferred by user direction.
 
 ## Ubuntu package
 
+### Install directly from source (no .deb, no sudo)
+
+```sh
+make install
+```
+
+On Linux this builds the release Swift frontend/backend, assembles a production
+bundle, then installs it under `~/.local/lib/devspace`. It creates the
+`~/.local/bin/devspace` launcher and desktop-menu/icon entries under
+`~/.local/share`. Ensure `~/.local/bin` is on PATH, or launch with
+`~/.local/bin/devspace`. No existing app is stopped or launched automatically.
+The macOS `make install` behavior remains unchanged.
+
+To install an already-built production bundle without recompiling:
+
+```sh
+make install LINUX_INSTALL_BUNDLE=build/linux-production-20261021-05d23d7
+```
+
+`LINUX_INSTALL_PREFIX=/absolute/path` overrides `~/.local`. A custom prefix's
+`bin` and `share` directories must be on PATH and XDG_DATA_DIRS respectively
+for shell/menu discovery; the installed desktop entry uses absolute launcher
+and icon paths. Builds still use the global Swift toolchain.
+
+Quit the installed frontend and backend before updating: installation refuses
+to replace their executable files while either is running. It also refuses
+unrecognized bundles, unrelated launcher/menu/icon entries, and parent symlinks
+escaping the prefix. Updates stage a copy before swapping; failures restore
+the old bundle or report its retained recovery location if restoration fails.
+This does not replace a Debian-managed installation or modify a separate
+production bundle running from another directory. Do not run concurrent installs
+to the same prefix, or launch the destination during an update.
+
+Installer/assembly regression checks (temporary prefixes only):
+
+```sh
+python3 -B -m unittest Tests.Linux.test_install_linux Tests.Linux.test_assemble_linux -v
+```
+
+### Debian packaging
+
 The production package build uses the release SwiftPM configuration, embeds the
 Swift runtime and its license notice, and keeps GTK/VTE as system dependencies.
 `dpkg-shlibdeps` derives versioned system-library dependencies from both app

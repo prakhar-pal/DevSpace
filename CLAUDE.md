@@ -34,6 +34,14 @@ make install     # release build + install to $APP_INSTALL_LOCATION (default /Ap
 make clean       # remove build output
 ```
 
+On Linux, `make install` builds and installs the Swift/GTK/VTE production
+bundle under `~/.local` (no sudo, no .deb). Override `LINUX_INSTALL_PREFIX`
+for an isolated verification prefix, or pass `LINUX_INSTALL_BUNDLE` to install
+an existing production bundle without rebuilding. The installer refuses a
+running destination and unrelated files; never install over the user's daily
+driver without approval. See `docs/linux-development.md`. Use temporary
+prefixes under `.tmp` for installer tests, not the user's actual installation.
+
 **During development always use `make build-dev` / `make run`** (the amber
 "DevSpaceDev" build with logging to `.tmp/devspace.log`). Use `make build`
 (release "DevSpace") only for producing a distributable bundle.
