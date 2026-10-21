@@ -39,11 +39,22 @@ struct LinuxTerminalLaunch {
 }
 
 final class TerminalPane {
+    private static let drainPropertyName = "vte.ext.devspace.drain"
+    // VTE requires extension properties to be installed before any terminals.
+    private static let drainProperty = vte_install_termprop(drainPropertyName, VTE_PROPERTY_STRING, VtePropertyFlags(rawValue: 0))
     let launch: LinuxTerminalLaunch
     let identity: TerminalPaneIdentity
     let widget: UnsafeMutablePointer<GtkWidget>
     private let terminal: UnsafeMutablePointer<VteTerminal>
     private let onEvent: (String, [String: String]) -> Void
+    private let pty = PTYSession()
+    private let inputQueue = DispatchQueue(label: "devspace.terminal.input")
+    private var clipboardDecoder = TerminalClipboardDecoder()
+    private let drainMarker = UUID().uuidString
+    private var pendingExit: Int32?
+    private var resizeTick: guint = 0
+    private var terminalRows: Int32 = 24
+    private var terminalColumns: Int32 = 80
     private(set) var childPID: pid_t?
     private(set) var spawnError: String?
     private(set) var isClosed = false
@@ -57,6 +68,7 @@ final class TerminalPane {
             workspaceID: launch.workspaceID, generation: launch.generation, paneID: launch.paneID
         )
         self.onEvent = onEvent
+        guard Self.drainProperty >= 0 else { return nil }
         widget = vte_terminal_new()!
         terminal = UnsafeMutableRawPointer(widget).assumingMemoryBound(to: VteTerminal.self)
         _ = g_object_ref_sink(UnsafeMutableRawPointer(widget))
@@ -115,11 +127,8 @@ final class TerminalPane {
     }
 
     var ptySize: (rows: Int32, columns: Int32)? {
-        guard !isClosed, let pty = vte_terminal_get_pty(terminal) else { return nil }
-        var rows: Int32 = 0
-        var columns: Int32 = 0
-        guard vte_pty_get_size(pty, &rows, &columns, nil) != 0 else { return nil }
-        return (rows, columns)
+        guard !isClosed, childPID != nil else { return nil }
+        return (terminalRows, terminalColumns)
     }
 
     fileprivate func applyTheme() {
@@ -154,6 +163,8 @@ final class TerminalPane {
     func dispose() {
         guard !isClosed else { return }
         isClosed = true
+        pty.terminate()
+        if resizeTick != 0 { gtk_widget_remove_tick_callback(widget, resizeTick); resizeTick = 0 }
         for (object, handler) in signalConnections {
             g_signal_handler_disconnect(object, handler)
             g_object_unref(object)
@@ -191,68 +202,116 @@ final class TerminalPane {
         onEvent("terminal_directory", payload)
     }
 
-    fileprivate func childExited(status: Int32) {
-        // VTE supplies waitpid status, like the host-owned PTY implementation.
-        let code: Int32 = (status & 0x7F) == 0 ? (status >> 8) & 0xFF : 128 + (status & 0x7F)
-        reportExit(code: code)
-    }
-
     private func spawn(_ launch: LinuxTerminalLaunch) -> Bool {
-        let strings = [launch.executable] + launch.arguments
-        let allocated = strings.map { strdup($0) }
-        guard allocated.allSatisfy({ $0 != nil }) else {
-            allocated.compactMap { $0 }.forEach { free($0) }
-            return false
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: launch.executable, isDirectory: &isDirectory),
+              !isDirectory.boolValue, FileManager.default.isExecutableFile(atPath: launch.executable) else {
+            failLaunch("Could not execute \(launch.executable)")
+            return true
         }
-        defer { allocated.compactMap { $0 }.forEach { free($0) } }
-        var argv = allocated + [nil]
-
-        let envStrings = launch.environment.map { "\($0.key)=\($0.value)" }
-        let allocatedEnv = envStrings.map { strdup($0) }
-        guard allocatedEnv.allSatisfy({ $0 != nil }) else {
-            allocatedEnv.compactMap { $0 }.forEach { free($0) }
-            return false
-        }
-        defer { allocatedEnv.compactMap { $0 }.forEach { free($0) } }
-        var envv = allocatedEnv.isEmpty ? nil : allocatedEnv + [nil]
-
-        let context = SpawnContext(self)
-        let callback: VteTerminalSpawnAsyncCallback = { _, pid, error, data in
-            guard let data else { return }
-            let context = Unmanaged<SpawnContext>.fromOpaque(data).takeRetainedValue()
-            context.pane?.spawnCompleted(pid: pid, error: error)
-        }
-        let userData = Unmanaged.passRetained(context).toOpaque()
-        argv.withUnsafeMutableBufferPointer { arguments in
-            if let workingDirectory = launch.workingDirectory {
-                workingDirectory.withCString { cwd in
-                    vte_terminal_spawn_async(
-                        terminal, VtePtyFlags(rawValue: 0), cwd, arguments.baseAddress!, envv?.withUnsafeMutableBufferPointer { $0.baseAddress } ?? nil,
-                        GSpawnFlags(rawValue: 0), nil, nil, nil, -1, nil, callback, userData
-                    )
-                }
-            } else {
-                vte_terminal_spawn_async(
-                    terminal, VtePtyFlags(rawValue: 0), nil, arguments.baseAddress!,
-                    envv?.withUnsafeMutableBufferPointer { $0.baseAddress } ?? nil,
-                    GSpawnFlags(rawValue: 0), nil, nil, nil, -1, nil, callback, userData
-                )
+        if let directory = launch.workingDirectory {
+            guard FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory),
+                  isDirectory.boolValue, FileManager.default.isExecutableFile(atPath: directory) else {
+                failLaunch("Could not open terminal working directory: \(directory)")
+                return true
             }
         }
+        pty.onOutput = { [weak self] bytes in
+            // One outstanding chunk per pane bounds UI backlog. Input writes
+            // use another queue, so a large paste cannot block GTK draining it.
+            let delivered = DispatchSemaphore(value: 0)
+            TerminalMainDelivery.enqueue { [weak self] in
+                defer { delivered.signal() }
+                self?.receive(bytes)
+            }
+            delivered.wait()
+        }
+        pty.onExit = { [weak self] code in
+            TerminalMainDelivery.enqueue { [weak self] in
+                guard let self, self.childPID != nil else { return }
+                self.finishOutput(code: code)
+            }
+        }
+        childPID = pty.start(path: launch.executable, args: launch.arguments,
+            cols: 80, rows: 24, extraEnv: launch.environment, workingDirectory: launch.workingDirectory)
+        if childPID == nil {
+            failLaunch("Could not create terminal process")
+        }
+        resizeTick = gtk_widget_add_tick_callback(widget, { _, _, data in
+            guard let data else { return 0 }
+            Unmanaged<TerminalPane>.fromOpaque(data).takeUnretainedValue().resizePTY()
+            return 1
+        }, Unmanaged.passUnretained(self).toOpaque(), nil)
         return true
     }
 
-    private func spawnCompleted(pid: GPid, error: UnsafeMutablePointer<GError>?) {
-        guard !isClosed else { return }
-        if let error {
-            spawnError = String(cString: error.pointee.message)
-            report("terminal_launch_failed")
-        } else {
-            childPID = pid
+    private func failLaunch(_ message: String) {
+        spawnError = message
+        // The owning window registers this pane after its initializer returns.
+        TerminalMainDelivery.enqueue { [weak self] in
+            guard let self, !self.isClosed else { return }
+            self.report("terminal_launch_failed")
         }
     }
 
+    private func finishOutput(code: Int32) {
+        guard !isClosed else { return }
+        pendingExit = code
+        // feed() queues parsing on VTE's frame/100 ms fallback scheduler. An
+        // invisible extension property after the final bytes is an exact drain
+        // boundary, unlike an idle callback or a guessed delay. CAN discards an
+        // unfinished control string so it cannot swallow this host marker.
+        let marker = "\u{18}\u{1b}]666;\(Self.drainPropertyName)=\(drainMarker)\u{1b}\\"
+        marker.withCString { vte_terminal_feed(terminal, $0, marker.utf8.count) }
+    }
+
+    private func outputDrained() {
+        guard !isClosed, let code = pendingExit else { return }
+        pendingExit = nil
+        contentsChanged()
+        reportExit(code: code)
+    }
+
+    private func receive(_ bytes: Data) {
+        guard !isClosed else { return }
+        let clipboardWrites = clipboardDecoder.consume(bytes)
+        bytes.withUnsafeBytes { raw in
+            if let base = raw.baseAddress { vte_terminal_feed(terminal, base.assumingMemoryBound(to: CChar.self), bytes.count) }
+        }
+        guard !isClosed, gtk_widget_get_mapped(widget) != 0,
+              gtk_widget_has_focus(widget) != 0,
+              let root = gtk_widget_get_root(widget),
+              gtk_window_is_active(UnsafeMutableRawPointer(root).assumingMemoryBound(to: GtkWindow.self)) != 0,
+              let clipboard = gdk_display_get_clipboard(gtk_widget_get_display(widget)) else { return }
+        for text in clipboardWrites { text.withCString { gdk_clipboard_set_text(clipboard, $0) } }
+    }
+
+    private func resizePTY() {
+        guard !isClosed, childPID != nil else { return }
+        let rows = Int32(clamping: vte_terminal_get_row_count(terminal))
+        let columns = Int32(clamping: vte_terminal_get_column_count(terminal))
+        guard rows > 0, columns > 0, rows != terminalRows || columns != terminalColumns else { return }
+        terminalRows = rows
+        terminalColumns = columns
+        inputQueue.async { [pty] in pty.resize(cols: UInt16(clamping: columns), rows: UInt16(clamping: rows)) }
+    }
+
+    fileprivate func commit(_ bytes: Data) {
+        guard !isClosed else { return }
+        inputQueue.async { [pty] in pty.write(bytes) }
+    }
+
     private func connectSignals() {
+        let drained: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void = { _, _, data in
+            guard let data else { return }
+            let pane = Unmanaged<TerminalPane>.fromOpaque(data).takeUnretainedValue()
+            // VTE permits only termprop getters inside this signal; queue all
+            // other widget/backend work until after signal emission returns.
+            guard let value = vte_terminal_get_termprop_string_by_id(pane.terminal, TerminalPane.drainProperty, nil),
+                  String(cString: value) == pane.drainMarker else { return }
+            TerminalMainDelivery.enqueue { [weak pane] in pane?.outputDrained() }
+        }
+        connectSignal(UnsafeMutableRawPointer(widget), "termprop-changed::\(Self.drainPropertyName)", unsafeBitCast(drained, to: GCallback.self))
         let mapped: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void = { _, data in
             guard let data else { return }
             Unmanaged<TerminalPane>.fromOpaque(data).takeUnretainedValue().applyTheme()
@@ -272,12 +331,12 @@ final class TerminalPane {
             devspaceLinuxVteContentsChanged as @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void,
             to: GCallback.self
         )
-        let childExited = unsafeBitCast(
-            devspaceLinuxVteChildExited as @convention(c) (UnsafeMutableRawPointer?, Int32, UnsafeMutableRawPointer?) -> Void,
-            to: GCallback.self
-        )
         connectSignal(UnsafeMutableRawPointer(widget), "contents-changed", contentsChanged)
-        connectSignal(UnsafeMutableRawPointer(widget), "child-exited", childExited)
+        let commit: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UInt32, UnsafeMutableRawPointer?) -> Void = { _, text, count, data in
+            guard let data, let text else { return }
+            Unmanaged<TerminalPane>.fromOpaque(data).takeUnretainedValue().commit(Data(bytes: text, count: Int(count)))
+        }
+        connectSignal(UnsafeMutableRawPointer(widget), "commit", unsafeBitCast(commit, to: GCallback.self))
         let directoryChanged = unsafeBitCast(
             devspaceLinuxVteDirectoryChanged as @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void,
             to: GCallback.self
@@ -416,13 +475,6 @@ private func devspaceLinuxVteContentsChanged(_ terminal: UnsafeMutableRawPointer
     _ = terminal
 }
 
-@_cdecl("devspace_linux_vte_child_exited")
-private func devspaceLinuxVteChildExited(_ terminal: UnsafeMutableRawPointer?, _ status: Int32, _ data: UnsafeMutableRawPointer?) {
-    guard let data else { return }
-    Unmanaged<TerminalPane>.fromOpaque(data).takeUnretainedValue().childExited(status: status)
-    _ = terminal
-}
-
 @_cdecl("devspace_linux_vte_focus_entered")
 private func devspaceLinuxVteFocusEntered(_ controller: UnsafeMutableRawPointer?, _ data: UnsafeMutableRawPointer?) {
     guard let data else { return }
@@ -443,9 +495,20 @@ private func devspaceLinuxVteKeyPressed(
     return handled ? 1 : 0
 }
 
-private final class SpawnContext {
-    weak var pane: TerminalPane?
-    init(_ pane: TerminalPane) { self.pane = pane }
+/// Always enqueue on GTK's context; invoke() may run inline on a reader thread.
+private final class TerminalMainDelivery {
+    let action: () -> Void
+    init(_ action: @escaping () -> Void) { self.action = action }
+    static func enqueue(_ action: @escaping () -> Void) {
+        let delivery = Unmanaged.passRetained(TerminalMainDelivery(action)).toOpaque()
+        _ = g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, { data in
+            guard let data else { return 0 }
+            Unmanaged<TerminalMainDelivery>.fromOpaque(data).takeUnretainedValue().action()
+            return 0
+        }, delivery, { data in
+            if let data { Unmanaged<TerminalMainDelivery>.fromOpaque(data).release() }
+        })
+    }
 }
 
 private final class ClipboardImageContext {

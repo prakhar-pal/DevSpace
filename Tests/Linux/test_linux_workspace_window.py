@@ -131,6 +131,53 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, log)
         self.assertIn("roles=primary-secondary-destructive selection=distinct validation=preserved", log)
 
+    def test_child_osc52_clipboard_roundtrip_and_hidden_pane_isolation(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "osc52"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("osc52=child-to-clipboard-to-child hidden=ignored closed=ignored", result.stdout)
+
+    def test_terminal_launch_errors_arrive_after_pane_registration(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "launch-errors"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("launch-errors=deferred executable-and-cwd=reported", result.stdout)
+
+    def test_short_lived_children_render_before_exit_callbacks(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "fast-exit"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("fast-exit=visible-output-first cycles=32", result.stdout)
+
+    @unittest.skipUnless(os.environ.get("DEVSPACE_HOST_UI_WORKSPACE"), "opt-in authorized workspace clipboard on private Xvfb")
+    def test_real_workspace_clipboard_roundtrip_on_private_display(self):
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
+        environment.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "osc52-live"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=65)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("live-devpod=remote-osc52 native-copy=remote-text paste=remote-received", result.stdout)
+
+    @unittest.skipUnless(os.environ.get("DEVSPACE_TEST_DESKTOP_CLIPBOARD") == "1" and
+                         os.environ.get("DEVSPACE_HOST_UI_WORKSPACE"), "opt-in physical clipboard replacement")
+    def test_real_desktop_clipboard_exchange_with_workspace(self):
+        backend = "wayland" if os.environ.get("XDG_SESSION_TYPE") == "wayland" else "x11"
+        environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND=backend, GTK_A11Y="none")
+        # Portal descendants can inherit pipes even after the runner exits.
+        with tempfile.TemporaryFile(mode="w+", dir=self.build) as output:
+            result = subprocess.run([str(self.workspace_runner), "osc52-live"],
+                cwd=ROOT, env=environment, stdout=output, stderr=subprocess.STDOUT, text=True, timeout=150)
+            output.seek(0)
+            log = output.read()
+        self.assertEqual(result.returncode, 0, log)
+        self.assertIn("desktop-clipboard=external-process-roundtrip remote-paste=received", log)
+
     def test_start_stop_controls_follow_state_and_operation_lifecycle(self):
         environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
         environment.pop("WAYLAND_DISPLAY", None)

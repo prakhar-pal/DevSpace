@@ -136,10 +136,48 @@ macOS job remains in the same workflow.
 `DevSpaceLinuxBackend` continues to own DevPod commands, workspace state and
 actions, SSH masters, Claude hooks, notification routing, image uploads, and
 the private versioned protocol. The Swift GTK layer presents snapshots and
-maps validated terminal effects to VTE. VTE owns the terminal child/PTY; bytes
-are never sent through the backend control pipe. Terminal identities include
+maps validated terminal effects to VTE. Shared Swift `PTYSession` owns the
+terminal child/PTY, forwarding output to VTE and VTE-encoded input to the child;
+bytes are never sent through the backend control pipe. Terminal identities include
 workspace, pane, and connection generation so delayed events cannot target a
 replacement pane. Closing a terminal does not stop its workspace.
+
+Remote OSC52 clipboard writes (used by Herdr over SSH) are supported only from
+the mapped/focused terminal in the active window. Writes are strict UTF-8/base64,
+limited to 64 KiB of decoded text; clipboard reads, primary-selection writes,
+malformed/oversized sequences and nested control-string requests are rejected.
+This complements native VTE text-selection copy, rather than replacing it.
+
+For authorized DevPod clipboard acceptance on a private Xvfb display:
+
+```sh
+DEVSPACE_HOST_UI_WORKSPACE=wc-1 dbus-run-session -- python3 -B -m unittest \
+  Tests.Linux.test_linux_workspace_window.LinuxWorkspaceWindowTests.test_real_workspace_clipboard_roundtrip_on_private_display -v
+```
+
+The Swift runner uses the actual DevSpace terminal pane and a temporary SSH
+session, with no production master reuse. It verifies remote OSC52 writes,
+native copying of remote terminal text, and paste into a non-executing remote
+input loop, including Unicode/multiline text. It does not start the workspace,
+change project files, read/replace the physical clipboard, or prove Herdr's own
+mouse selection or external-desktop paste. Those remain separate acceptance
+checks. Python only builds/launches the existing Swift assertion harness.
+
+Physical-desktop acceptance is a separate, explicitly authorized opt-in:
+
+```sh
+DEVSPACE_TEST_DESKTOP_CLIPBOARD=1 DEVSPACE_HOST_UI_WORKSPACE=wc-1 \
+  dbus-run-session -- python3 -B -m unittest \
+  Tests.Linux.test_linux_workspace_window.LinuxWorkspaceWindowTests.test_real_desktop_clipboard_exchange_with_workspace -v
+```
+
+This replaces the desktop clipboard with synthetic text. Focus the temporary
+"DevSpace Clipboard Acceptance" window and click its Start button. The check
+uses an external `xclip` process as well as the real remote input loop. It
+requires desktop focus/input and, on Wayland, the XWayland clipboard bridge;
+a private-display pass does not satisfy it. As of 2026-10-21 this host check
+remains unresolved (external read failure, then unsuccessful focus/input runs).
+Actual Herdr mouse-selection acceptance is also still pending.
 
 The sidebar lists DevPods as compact selectable rows without a heading, with
 a Stop icon for running workspaces and New/Guide at the bottom. Rows scroll

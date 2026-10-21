@@ -35,6 +35,30 @@ struct WorkspaceWindowTests {
                 g_object_unref(UnsafeMutableRawPointer(application))
                 return
             }
+            if CommandLine.arguments.dropFirst().contains("osc52") {
+                try testOSC52(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
+            if CommandLine.arguments.dropFirst().contains("launch-errors") {
+                try testLaunchErrors()
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
+            if CommandLine.arguments.dropFirst().contains("fast-exit") {
+                try testFastExit(application)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
+            if CommandLine.arguments.dropFirst().contains("osc52-live") {
+                guard let workspace = ProcessInfo.processInfo.environment["DEVSPACE_HOST_UI_WORKSPACE"] else {
+                    throw TestFailure("live clipboard workspace not authorized")
+                }
+                try Devpod.validateId(workspace)
+                try testOSC52(application, workspace: workspace)
+                g_object_unref(UnsafeMutableRawPointer(application))
+                return
+            }
             if CommandLine.arguments.dropFirst().contains("button-roles") {
                 try testButtonRoles(application)
                 g_object_unref(UnsafeMutableRawPointer(application))
@@ -1288,6 +1312,168 @@ struct WorkspaceWindowTests {
         return false
     }
 
+    private static func testFastExit(_ application: UnsafeMutablePointer<GtkApplication>) throws {
+        let widget = gtk_application_window_new(application)!
+        let window = UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkWindow.self)
+        defer { gtk_window_destroy(window) }
+        for index in 0..<32 {
+            var events: [String] = []
+            let launch = LinuxTerminalLaunch(kind: "terminal_launch", workspaceID: "fixture", paneID: UUID(),
+                generation: UUID(), executable: "/bin/echo", arguments: ["FAST_EXIT_\(index)"])!
+            guard let pane = TerminalPane(launch: launch, onEvent: { kind, _ in events.append(kind) }) else {
+                throw TestFailure("fast child failed to launch")
+            }
+            defer { pane.dispose() }
+            gtk_window_set_child(window, pane.widget)
+            gtk_window_present(window)
+            try expect(pumpUntil { events.contains("terminal_exit") }, "fast child did not exit")
+            guard let output = events.firstIndex(of: "terminal_output"), let exit = events.firstIndex(of: "terminal_exit") else {
+                throw TestFailure("fast child exit overtook visible output: \(events)")
+            }
+            try expect(output < exit && pane.text.contains("FAST_EXIT_\(index)"), "fast child lost final output")
+        }
+        print("fast-exit=visible-output-first cycles=32")
+    }
+
+    private static func testLaunchErrors() throws {
+        var failures: [String] = []
+        for invalidDirectory in [false, true] {
+            let launch = LinuxTerminalLaunch(kind: "terminal_launch", workspaceID: "fixture",
+                paneID: UUID(), generation: UUID(), executable: invalidDirectory ? "/bin/sh" : "/no-such-devspace-executable",
+                arguments: [], workingDirectory: invalidDirectory ? "/no-such-devspace-directory" : nil)!
+            var returned = false
+            var failureReported = false
+            let pane = TerminalPane(launch: launch) { kind, _ in
+                if kind == "terminal_launch_failed" {
+                    if !returned { failures.append("launch failure arrived before pane registration") }
+                    failureReported = true
+                }
+            }
+            returned = true
+            defer { pane?.dispose() }
+            if !pumpUntil(timeout: 1, { failureReported }) { failures.append("launch failure was not reported") }
+            if pane?.spawnError == nil { failures.append("launch failure has no error detail") }
+        }
+        try expect(failures.isEmpty, failures.joined(separator: "; "))
+        print("launch-errors=deferred executable-and-cwd=reported")
+    }
+
+    private static func testOSC52(_ application: UnsafeMutablePointer<GtkApplication>, workspace: String? = nil) throws {
+        let window = gtk_application_window_new(application)!
+        let nativeWindow = UnsafeMutableRawPointer(window).assumingMemoryBound(to: GtkWindow.self)
+        gtk_window_set_title(nativeWindow, "DevSpace Clipboard Acceptance")
+        gtk_window_set_default_size(nativeWindow, 800, 480)
+        defer { gtk_window_destroy(nativeWindow) }
+        let script = "stty -echo; printf 'READY\\n'; while IFS= read -r line; do case $line in copy|hidden) printf '\\033]52;c;zrvnlYzwn5mCCmxpbmUy\\007COPIED:%s\\n' \"$line\";; *) printf 'received:%s\\n' \"$line\";; esac; done"
+        let arguments = workspace.map { ["-tt", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+            "-o", "ControlMaster=no", "-o", "ControlPath=none", "\($0).devpod", script] } ?? ["-c", script]
+        let launch = LinuxTerminalLaunch(kind: "terminal_launch", workspaceID: workspace ?? "clipboard-fixture",
+            paneID: UUID(), generation: UUID(), executable: workspace == nil ? "/bin/sh" : "/usr/bin/ssh", arguments: arguments)!
+        var childExit: String?
+        guard let pane = TerminalPane(launch: launch, onEvent: { kind, payload in
+            if kind == "terminal_exit" { childExit = payload["exit_code"] }
+        }) else { throw TestFailure("clipboard child did not launch") }
+        defer { pane.dispose() }
+        let start = DesktopClipboardStart()
+        var startButton: UnsafeMutablePointer<GtkWidget>?
+        var startHandler: gulong = 0
+        if ProcessInfo.processInfo.environment["DEVSPACE_TEST_DESKTOP_CLIPBOARD"] == "1" {
+            let box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12)!
+            let button = gtk_button_new_with_label("Start clipboard test — uses a synthetic marker")!
+            startButton = button
+            let clicked: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void = { _, data in
+                if let data { Unmanaged<DesktopClipboardStart>.fromOpaque(data).takeUnretainedValue().clicked = true }
+            }
+            startHandler = g_signal_connect_data(UnsafeMutableRawPointer(button), "clicked", unsafeBitCast(clicked, to: GCallback.self),
+                Unmanaged.passUnretained(start).toOpaque(), nil, GConnectFlags(rawValue: 0))
+            gtk_box_append(UnsafeMutableRawPointer(box).assumingMemoryBound(to: GtkBox.self), button)
+            gtk_box_append(UnsafeMutableRawPointer(box).assumingMemoryBound(to: GtkBox.self), pane.widget)
+            gtk_window_set_child(nativeWindow, box)
+        } else { gtk_window_set_child(nativeWindow, pane.widget) }
+        defer { if let startButton { g_signal_handler_disconnect(UnsafeMutableRawPointer(startButton), startHandler) } }
+        gtk_window_present(nativeWindow)
+        _ = gtk_widget_grab_focus(pane.widget)
+        try expect(pumpUntil(timeout: workspace == nil ? 4 : 40) { pane.text.contains("READY") }, "clipboard child not ready: \(pane.text)")
+        if ProcessInfo.processInfo.environment["DEVSPACE_TEST_DESKTOP_CLIPBOARD"] == "1" {
+            try expect(pumpUntil(timeout: 30) { gtk_window_is_active(nativeWindow) != 0 }, "desktop test window needs focus")
+            try expect(pumpUntil(timeout: 90) { start.clicked }, "click Start clipboard test to provide a real input event")
+            _ = gtk_widget_grab_focus(pane.widget)
+        }
+        let clipboard = gdk_display_get_clipboard(gdk_display_get_default())!
+        gdk_clipboard_set_text(clipboard, "unchanged-sentinel")
+        let focusBefore = gtk_widget_has_focus(pane.widget)
+        pane.feed("copy\n")
+        try expect(pumpUntil { pane.text.contains("COPIED") },
+                   "child did not emit OSC52: exit=\(childExit ?? "none") grid=\(String(describing: pane.ptySize)) ready=\(pane.text.contains("READY")) text-count=\(pane.text.count)")
+        let copiedOSC52 = try readClipboardText(clipboard)
+        try expect(copiedOSC52 == "λ界🙂\nline2", "child OSC52 did not reach the clipboard: mapped=\(gtk_widget_get_mapped(pane.widget)) focus-before=\(focusBefore) focus-now=\(gtk_widget_has_focus(pane.widget)) active=\(gtk_window_is_active(nativeWindow)) local=\(gdk_clipboard_is_local(clipboard)) sentinel=\(copiedOSC52 == "unchanged-sentinel")")
+        let modifiers = GdkModifierType(rawValue: GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue)
+        _ = pane.handleKey(keyval: UInt32(GDK_KEY_v), modifiers: modifiers)
+        try expect(pumpUntil { pane.text.contains("received:λ界🙂") }, "clipboard first line did not reach child")
+        pane.feed("\n")
+        try expect(pumpUntil { pane.text.contains("received:λ界🙂") && pane.text.contains("received:line2") },
+                   "OSC52 clipboard could not be pasted back into the child")
+        vte_terminal_select_all(UnsafeMutableRawPointer(pane.widget).assumingMemoryBound(to: VteTerminal.self))
+        _ = pane.handleKey(keyval: UInt32(GDK_KEY_c), modifiers: modifiers)
+        let selected = try readClipboardText(clipboard)
+        try expect(selected.contains("received:λ界🙂") && selected.contains("received:line2"),
+                   "native terminal copy omitted child text")
+        _ = pane.handleKey(keyval: UInt32(GDK_KEY_v), modifiers: modifiers)
+        try expect(pumpUntil { pane.text.contains("received:COPIED") }, "native selection paste did not reach child")
+        if ProcessInfo.processInfo.environment["DEVSPACE_TEST_DESKTOP_CLIPBOARD"] == "1" {
+            try testDesktopClipboardExchange(pane, copied: selected)
+        }
+        gtk_widget_set_visible(window, 0)
+        gdk_clipboard_set_text(clipboard, "hidden-sentinel")
+        pane.feed("hidden\n")
+        try expect(pumpUntil { pane.text.contains("COPIED:hidden") }, "hidden child output never arrived")
+        try expect(try readClipboardText(clipboard) == "hidden-sentinel", "hidden child changed clipboard")
+        pane.dispose()
+        gdk_clipboard_set_text(clipboard, "closed-sentinel")
+        _ = pumpUntil(timeout: 0.1) { false }
+        try expect(try readClipboardText(clipboard) == "closed-sentinel", "closed child changed clipboard")
+        print("osc52=child-to-clipboard-to-child hidden=ignored closed=ignored")
+        if workspace != nil { print("live-devpod=remote-osc52 native-copy=remote-text paste=remote-received") }
+    }
+
+    private static func testDesktopClipboardExchange(_ pane: TerminalPane, copied: String) throws {
+        // The caller must explicitly authorize replacing the physical clipboard.
+        // Read back only to compare against our known marker; never log its text.
+        let reader = Process()
+        reader.executableURL = URL(fileURLWithPath: "/usr/bin/xclip")
+        reader.arguments = ["-selection", "clipboard", "-out"]
+        let output = Pipe()
+        reader.standardOutput = output
+        reader.standardError = FileHandle.nullDevice
+        try reader.run()
+        guard pumpUntil(timeout: 8, { !reader.isRunning }) else {
+            reader.terminate()
+            throw TestFailure("external clipboard reader timed out")
+        }
+        let text = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+        try expect(reader.terminationStatus == 0 && text == copied,
+                   "external process did not receive copied remote text: exit=\(reader.terminationStatus) empty=\(text?.isEmpty ?? true)")
+
+        let writer = Process()
+        writer.executableURL = URL(fileURLWithPath: "/usr/bin/xclip")
+        writer.arguments = ["-selection", "clipboard", "-in", "-quiet"]
+        let input = Pipe()
+        writer.standardInput = input
+        writer.standardOutput = FileHandle.nullDevice
+        writer.standardError = FileHandle.nullDevice
+        try writer.run()
+        defer { if writer.isRunning { writer.terminate() }; writer.waitUntilExit() }
+        input.fileHandleForWriting.write(Data("DESKTOP_EXTERNAL_MARKER\n".utf8))
+        input.fileHandleForWriting.closeFile()
+        let clipboard = gdk_display_get_clipboard(gdk_display_get_default())!
+        try expect(pumpUntil { gdk_clipboard_is_local(clipboard) == 0 }, "external clipboard owner not visible")
+        try expect(try readClipboardText(clipboard) == "DESKTOP_EXTERNAL_MARKER\n", "external marker was not available to DevSpace")
+        let modifiers = GdkModifierType(rawValue: GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue)
+        _ = pane.handleKey(keyval: UInt32(GDK_KEY_v), modifiers: modifiers)
+        try expect(pumpUntil { pane.text.contains("received:DESKTOP_EXTERNAL_MARKER") }, "external clipboard text did not reach DevPod")
+        print("desktop-clipboard=external-process-roundtrip remote-paste=received")
+    }
+
     private static func pumpUntil(timeout: TimeInterval = 4, _ predicate: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -1343,6 +1529,8 @@ struct WorkspaceWindowTests {
         return count
     }
 }
+
+private final class DesktopClipboardStart { var clicked = false }
 
 private final class ClipboardReadContext {
     var text: String?

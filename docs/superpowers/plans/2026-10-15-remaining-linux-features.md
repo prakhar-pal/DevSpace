@@ -576,11 +576,11 @@ Execute in this checkout/main thread:
   bounded buffering/recovery and no nested control-string clipboard execution.
   Observe RED with an empty compiling interface, implement, run Core tests,
   restore Package.resolved and commit the decoder milestone.
-- [ ] Add a native `WorkspaceWindowTests` OSC52 mode that spawns a real child,
+- [x] Add a native `WorkspaceWindowTests` OSC52 mode that spawns a real child,
   checks private clipboard text and pastes it back into an input-capture child.
   Observe RED on the existing VTE-owned transport. Add tests for hidden/retired
   panes and ordinary selection; do not touch the physical clipboard.
-- [ ] Extend shared PTY start with working-directory support and a reported PID
+- [x] Extend shared PTY start with working-directory support and a reported PID
   while retaining existing call-site defaults. Test cwd/environment, input,
   actual child resize, complete output before exit and single exit/cleanup.
   Wire VTE `commit` to Swift PTY input, feed output unchanged to VTE while
@@ -607,6 +607,58 @@ Linux timer/reap race (exit overtook the blocked output callback), then passed
 after deferring Linux exit delivery until output drains. Six PTY tests pass;
 full Core suite: 258 tests, one opt-in skip, zero failures (17.953 seconds),
 `.tmp/pty-ordering-core-suite.log`. macOS callback logic was left unchanged.
+
+Transport implementation and review evidence — 2026-10-21:
+
+- Shared PTY cwd/environment, Unicode input and actual child resize passed
+  after a cwd regression failed. TERM-ignoring child and leader-exited/descendant
+  cleanup each reproduced a failure before the Linux cleanup fix. Child exit
+  observation now reserves the leader PID until output/descendants drain.
+- Independent review found noncanonical base64 padding and ESC+BEL acceptance;
+  both have failing-then-passing decoder regressions. Descriptor write/resize
+  and close now share an I/O lock. Ruling: that descriptor fix is validated by
+  its source locking invariant and regression suites, not a deterministic
+  forced FD-reuse test; a race-specific test remains absent.
+- A 32-cycle fast-child test exposed VTE's asynchronous feed parsing: final
+  output could be lost before the exit callback. Changing idle priority alone
+  did not fix it. A supported VTE extension termprop now marks the exact parser
+  drain boundary before reporting exit. Native OSC52, deferred launch errors
+  and fast-exit checks pass (`.tmp/clipboard-drain-native-green.log`).
+- Full reviewed Core suite: 261 tests, one opt-in skip, zero failures,
+  18.882 seconds (`.tmp/clipboard-reviewed-core-suite.log`). Full Linux suite:
+  121 tests, seven opt-in skips, zero failures, 213.650 seconds
+  (`.tmp/clipboard-reviewed-linux-suite.log`).
+- Final-source live `wc-1` private-display round-trip passed in 54.201 seconds
+  (`.tmp/clipboard-reviewed-wc1.log`): remote OSC52, native selection of remote
+  output, and multiline/Unicode paste into a non-executing remote input loop.
+  This is not actual Herdr mouse-selection or external-desktop acceptance.
+- Physical Wayland checks remain failing/unresolved. One run reached internal
+  clipboard success but failed the external xclip read; the subsequent real
+  Start-button run failed earlier waiting for the child copy acknowledgment.
+  The final diagnostic run could not acquire desktop window focus at all
+  (`.tmp/clipboard-host-final-diagnostic.log`); it did not exercise clipboard
+  exchange. No conclusion about the earlier external-read failure follows.
+  Do not treat private-display success as proof of cross-app desktop behavior.
+- Final review: minor (deferred): closed-pane clipboard coverage checks a
+  sentinel after disposal but does not force an already queued late OSC52
+  callback; hidden-pane coverage waits for positive child acknowledgment.
+- The user explicitly approved updating existing PR #111 through
+  `gh stack submit` after verification and commit. This supersedes the pending
+  publication approval above; merge and production replacement remain forbidden.
+
+Remaining acceptance gates: actual Herdr selection/paste, physical clipboard,
+IME/banner and Zed GUI behavior, installed current-bundle DevPod workflows,
+and exact-published-commit Linux/macOS CI. No release completion is claimed.
+
+Milestone handoff: Core hardening committed as `ffcb8ec`; fresh Core run passed
+261 tests (one skip) in 20.904 seconds. Final affected native run passed all
+four checks, including real `wc-1`, in 56.065 seconds
+(`.tmp/clipboard-native-milestone.log`). `make linux-bundle-dev` completed and
+the development-only `DevSpaceDev` process was opened/observed running. Its
+host startup log still contains existing EGL, accessibility-bus and GTK slider
+warnings; process presence is not visual or clipboard acceptance.
+PR #111 submission remains pending the user's verification condition; no push,
+merge, production build, installation or production replacement occurred.
 
 ### Ratings
 
