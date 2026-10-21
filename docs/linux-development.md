@@ -177,7 +177,10 @@ uses an external `xclip` process as well as the real remote input loop. It
 requires desktop focus/input and, on Wayland, the XWayland clipboard bridge;
 a private-display pass does not satisfy it. As of 2026-10-21 this host check
 remains unresolved (external read failure, then unsuccessful focus/input runs).
-Actual Herdr mouse-selection acceptance is also still pending.
+After testing the development build at `6f9fe26`, the user confirmed on
+2026-10-21 that cross-app copy/paste works, in response to the Herdr-to-desktop
+and paste-back acceptance request. This is manual desktop acceptance, not a
+passing result for the automated xclip harness above.
 
 The sidebar lists DevPods as compact selectable rows without a heading, with
 a Stop icon for running workspaces and New/Guide at the bottom. Rows scroll

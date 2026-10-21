@@ -660,6 +660,16 @@ warnings; process presence is not visual or clipboard acceptance.
 PR #111 submission remains pending the user's verification condition; no push,
 merge, production build, installation or production replacement occurred.
 
+Manual acceptance update — 2026-10-21: after being asked to copy harmless
+text from Herdr in the development build into another app and paste back, the
+user confirmed: "yes, copy/paste works across apps on devspace now". Record
+this as user-observed desktop acceptance on development source `6f9fe26`,
+not a passing automated xclip test. The automated physical-desktop harness
+limitations above remain unresolved. This satisfies the clipboard publication
+condition; proceed with the already authorized PR #111 stack submission and
+verify CI against its exact published head. IME/banner, Zed GUI, installed
+current-bundle workflows and release verification remain separate gates.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.
