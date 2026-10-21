@@ -12,7 +12,6 @@ final class WorkspaceWindow {
     private let statusLabel: UnsafeMutablePointer<GtkWidget>
     private let notificationWarningLabel: UnsafeMutablePointer<GtkWidget>
     private let sidebar: UnsafeMutablePointer<GtkWidget>
-    private var sidebarMinimumEstablished = false
     private var sidebarRowsRendered = false
     private var terminalPanes: [TerminalPaneIdentity: TerminalPane] = [:]
     private var terminalOrder: [TerminalPaneIdentity] = []
@@ -51,6 +50,9 @@ final class WorkspaceWindow {
         let sidebarWidget = UnsafeMutableRawPointer(sidebar).assumingMemoryBound(to: GtkWidget.self)
         self.sidebar = sidebarWidget
         gtk_widget_set_hexpand(sidebarWidget, 0)
+        // The screenshot's sidebar occupies 367 px including its 16 px side
+        // margins; GTK's size request applies to the widget content only.
+        gtk_widget_set_size_request(sidebarWidget, 335, -1)
         gtk_widget_set_margin_top(sidebarWidget, 16)
         gtk_widget_set_margin_bottom(sidebarWidget, 16)
         gtk_widget_set_margin_start(sidebarWidget, 16)
@@ -64,17 +66,17 @@ final class WorkspaceWindow {
         gtk_widget_set_name(workspaceScroll, "workspace-sidebar-scroll")
         gtk_widget_set_vexpand(workspaceScroll, 1)
         gtk_scrolled_window_set_policy(OpaquePointer(workspaceScroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
-        gtk_scrolled_window_set_propagate_natural_width(OpaquePointer(workspaceScroll), 1)
+        gtk_scrolled_window_set_propagate_natural_width(OpaquePointer(workspaceScroll), 0)
         gtk_scrolled_window_set_child(OpaquePointer(workspaceScroll), rowsWidget)
         gtk_box_append(sidebar, workspaceScroll)
         statusLabel = gtk_label_new("")!
         Self.configureSidebarText(statusLabel)
         gtk_widget_set_visible(statusLabel, 0)
-        gtk_label_set_max_width_chars(OpaquePointer(statusLabel), 0)
+        gtk_label_set_max_width_chars(OpaquePointer(statusLabel), 36)
         gtk_box_append(sidebar, statusLabel)
         notificationWarningLabel = gtk_label_new("")!
         Self.configureSidebarText(notificationWarningLabel)
-        gtk_label_set_max_width_chars(OpaquePointer(notificationWarningLabel), 0)
+        gtk_label_set_max_width_chars(OpaquePointer(notificationWarningLabel), 36)
         gtk_widget_set_visible(notificationWarningLabel, 0)
         gtk_box_append(sidebar, notificationWarningLabel)
         hiddenWorkspaceRows = UnsafeMutableRawPointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 8)!)
@@ -82,7 +84,7 @@ final class WorkspaceWindow {
         let hiddenScroll = gtk_scrolled_window_new()!
         gtk_widget_set_name(hiddenScroll, "hidden-workspaces-scroll")
         gtk_scrolled_window_set_policy(OpaquePointer(hiddenScroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
-        gtk_scrolled_window_set_propagate_natural_width(OpaquePointer(hiddenScroll), 1)
+        gtk_scrolled_window_set_propagate_natural_width(OpaquePointer(hiddenScroll), 0)
         gtk_scrolled_window_set_propagate_natural_height(OpaquePointer(hiddenScroll), 1)
         gtk_scrolled_window_set_min_content_height(OpaquePointer(hiddenScroll), 0)
         gtk_scrolled_window_set_max_content_height(OpaquePointer(hiddenScroll), 240)
@@ -267,16 +269,6 @@ final class WorkspaceWindow {
             pendingProvisioning[operation.id] = operation
         }
         if rowsChanged { refreshWorkspaceRows() }
-        // Establish the requested floor once from the original content-sized
-        // layout. Measuring the constrained widget again would double it on
-        // every poll, and growing names must not ratchet the minimum upward.
-        if !sidebarMinimumEstablished,
-           next.workspaces.contains(where: { $0.state == "Running" || $0.state == "Stopped" }) {
-            var natural: Int32 = 0
-            gtk_widget_measure(sidebar, GTK_ORIENTATION_HORIZONTAL, -1, nil, &natural, nil, nil)
-            gtk_widget_set_size_request(sidebar, natural * 2, -1)
-            sidebarMinimumEstablished = true
-        }
         revealSelectedTerminal(focus: selectionChanged)
         refreshLifecyclePanel()
     }

@@ -255,15 +255,10 @@ struct WorkspaceWindowTests {
             try expect(gtk_widget_get_allocated_height(originalPane.widget) > 500,
                        "the VTE widget did not expand to fill the terminal pane")
             let sidebar = gtk_widget_get_first_child(gtk_window_get_child(window.window))!
-            var baselineMinimum: Int32 = 0
-            var baselineNatural: Int32 = 0
             var requestedMinimum: Int32 = -1
             gtk_widget_get_size_request(sidebar, &requestedMinimum, nil)
-            gtk_widget_set_size_request(sidebar, -1, -1)
-            gtk_widget_measure(sidebar, GTK_ORIENTATION_HORIZONTAL, -1, &baselineMinimum, &baselineNatural, nil, nil)
-            gtk_widget_set_size_request(sidebar, requestedMinimum, -1)
-            try expect(requestedMinimum == baselineNatural * 2,
-                       "sidebar minimum \(requestedMinimum) is not double its original content width \(baselineNatural)")
+            try expect(requestedMinimum == 335,
+                       "sidebar content width \(requestedMinimum) does not match the fixed 367px outer width")
             window.update(WorkspaceControllerSnapshot(
                 revision: 2, workspaces: [workspace, otherWorkspace], selectedID: workspace.id,
                 layout: Layout(aliases: [workspace.id: String(repeating: "LongProject", count: 10)]), terminalPanes: []
