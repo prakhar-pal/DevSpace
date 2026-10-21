@@ -160,9 +160,10 @@ class LinuxWorkspaceWindowTests(unittest.TestCase):
         environment = dict(os.environ, G_DEBUG="fatal-criticals", GDK_BACKEND="x11", GTK_A11Y="none")
         environment.pop("WAYLAND_DISPLAY", None)
         result = subprocess.run(["xvfb-run", "-a", str(self.workspace_runner), "osc52-live"],
-            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=65)
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=110)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("live-devpod=remote-osc52 native-copy=remote-text paste=remote-received", result.stdout)
+        self.assertIn("cross-pane=native-copy-to-distinct-child-received", result.stdout)
 
     @unittest.skipUnless(os.environ.get("DEVSPACE_TEST_DESKTOP_CLIPBOARD") == "1" and
                          os.environ.get("DEVSPACE_HOST_UI_WORKSPACE"), "opt-in physical clipboard replacement")

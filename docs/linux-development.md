@@ -198,8 +198,9 @@ DEVSPACE_HOST_UI_WORKSPACE=wc-1 dbus-run-session -- python3 -B -m unittest \
 
 The Swift runner uses the actual DevSpace terminal pane and a temporary SSH
 session, with no production master reuse. It verifies remote OSC52 writes,
-native copying of remote terminal text, and paste into a non-executing remote
-input loop, including Unicode/multiline text. It does not start the workspace,
+native copying of remote terminal text, and paste into both the source terminal
+and a distinct second terminal's non-executing remote input loop, including
+Unicode/multiline text. It does not start the workspace,
 change project files, read/replace the physical clipboard, or prove Herdr's own
 mouse selection or external-desktop paste. Those remain separate acceptance
 checks. Python only builds/launches the existing Swift assertion harness.
@@ -225,9 +226,10 @@ passing result for the automated xclip harness above.
 
 The sidebar lists DevPods as compact selectable rows without a heading, with
 a Stop icon for running workspaces and New/Guide at the bottom. Rows scroll
-vertically. Its minimum width is established once at twice the original
-content-sized width; longer names may grow it without ratcheting that minimum.
-Names wrap with a 24-character natural-width cap; status messages wrap too.
+vertically. The sidebar uses a fixed 367-pixel outer width, including its
+16-pixel side margins, matching the approved screenshot. Workspace scrollers
+do not propagate their content's natural width. Names wrap with a 24-character
+natural-width cap; status and notification messages wrap with a 36-character cap.
 The single-terminal view has no workspace title or Close bar.
 Rows show a
 green dot for running DevPods and a grey dot for stopped

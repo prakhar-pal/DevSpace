@@ -532,7 +532,7 @@ historical, not a substitute for testing the eventual clipboard fix.
 
 P06 explicitly includes these separate real-workspace paths:
 
-- [ ] Print a known Unicode/multiline marker in an authorized running DevPod,
+- [x] Print a known Unicode/multiline marker in an authorized running DevPod,
   select its output in the DevSpace terminal, copy, and paste into another
   DevSpace terminal. Check the destination's received text, not just selection
   state or a clipboard API return value.
@@ -669,6 +669,55 @@ limitations above remain unresolved. This satisfies the clipboard publication
 condition; proceed with the already authorized PR #111 stack submission and
 verify CI against its exact published head. IME/banner, Zed GUI, installed
 current-bundle workflows and release verification remain separate gates.
+
+### Release acceptance resumed — 2026-10-22
+
+Application source under acceptance: `79303ca`, on Ubuntu 26.04.1 with the
+global Swift 6.4.1 toolchain. No application source changed in this increment.
+
+- PR #111 and [CI run 39615001191](https://github.com/prakhar-pal/DevSpace/actions/runs/39615001191)
+  both identify head `79303ca36c0fa84dad661b8ee2fc81433761f6a6`.
+  Linux GTK/VTE and macOS SwiftPM jobs both completed successfully. New
+  acceptance-test/documentation changes in this increment are not yet published.
+- Three focused native checks passed: snapshot/terminal lifecycle, OSC52
+  clipboard isolation, and real keyboard delivery. The initial remote attempt
+  failed because the authorized workspace start still held DevPod's lock;
+  Kubernetes first lacked scheduling capacity, then created the container.
+  `devpod up --ide none -- wc-1` subsequently exited successfully; status
+  reported Running and an independent SSH marker succeeded.
+- Fresh remote clipboard acceptance then passed (54.442 seconds). Added Swift
+  assertions now also paste the native selection into a distinct second
+  terminal and verify that remote child's received Unicode/multiline text.
+  Final focused local/real-wc-1 checks: two tests, zero failures, 68.039 seconds
+  (`.tmp/release-acceptance-20261022-cross-pane.log`). The Python launcher allows
+  both remote readiness windows; clipboard assertions remain in Swift. An
+  earlier compile attempt was discarded after a test-source edit during build;
+  the final run used the finished Swift source.
+- The host Wayland controlled terminal/quit check passed (47.438 seconds,
+  `.tmp/release-acceptance-20261022-wayland.log`). This does not prove physical
+  IME composition, desktop clipboard interoperability or banner activation.
+- With explicit build/install approval, `make install` produced fresh release
+  binaries and installed only under `.tmp/release-acceptance-79303ca`.
+  Frontend/backend load that prefix's bundled Swift runtime and system GTK/VTE;
+  its desktop entry points to that prefix. The installed backend's real
+  production-channel handshake, ping and shutdown succeeded with an ephemeral
+  local notification listener and isolated configuration; no DevPod poll or
+  connection was requested in that smoke check.
+- The installed release frontend and development frontend passed the existing
+  private-display/private-bus coexistence and repeat-launch check (one test,
+  3.160 seconds, `.tmp/release-acceptance-20261022-channels.log`). Its backend
+  is controlled, so this is not installed-bundle real-DevPod acceptance.
+- The user's production frontend/backend (PIDs 4482/4559) remained running.
+  No production replacement, `.deb`, Ubuntu 24.04 or Ghostty work occurred.
+
+Still open: the installed release's real DevPod workflow, physical notification
+activation/input and Zed GUI acceptance, and CI for this new test/docs commit
+after authorized publication. The installed-app DevPod probe would reuse the
+normal notification token in wc-1's hooks. Automatic approval review rejected
+that credential payload/destination pending explicit approval; a question is
+pending. Clipboard-only private-display checks above use no notification
+credential. Earlier user-confirmed Herdr/cross-app desktop acceptance remains
+recorded separately; it is not an automated physical-desktop pass.
 
 ### Ratings
 

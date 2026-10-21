@@ -1415,6 +1415,33 @@ struct WorkspaceWindowTests {
                    "native terminal copy omitted child text")
         _ = pane.handleKey(keyval: UInt32(GDK_KEY_v), modifiers: modifiers)
         try expect(pumpUntil { pane.text.contains("received:COPIED") }, "native selection paste did not reach child")
+        // Exercise a distinct terminal destination, not just paste-back into
+        // the source. Both children read input as data without executing it.
+        let destinationLaunch = LinuxTerminalLaunch(kind: "terminal_launch", workspaceID: launch.workspaceID,
+            paneID: UUID(), generation: UUID(), executable: launch.executable, arguments: arguments)!
+        guard let destination = TerminalPane(launch: destinationLaunch) else {
+            throw TestFailure("clipboard destination terminal did not launch")
+        }
+        do {
+            let originalChild = gtk_window_get_child(nativeWindow)!
+            _ = g_object_ref(UnsafeMutableRawPointer(originalChild))
+            defer {
+                gtk_window_set_child(nativeWindow, originalChild)
+                g_object_unref(UnsafeMutableRawPointer(originalChild))
+                _ = gtk_widget_grab_focus(pane.widget)
+                destination.dispose()
+            }
+            gtk_window_set_child(nativeWindow, destination.widget)
+            _ = gtk_widget_grab_focus(destination.widget)
+            try expect(pumpUntil(timeout: workspace == nil ? 4 : 40) {
+                destination.text.contains("READY") && gtk_widget_get_mapped(destination.widget) != 0
+            }, "clipboard destination child not ready")
+            _ = destination.handleKey(keyval: UInt32(GDK_KEY_v), modifiers: modifiers)
+            try expect(pumpUntil {
+                destination.text.contains("received:received:λ界🙂") && destination.text.contains("received:received:line2")
+            }, "native copied Unicode/multiline output did not reach the other terminal")
+        }
+        print("cross-pane=native-copy-to-distinct-child-received")
         if ProcessInfo.processInfo.environment["DEVSPACE_TEST_DESKTOP_CLIPBOARD"] == "1" {
             try testDesktopClipboardExchange(pane, copied: selected)
         }
