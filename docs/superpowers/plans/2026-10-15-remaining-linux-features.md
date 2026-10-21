@@ -602,6 +602,12 @@ one opt-in skip, zero failures (17.610 seconds),
 SSH readiness to `wc-1` was independently confirmed with a harmless marker;
 no live clipboard pass is claimed yet.
 
+PTY prerequisite evidence: `testExitWaitsForOutputCallbackToFinish` exposed a
+Linux timer/reap race (exit overtook the blocked output callback), then passed
+after deferring Linux exit delivery until output drains. Six PTY tests pass;
+full Core suite: 258 tests, one opt-in skip, zero failures (17.953 seconds),
+`.tmp/pty-ordering-core-suite.log`. macOS callback logic was left unchanged.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

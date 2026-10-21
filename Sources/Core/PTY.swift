@@ -25,6 +25,8 @@ public final class PTYSession: @unchecked Sendable {
     private var readSource: DispatchSourceRead?
     #if os(Linux)
     private var exitSource: DispatchSourceTimer?
+    private var outputFinished = false
+    private var pendingExitCode: Int32?
     #endif
     private var lifecycle: Lifecycle = .idle
     private var reapStarted = false
@@ -142,8 +144,12 @@ public final class PTYSession: @unchecked Sendable {
             }
             lock.lock()
             masterFD = -1
+            outputFinished = true
+            let exitCode = pendingExitCode
+            pendingExitCode = nil
             lock.unlock()
             _ = Glibc.close(fd)
+            if let exitCode { onExit?(exitCode) }
             reap()
         }
         #else
@@ -227,6 +233,9 @@ public final class PTYSession: @unchecked Sendable {
     }
 
     private func finishReap(pid: pid_t, status: Int32) {
+        let code: Int32 = (status & 0x7F) == 0
+            ? (status >> 8) & 0xFF
+            : 128 + (status & 0x7F)
         lock.lock()
         guard !reapStarted else {
             lock.unlock()
@@ -239,16 +248,16 @@ public final class PTYSession: @unchecked Sendable {
         #if os(Linux)
         let source = exitSource
         exitSource = nil
+        let deliverExit = outputFinished
+        if !deliverExit { pendingExitCode = code }
         #endif
         lock.unlock()
         #if os(Linux)
         source?.cancel()
-        #endif
-        // Decode wait status into a conventional exit code.
-        let code: Int32 = (status & 0x7F) == 0
-            ? (status >> 8) & 0xFF
-            : 128 + (status & 0x7F)
+        if deliverExit { onExit?(code) }
+        #else
         onExit?(code)
+        #endif
     }
 
     // MARK: - Helpers

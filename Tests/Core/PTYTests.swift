@@ -2,6 +2,34 @@ import XCTest
 @testable import DevSpaceCore
 
 final class PTYTests: XCTestCase {
+    #if os(Linux)
+    func testExitWaitsForOutputCallbackToFinish() {
+        let pty = PTYSession()
+        let entered = expectation(description: "output callback entered")
+        let premature = expectation(description: "exit must not overtake output")
+        premature.isInverted = true
+        let exited = expectation(description: "exit reported")
+        let releaseOutput = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var drained = false
+        pty.onOutput = { _ in
+            entered.fulfill()
+            _ = releaseOutput.wait(timeout: .now() + 3)
+            lock.lock(); drained = true; lock.unlock()
+        }
+        pty.onExit = { _ in
+            lock.lock(); let finished = drained; lock.unlock()
+            if !finished { premature.fulfill() }
+            exited.fulfill()
+        }
+        pty.start(path: "/bin/echo", args: ["ordered-output"], cols: 80, rows: 24)
+        wait(for: [entered], timeout: 2)
+        wait(for: [premature], timeout: 0.2)
+        releaseOutput.signal()
+        wait(for: [exited], timeout: 2)
+    }
+    #endif
+
     func testRapidPTYLifecyclesPreserveOutputAndSingleExit() {
         for index in 0..<128 {
             let pty = PTYSession()
