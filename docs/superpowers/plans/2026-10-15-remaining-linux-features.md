@@ -522,6 +522,44 @@ M07. Installed-app M01–M06 DevPod workflows, real desktop acceptance, the Herd
 clipboard fix and current-head CI remain unverified/incomplete. No `.deb` was
 built and no PR was published.
 
+### Release-acceptance goal update — 2026-10-21
+
+The active goal is finishing release acceptance, not reimplementing M01–M10.
+Preserve Swift/GTK/VTE and macOS behavior; `.deb`, Ubuntu 24.04 and Ghostty
+parity remain deferred. Obtain approval before changing PTY ownership,
+publishing changes or replacing production. Existing evidence above remains
+historical, not a substitute for testing the eventual clipboard fix.
+
+P06 explicitly includes these separate real-workspace paths:
+
+- [ ] Print a known Unicode/multiline marker in an authorized running DevPod,
+  select its output in the DevSpace terminal, copy, and paste into another
+  DevSpace terminal. Check the destination's received text, not just selection
+  state or a clipboard API return value.
+- [ ] Select/copy inside Herdr running in that DevPod and paste back into Herdr
+  and into a DevSpace shell. Assert the actual destination text. This must
+  exercise Herdr's own copy path, not replace it with VTE select-all.
+- [ ] Copy from Herdr in DevSpace and paste into another desktop application;
+  separately paste externally copied text into the active DevPod terminal.
+  Verify physical-desktop behavior with clipboard-test authorization; private
+  Xvfb clipboard tests alone do not prove this path.
+- [ ] Cover stale/hidden/closed terminals, multiline/Unicode text and bracketed
+  paste in automated Swift regressions; retain ordinary terminal control keys,
+  input, resize, working directory, output delivery and shutdown behavior.
+
+Existing `WorkspaceWindowTests.swift` covers local-child/private-clipboard
+selection and paste, including Unicode and bracketed framing, but does not
+establish the remote Herdr or external-desktop paths above. Live tests must
+avoid executing pasted markers as arbitrary shell commands or modifying
+project files. Use an input-capture process or non-executing text destination.
+
+On 2026-10-21, read-only `devpod status wc-1 --output json --timeout 10s`
+reported `Stopped`. Do not start it implicitly. The terminal-transport approval
+request remains unanswered; the updated goal does not grant that approval.
+Other remaining gates are physical input/notifications/Zed, installed-bundle
+DevPod workflows on Ubuntu 26.04, and current-commit Linux/macOS CI after
+authorized publication. No acceptance item above is marked complete.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.
