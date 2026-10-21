@@ -560,6 +560,48 @@ Other remaining gates are physical input/notifications/Zed, installed-bundle
 DevPod workflows on Ubuntu 26.04, and current-commit Linux/macOS CI after
 authorized publication. No acceptance item above is marked complete.
 
+### Approved clipboard transport amendment — 2026-10-21
+
+The user approved keeping GTK/VTE rendering and moving Linux PTY ownership to
+the shared Swift `PTYSession`, with TDD coverage for clipboard, typing, resize
+and shutdown. They also authorized starting `wc-1` for future tests. This
+supersedes the pending-transport-approval entries above, not the separate gates
+on publication, release builds, host installation or production replacement.
+
+Execute in this checkout/main thread:
+
+- [x] Add `TerminalClipboardDecoder.consume(Data) -> [String]` in Core and
+  `TerminalClipboardTests`: BEL/ST and every chunk boundary, clipboard-only
+  selectors, strict UTF-8/base64, no NUL/read queries, 64 KiB decoded limit,
+  bounded buffering/recovery and no nested control-string clipboard execution.
+  Observe RED with an empty compiling interface, implement, run Core tests,
+  restore Package.resolved and commit the decoder milestone.
+- [ ] Add a native `WorkspaceWindowTests` OSC52 mode that spawns a real child,
+  checks private clipboard text and pastes it back into an input-capture child.
+  Observe RED on the existing VTE-owned transport. Add tests for hidden/retired
+  panes and ordinary selection; do not touch the physical clipboard.
+- [ ] Extend shared PTY start with working-directory support and a reported PID
+  while retaining existing call-site defaults. Test cwd/environment, input,
+  actual child resize, complete output before exit and single exit/cleanup.
+  Wire VTE `commit` to Swift PTY input, feed output unchanged to VTE while
+  observing OSC52, and synchronize VTE grid size with PTY size. Marshal GTK
+  work onto its main context; reject clipboard writes from nonactive panes.
+  Preserve launch errors and per-pane generation ownership. Run affected native
+  checks and full shared Core/lifecycle regressions before committing.
+- [ ] Run remote copy/paste and emitted-OSC52 acceptance against running `wc-1`,
+  then actual Herdr and physical desktop acceptance with the required scope.
+  Open a development build after the milestone; never replace production or
+  publish implicitly. Document exact evidence and remaining release gates.
+
+Decoder evidence: compiling empty interface produced 88 assertion failures in
+four tests; implemented decoder passed all four. Full Core suite: 257 tests,
+one opt-in skip, zero failures (17.610 seconds),
+`.tmp/clipboard-core-suite.log`. Native pane RED:
+`test_child_osc52_clipboard_roundtrip_and_hidden_pane_isolation` fails with
+`child OSC52 did not reach the clipboard`, `.tmp/clipboard-native-red.log`.
+SSH readiness to `wc-1` was independently confirmed with a harmless marker;
+no live clipboard pass is claimed yet.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.
