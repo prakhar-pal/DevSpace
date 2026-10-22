@@ -115,8 +115,8 @@ class InstallLinuxTests(unittest.TestCase):
         self.assertNotIn("ditto", result.stdout)
         self.assertTrue((self.prefix / "bin/devspace").is_file())
 
-    def test_make_install_without_bundle_builds_release_and_preserves_lock(self):
-        compiler = self.directory / "swift-fixture"
+    def release_compiler(self):
+        compiler = self.directory / "swift"
         calls = self.directory / "swift-calls.jsonl"
         compiler.write_text("#!/usr/bin/python3\nimport json,pathlib,shutil,sys\n"
             f"calls=pathlib.Path({str(calls)!r})\n"
@@ -124,22 +124,99 @@ class InstallLinuxTests(unittest.TestCase):
             "args=sys.argv[1:]\n"
             "assert args[:3] == ['build','-c','release']\n"
             "product=args[args.index('--product')+1]\n"
+            "assert product in ['DevSpaceLinuxApp','DevSpaceLinuxBackend'], product\n"
             "out=pathlib.Path(args[args.index('--scratch-path')+1])/'release'/product\n"
             "out.parent.mkdir(parents=True,exist_ok=True)\n"
             f"source=pathlib.Path({str(self.bundle / 'bin')!r})\n"
-            "shutil.copy2(source/({'DevSpaceLinuxApp':'DevSpace','DevSpaceLinuxBackend':'DevSpaceBackend'}[product]),out)\n")
+            "shutil.copy2(source/({'DevSpaceLinuxApp':'DevSpace','DevSpaceLinuxBackend':'DevSpaceBackend'}[product]),out)\n"
+            "pathlib.Path('Package.resolved').unlink(missing_ok=True)\n")
         compiler.chmod(0o755)
-        lock_path = ROOT / "Package.resolved"
-        lock = lock_path.read_bytes() if lock_path.exists() else None
+        return compiler, calls
+
+    def make_project(self):
+        project = self.directory / "project"
+        project.mkdir()
+        shutil.copy2(ROOT / "Makefile", project / "Makefile")
+        for name in ["scripts", "LICENSES"]:
+            (project / name).symlink_to(ROOT / name, target_is_directory=True)
+        (project / "Package.resolved").write_text("preserve existing resolution\n")
+        return project
+
+    def test_make_build_creates_production_bundle_without_installing_or_launching(self):
+        compiler, calls = self.release_compiler()
+        project = self.make_project()
+        output = self.directory / "release bundle α"
+        launched = self.directory / "unexpected-launch"
+        for name in ["DevSpace", "DevSpaceBackend"]:
+            (self.bundle / "bin" / name).write_text(f'#!/bin/sh\ntouch "{launched}"\nexit 99\n')
+        for attempt in range(2):
+            with self.subTest(attempt=attempt):
+                if attempt:
+                    (project / "Package.resolved").unlink()
+                lock = (project / "Package.resolved").read_bytes() if (project / "Package.resolved").exists() else None
+                result = subprocess.run(["make", "build", f"SWIFT={compiler}",
+                    f"LINUX_RELEASE_SCRATCH={self.directory / 'release-cache'}",
+                    f"LINUX_RELEASE_BUNDLE={output}", f"LINUX_SWIFT_RUNTIME={self.runtime}",
+                    f"LINUX_INSTALL_PREFIX={self.prefix}"], cwd=project,
+                    env=dict(os.environ, PATH=f"{self.directory}:{os.environ['PATH']}"), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(json.loads((output / ".devspace-bundle.json").read_text())["channel"], "production")
+                self.assertTrue((output / "bin/devspace").is_file())
+                for name in ["DevSpace", "DevSpaceBackend"]:
+                    self.assertEqual((output / "bin" / name).read_bytes(), (self.bundle / "bin" / name).read_bytes())
+                self.assertEqual((output / "lib/libswiftCore.so").read_text(), "runtime fixture")
+                self.assertFalse(self.prefix.exists(), "build unexpectedly installed the bundle")
+                self.assertFalse(launched.exists(), "build unexpectedly launched an executable")
+                self.assertEqual((project / "Package.resolved").read_bytes() if (project / "Package.resolved").exists() else None, lock)
+        self.assertEqual([json.loads(line)[4] for line in calls.read_text().splitlines()],
+                         ["DevSpaceLinuxApp", "DevSpaceLinuxBackend"] * 2)
+
+    def test_make_install_without_bundle_builds_release_and_preserves_lock(self):
+        compiler, calls = self.release_compiler()
+        project = self.make_project()
+        lock_path = project / "Package.resolved"
+        lock = lock_path.read_bytes()
         result = subprocess.run(["make", "install", f"SWIFT={compiler}",
             f"LINUX_RELEASE_SCRATCH={self.directory / 'release-cache'}",
             f"LINUX_SWIFT_RUNTIME={self.runtime}", f"LINUX_INSTALL_PREFIX={self.prefix}"],
-            cwd=ROOT, capture_output=True, text=True)
+            cwd=project, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual([json.loads(line)[4] for line in calls.read_text().splitlines()],
                          ["DevSpaceLinuxApp", "DevSpaceLinuxBackend"])
         self.assertTrue((self.prefix / "bin/devspace").is_file())
         self.assertEqual(lock_path.read_bytes() if lock_path.exists() else None, lock)
+
+    def test_inaccessible_unrelated_process_does_not_prevent_running_app_check(self):
+        spec = importlib.util.spec_from_file_location("install_linux", INSTALL)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        protected = self.directory / "2931"
+        protected.mkdir()
+        (protected / "comm").write_text("systemd\n")
+        live = self.directory / "2932"
+        live.mkdir()
+        (live / "exe").symlink_to(self.bundle / "bin/DevSpace")
+        processes = [protected]
+        original_stat, original_iterdir = Path.stat, Path.iterdir
+        def process_stat(path, *args, **kwargs):
+            if path == protected / "exe":
+                raise PermissionError("controlled nondumpable process")
+            return original_stat(path, *args, **kwargs)
+        def processes_in(path):
+            return iter(processes) if path == Path("/proc") else original_iterdir(path)
+        with patch.object(Path, "stat", process_stat), patch.object(Path, "iterdir", processes_in):
+            module.refuse_running(self.bundle)
+            processes.append(live)
+            with self.assertRaisesRegex(ValueError, "installation is running"):
+                module.refuse_running(self.bundle)
+            processes.pop()
+            for name in ["DevSpace", "DevSpaceBackend"]:
+                (protected / "comm").write_text(name + "\n")
+                with self.assertRaisesRegex(ValueError, "Cannot verify"):
+                    module.refuse_running(self.bundle)
+            with patch.object(Path, "read_text", side_effect=PermissionError("unknown process name")):
+                with self.assertRaisesRegex(ValueError, "Cannot verify"):
+                    module.refuse_running(self.bundle)
 
     @unittest.skipUnless(shutil.which("desktop-file-validate") and shutil.which("gio"), "desktop entry tools required")
     def test_desktop_launch_handles_reserved_characters_in_prefix(self):

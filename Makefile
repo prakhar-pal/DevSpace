@@ -28,6 +28,7 @@ LINUX_DEV_BUNDLE ?= build/linux-dev-bundle
 LINUX_SWIFT_SCRATCH ?= .tmp/swift-linux-app
 LINUX_SWIFT_RUNTIME ?= $(shell $(SWIFT) -print-target-info | python3 -c 'import json,sys; print(json.load(sys.stdin)["paths"]["runtimeLibraryPaths"][0])')
 LINUX_RELEASE_SCRATCH ?= .tmp/swift-linux-release
+LINUX_RELEASE_BUNDLE ?= build/linux-production
 LINUX_PACKAGE_COPYRIGHT ?=
 LINUX_PACKAGE_MAINTAINER ?=
 LINUX_SWIFT_LICENSE ?= $(abspath $(LINUX_SWIFT_RUNTIME)/../../../share/swift/LICENSE.txt)
@@ -40,9 +41,31 @@ LINUX_INSTALL_BUNDLE ?=
 SWIFT ?= swift
 SWIFTC ?= swiftc
 
-.PHONY: linux-build-dev linux-bundle-dev linux-run linux-package linux-install linux-test-core linux-test-protocol linux-test-gtk linux-test
+.PHONY: linux-build-dev linux-bundle-dev linux-bundle linux-run linux-package linux-install linux-test-core linux-test-protocol linux-test-gtk linux-test
 
 install: linux-install
+build: linux-bundle
+
+# Assemble only: do not install, launch, or disturb the daily-driver bundle.
+linux-bundle:
+	@set -eu; \
+	mkdir -p .tmp; \
+	work=$$(mktemp -d .tmp/linux-build.XXXXXX); \
+	had_lock=no; \
+	if [ -f Package.resolved ]; then cp -p Package.resolved "$$work/Package.resolved"; had_lock=yes; fi; \
+	restore() { \
+	  if [ "$$had_lock" = yes ]; then cp -p "$$work/Package.resolved" Package.resolved; else rm -f Package.resolved; fi; \
+	  rm -rf "$$work"; \
+	}; \
+	trap restore EXIT; \
+	"$(SWIFT)" build -c release --product DevSpaceLinuxApp --scratch-path "$(LINUX_RELEASE_SCRATCH)"; \
+	"$(SWIFT)" build -c release --product DevSpaceLinuxBackend --scratch-path "$(LINUX_RELEASE_SCRATCH)"; \
+	mkdir -p "$$work/prefix/bin"; \
+	install -m 755 "$(LINUX_RELEASE_SCRATCH)/release/DevSpaceLinuxApp" "$$work/prefix/bin/DevSpaceLinuxApp"; \
+	install -m 755 "$(LINUX_RELEASE_SCRATCH)/release/DevSpaceLinuxBackend" "$$work/prefix/bin/DevSpaceLinuxBackend"; \
+	python3 scripts/assemble-linux.py --frontend "$$work/prefix" --backend "$$work/prefix/bin/DevSpaceLinuxBackend" \
+	  --swift-runtime "$(LINUX_SWIFT_RUNTIME)" --swift-license "$(LINUX_SWIFT_LICENSE)" --icu-license "$(LINUX_ICU_LICENSE)" \
+	  --channel production --output "$(LINUX_RELEASE_BUNDLE)" --replace
 
 # An explicit bundle skips compilation. Otherwise build a fresh release in an
 # isolated staging directory; installation itself refuses a running destination.
@@ -130,13 +153,14 @@ endif
 help:
 	@echo "DevSpace native build targets:"
 	@echo "  make build-dev  - Debug build + assemble \"DevSpaceDev.app\" (amber icon)"
-	@echo "  make build      - Release build + assemble \"DevSpace.app\""
+	@echo "  make build      - Release bundle ($(if $(filter Linux,$(shell uname -s)),$(LINUX_RELEASE_BUNDLE),DevSpace.app)); does not install or launch"
 	@echo "  make test       - run unit tests (swift test)"
 	@echo "  make run        - build-dev and launch the app"
 	@echo "  make install    - release build + install ($(if $(filter Linux,$(shell uname -s)),default ~/.local; LINUX_INSTALL_PREFIX overrides,default /Applications; APP_INSTALL_LOCATION overrides))"
 	@echo "  make clean      - remove build output"
 	@echo "  make linux-build-dev     - build the Swift GTK/VTE frontend and backend"
 	@echo "  make linux-bundle-dev    - assemble a relocatable development bundle"
+	@echo "  make linux-bundle        - assemble a relocatable production bundle (same as make build on Linux)"
 	@echo "  make linux-run           - build, bundle, and launch DevSpaceDev on Linux"
 	@echo "  make linux-package       - build a production Ubuntu .deb (requires copyright and maintainer metadata)"
 	@echo "  make linux-test-core     - run the Swift Core XCTest target"
@@ -151,9 +175,11 @@ build-dev:
 	bash scripts/assemble-app.sh debug "DevSpaceDev" DevSpaceDev "$(LOG_PATH)"
 	@mkdir -p .tmp && ln -sfn "$(LOG_PATH)" .tmp/devspace.log
 
+ifneq ($(shell uname -s),Linux)
 build:
 	swift build -c release --product DevSpaceApp
 	bash scripts/assemble-app.sh release "DevSpace" DevSpace ""
+endif
 
 test:
 	swift test

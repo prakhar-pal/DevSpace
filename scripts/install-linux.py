@@ -40,6 +40,18 @@ def refuse_running(destination):
                 raise ValueError(f"DevSpace installation is running (PID {process.name}); quit it before installing")
         except (FileNotFoundError, ProcessLookupError):
             continue
+        except PermissionError as error:
+            # Same-UID nondumpable helpers (e.g. systemd --user) can hide exe.
+            # Keep checking other PIDs, but fail closed for DevSpace or when
+            # even the process name cannot be determined.
+            try:
+                name = (process / "comm").read_text().strip()
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            except OSError as name_error:
+                raise ValueError(f"Cannot verify process {process.name}; installation left untouched") from name_error
+            if name in {"DevSpace", "DevSpaceBackend"}:
+                raise ValueError(f"Cannot verify running {name} (PID {process.name}); installation left untouched") from error
 
 
 def install(bundle, prefix):

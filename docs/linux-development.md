@@ -37,6 +37,21 @@ make linux-bundle-dev
 make linux-run
 ```
 
+For a production bundle without installing or launching it:
+
+```sh
+make build
+# Launch later, if desired:
+build/linux-production/bin/devspace
+```
+
+`make build` (also `make linux-bundle`) compiles both release products and
+assembles `build/linux-production`. Override `LINUX_RELEASE_BUNDLE` to choose
+another output path. Repeated builds safely replace only a generated production
+bundle; unrelated files and development bundles are refused. This does not
+create a `.deb` or update your installed application. macOS `make build` still
+assembles `DevSpace.app`.
+
 The SwiftPM products are `DevSpaceLinuxApp` and `DevSpaceLinuxBackend` under
 `build/linux-dev/bin`. `build/linux-dev-bundle` is relocatable, including in
 paths with spaces or Unicode. Its `bin/devspace-dev` launcher selects the
@@ -75,6 +90,10 @@ bundle, then installs it under `~/.local/lib/devspace`. It creates the
 `~/.local/share`. Ensure `~/.local/bin` is on PATH, or launch with
 `~/.local/bin/devspace`. No existing app is stopped or launched automatically.
 The macOS `make install` behavior remains unchanged.
+
+The running-app check skips inaccessible unrelated processes such as
+`systemd --user`, but still refuses a running destination or an inaccessible
+process named `DevSpace`/`DevSpaceBackend` whose safety cannot be verified.
 
 To install an already-built production bundle without recompiling:
 
