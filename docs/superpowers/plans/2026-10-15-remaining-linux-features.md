@@ -536,14 +536,14 @@ P06 explicitly includes these separate real-workspace paths:
   select its output in the DevSpace terminal, copy, and paste into another
   DevSpace terminal. Check the destination's received text, not just selection
   state or a clipboard API return value.
-- [ ] Select/copy inside Herdr running in that DevPod and paste back into Herdr
+- [x] Select/copy inside Herdr running in that DevPod and paste back into Herdr
   and into a DevSpace shell. Assert the actual destination text. This must
   exercise Herdr's own copy path, not replace it with VTE select-all.
-- [ ] Copy from Herdr in DevSpace and paste into another desktop application;
+- [x] Copy from Herdr in DevSpace and paste into another desktop application;
   separately paste externally copied text into the active DevPod terminal.
   Verify physical-desktop behavior with clipboard-test authorization; private
   Xvfb clipboard tests alone do not prove this path.
-- [ ] Cover stale/hidden/closed terminals, multiline/Unicode text and bracketed
+- [x] Cover stale/hidden/closed terminals, multiline/Unicode text and bracketed
   paste in automated Swift regressions; retain ordinary terminal control keys,
   input, resize, working directory, output delivery and shutdown behavior.
 
@@ -588,7 +588,7 @@ Execute in this checkout/main thread:
   work onto its main context; reject clipboard writes from nonactive panes.
   Preserve launch errors and per-pane generation ownership. Run affected native
   checks and full shared Core/lifecycle regressions before committing.
-- [ ] Run remote copy/paste and emitted-OSC52 acceptance against running `wc-1`,
+- [x] Run remote copy/paste and emitted-OSC52 acceptance against running `wc-1`,
   then actual Herdr and physical desktop acceptance with the required scope.
   Open a development build after the milestone; never replace production or
   publish implicitly. Document exact evidence and remaining release gates.
@@ -797,6 +797,67 @@ backend integration tests passed (27.621s). Evidence:
 `.tmp/stale-poll-delayed-caller-green.log`, and
 `.tmp/stale-poll-backend-suite-green.log`. No production Swift code or bundled
 binary changed. Current-head CI must be verified after publication.
+
+### Final runtime acceptance evidence — 2026-10-22
+
+Host rechecked as Ubuntu 26.04.1 LTS with global Swift 6.4.1. Application,
+Package.swift, Makefile and script sources still match isolated installed
+snapshot `79303ca`; subsequent changes are tests and documentation only.
+CI for `c15907546db34485d304422f4deef44af9125343` passed both Linux (7m55s)
+and macOS (1m15s) in
+[run 39771217212](https://github.com/prakhar-pal/DevSpace/actions/runs/39771217212).
+The final documentation head must also have successful CI before closing the
+release-acceptance goal; this entry does not predeclare that result.
+
+- **Actual Herdr selection and destinations:** the installed frontend ran
+  real SSH to wc-1 with Herdr 0.8.2 on private Xvfb/D-Bus. Native double-clicks
+  selected the output word `HERDR731` through Herdr's own mouse copy path;
+  no VTE select-all or synthetic OSC52 replaced the source-selection action.
+  Native paste reached the original Herdr input loop, a distinct second Herdr
+  pane, and then a plain DevSpace remote-shell input loop. Each destination
+  acknowledged the exact received word through OSC52, read by external xclip.
+  Pasted data was captured with `read`, not executed as a shell command.
+  Evidence: `.tmp/herdr-own-copy-acceptance.log`,
+  `.tmp/herdr-distinct-pane-copy-acceptance.log`, and
+  `.tmp/herdr-to-plain-shell-green.log`. This supplements, not replaces, the
+  earlier user-observed physical Herdr/external-app copy-out and paste-back.
+  Unicode/multiline and distinct DevSpace-terminal delivery remain covered by
+  the separate Swift acceptance tests above; this Herdr-specific marker is ASCII.
+- **Isolation and discarded probes:** the controlled backend peer only launched
+  the real SSH child; it did not test hook installation or workspace lifecycle.
+  The initial Herdr `--no-session` attempt refused to run alongside the default
+  server and was discarded. Named session `devspace-accept-20261022-a` was then
+  used exclusively for testing. A second-pane setup probe encountered an already
+  running capture loop, and an assumed detach prefix was forwarded as input;
+  neither failed probe is counted as clipboard acceptance. Positive readiness
+  and the exact named-session stop command established the final shell test.
+  The test frontend exited normally; the owned Herdr session was stopped and
+  its synthetic metadata deleted via Herdr's session API. Its default session
+  remained Running (`.tmp/herdr-owned-session-cleanup.json`). No user's project
+  files or existing Herdr sessions were removed.
+- **Authenticated editor GUI, full path:** on host Wayland, wc-1's installed
+  `ded /tmp` helper sent its authenticated request through the real reverse
+  tunnel to the actual installed backend and frontend. The launched real Zed
+  test profile received exactly `ssh://wc-1.devpod/tmp`; fresh logs showed its
+  remote server loading `/tmp`. Visually inspected the owned Zed window showing
+  `wc-1.devpod` and that remote directory tree:
+  `.tmp/zed-release-acceptance/authenticated-remote-window.png`. The test profile
+  had auto-update disabled. Only the verified test editor process was closed.
+- **Disconnect cleanup, live pod:** before closing the isolated installed app,
+  wc-1's development notification tunnel returned HTTP 204 and there were three
+  DevSpace notification hooks. After orderly quit, neither channel had a tunnel
+  in wc-1 and the hook count was zero. Only counts/reachability were recorded,
+  never credential-bearing commands. Evidence:
+  `.tmp/release-hook-cleanup-before.log` and
+  `.tmp/release-hook-cleanup-after.log`. Production frontend/backend remained
+  running; wc-1 was not stopped by these checks.
+
+These results close the remaining runtime acceptance gates alongside the
+previously recorded physical clipboard and notification-click confirmations,
+native keyboard/PTY regressions, and installed-bundle workflows. They do not
+claim automated physical-desktop clipboard coverage, physical IME composition,
+or a clean-machine installation. No merge, production replacement, `.deb`,
+Ubuntu 24.04 validation or Ghostty parity work is authorized by this acceptance.
 
 ### Ratings
 
