@@ -538,8 +538,14 @@ class BackendIntegrationTests(unittest.TestCase):
         return request_id
 
     def test_poll_started_before_stop_cannot_publish_pre_stop_state(self):
+        # Keep the pre-stop observation in flight until stop is acknowledged;
+        # a fixed delay can expire first on a busy runner and test old history.
+        hold = self.directory / "hold-status"
+        hold.touch()
+        self.addCleanup(hold.unlink, missing_ok=True)
         poll_id = self.begin_delayed_poll()
         self.assertEqual(self.request("stop", workspace_id="pod")["kind"], "completed")
+        hold.unlink()
         snapshot = json.loads(self.response_for(poll_id)["payload"]["json"])
         self.assertEqual(snapshot["workspaces"][0]["state"], "Stopped")
 

@@ -778,6 +778,26 @@ activation is user-confirmed; physical IME composition and a clean Ubuntu
 Herdr/cross-app clipboard acceptance remains distinct from automated evidence.
 `.deb`, Ubuntu 24.04 and Ghostty parity remain deferred.
 
+### Acceptance CI ordering correction — 2026-10-22
+
+The next documentation head (`d859550`) passed macOS CI but failed Linux's
+`test_poll_started_before_stop_cannot_publish_pre_stop_state`. The fixture
+released its captured Running observation after a fixed 0.6 seconds, whether
+or not the test's stop command had completed. A delayed-caller reproduction
+failed against the unchanged installed backend and showed the poll response
+already buffered before stop completion; this is not evidence of a stale
+snapshot arriving after a completed stop. Thirty unmodified local repetitions
+passed, consistent with a scheduling-dependent test failure.
+
+Replace the fixture timing assumption with a bounded explicit hold, released
+only after stop acknowledgment; cleanup releases it on assertion failure.
+The delayed-caller reproduction then passed (1.829s), and all 54 affected
+backend integration tests passed (27.621s). Evidence:
+`.tmp/stale-poll-delayed-caller-red.log`,
+`.tmp/stale-poll-delayed-caller-green.log`, and
+`.tmp/stale-poll-backend-suite-green.log`. No production Swift code or bundled
+binary changed. Current-head CI must be verified after publication.
+
 ### Ratings
 
 Pxx identifiers are stable and separate from historical Fxx identifiers. P06's final rating of 9 supersedes its earlier rating of 8.

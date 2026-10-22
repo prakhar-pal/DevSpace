@@ -45,7 +45,15 @@ elif args[0] == "status":
     observed = state_file.read_text() if state_file.exists() else "Running"
     if state_file.with_name("slow-status").exists():
         state_file.with_name("status-started").touch()
-        time.sleep(0.6)
+        hold = state_file.with_name("hold-status")
+        if hold.exists():
+            deadline = time.monotonic() + 10
+            while hold.exists():
+                if time.monotonic() >= deadline:
+                    sys.exit("timed out waiting to release controlled status")
+                time.sleep(0.01)
+        else:
+            time.sleep(0.6)
     print(json.dumps({"id": args[-1], "state": observed}))
 elif args == ["stop", "--", "pod"]:
     state_file.write_text("Stopped")
