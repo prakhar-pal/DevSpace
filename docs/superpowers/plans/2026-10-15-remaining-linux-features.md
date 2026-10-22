@@ -710,14 +710,60 @@ global Swift 6.4.1 toolchain. No application source changed in this increment.
 - The user's production frontend/backend (PIDs 4482/4559) remained running.
   No production replacement, `.deb`, Ubuntu 24.04 or Ghostty work occurred.
 
-Still open: the installed release's real DevPod workflow, physical notification
-activation/input and Zed GUI acceptance, and CI for this new test/docs commit
-after authorized publication. The installed-app DevPod probe would reuse the
-normal notification token in wc-1's hooks. Automatic approval review rejected
-that credential payload/destination pending explicit approval; a question is
-pending. Clipboard-only private-display checks above use no notification
-credential. Earlier user-confirmed Herdr/cross-app desktop acceptance remains
-recorded separately; it is not an automated physical-desktop pass.
+At that checkpoint, installed-backend integration was awaiting explicit approval
+to reuse the owner's notification token in wc-1's hooks. That approval has now
+been received; the results below supersede that blocker.
+
+### Installed-bundle integration acceptance — 2026-10-22
+
+- Published test/docs head `090858de90ca2c68c358ef5cf5e400da94989904` passed both
+  Linux GTK/VTE and macOS SwiftPM CI in
+  [run 39672809494](https://github.com/prakhar-pal/DevSpace/actions/runs/39672809494).
+  Rechecked the run's exact SHA and successful checks. Its application, package,
+  Makefile and script sources are unchanged from installed snapshot `79303ca`.
+- With explicit token-reuse approval, started the stopped wc-1 using the
+  previously authorized DevPod start command. Startup exited successfully;
+  status reported Running and an independent SSH marker succeeded before tests.
+- The actual isolated installed frontend **and backend**, using their bundled
+  Swift runtime, passed native keyboard-driven remote Unicode OSC52 copy,
+  external clipboard ownership, paste acknowledged by the remote child, and
+  shortcut-driven orderly shutdown. Evidence:
+  `.tmp/release-real-installed-acceptance.log`. This ran on private Xvfb/D-Bus,
+  with development channel identity to coexist with the user's production app.
+  It is not a physical-desktop clipboard test or production replacement.
+- Existing Swift frontend integration assertions also passed against the actual
+  installed backend: shell round-trip, terminal close without stopping wc-1,
+  reconnect with a new terminal, authenticated helper notification/badge,
+  authenticated `ded /tmp` routing to the exact Zed SSH URL, and workspace
+  activation/focus. One test, zero failures/errors/skips:
+  `.tmp/release-installed-backend-integration.log`. This uses a source-built
+  frontend harness and a Zed argument recorder, not the installed frontend or
+  a real Zed window. Only wc-1 and independently verified stopped wc-2 were
+  listed; wc-2 was selected without connecting. The initial temporary launcher
+  incorrectly set opt-in variables after test import and skipped; that run was
+  discarded and the corrected launcher required a non-skipped result.
+- A separate earlier installed-frontend controlled-peer check opened a real
+  Zed window connected to `wc-1.devpod/tmp`; screenshot:
+  `.tmp/zed-release-acceptance/remote-window-1.25.2.png`. It verifies the GUI
+  handoff, not authenticated `ded` end-to-end in that same run. Zed's updater
+  unexpectedly updated the user's Zed 1.24.2 to 1.25.2 during that test; this
+  side effect was disclosed, and auto-update was disabled in the test profile
+  before retesting 1.25.2. No claim of an unchanged Zed installation is made.
+- Opened the isolated installed app on host Wayland with development identity.
+  Selected stopped wc-2, then invoked wc-1's authenticated helper through the
+  development reverse tunnel. The helper reported success, and a D-Bus monitor
+  restricted to this app captured its `Notify` call to the real host service:
+  title `wc-1`, body `Claude finished`, default action and development desktop
+  identity. Evidence: `.tmp/release-installed-notification-delivery.log`.
+  This proves submission, not visible banner display or a physical click;
+  user confirmation of banner activation/focus was requested separately.
+
+No application code changed for this acceptance increment. The user's running
+production installation was neither stopped nor replaced. Physical banner
+activation remains unconfirmed; physical IME composition and a clean Ubuntu
+26.04 installation are not covered by these checks. Earlier user-confirmed
+Herdr/cross-app clipboard acceptance remains distinct from automated evidence.
+`.deb`, Ubuntu 24.04 and Ghostty parity remain deferred.
 
 ### Ratings
 
