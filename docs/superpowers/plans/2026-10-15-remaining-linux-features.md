@@ -757,10 +757,23 @@ been received; the results below supersede that blocker.
   identity. Evidence: `.tmp/release-installed-notification-delivery.log`.
   This proves submission, not visible banner display or a physical click;
   user confirmation of banner activation/focus was requested separately.
+- Repeated the host banner test at the user's request. wc-1 was Running and
+  wc-2 was Stopped. Reopened the existing isolated bundle, selected wc-2 without
+  connecting, and sent the authenticated wc-1 `Stop` event. The scoped monitor
+  captured `Notify` followed by `ActionInvoked` (`default`, notification ID 18):
+  `.tmp/release-installed-notification-retry-delivery.log`. The user explicitly
+  confirmed that clicking the banner selected wc-1 and focused its terminal.
+  The physical banner-activation gate is now passed; this is manual acceptance
+  corroborated by the desktop service's action signal, not a simulated click.
+- Both CI jobs passed published documentation head
+  `c15277937a9b677428650f0f2790f6702d490e95` in
+  [run 39766441351](https://github.com/prakhar-pal/DevSpace/actions/runs/39766441351):
+  Linux 5m47s and macOS 1m12s. The subsequent banner-confirmation note changes
+  documentation only; it does not change the tested application binaries.
 
 No application code changed for this acceptance increment. The user's running
 production installation was neither stopped nor replaced. Physical banner
-activation remains unconfirmed; physical IME composition and a clean Ubuntu
+activation is user-confirmed; physical IME composition and a clean Ubuntu
 26.04 installation are not covered by these checks. Earlier user-confirmed
 Herdr/cross-app clipboard acceptance remains distinct from automated evidence.
 `.deb`, Ubuntu 24.04 and Ghostty parity remain deferred.
