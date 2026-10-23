@@ -1,6 +1,8 @@
 # ADR 0002: Build the Linux app in Swift with GTK4 and VTE
 
 - **Status:** Accepted
+- **Terminal amendment:** ADR 0003 adds a Ghostty/Swift/Skia development opt-in;
+  VTE remains the default until its acceptance gates pass.
 - **Date:** 2026-10-13
 - **Decider:** prakhar-pal
 - **Supersedes:** ADR 0001's macOS-only platform scope and the Linux Ghostty/Zig prototype, without changing the macOS renderer decision

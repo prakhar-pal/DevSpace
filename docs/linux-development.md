@@ -35,6 +35,26 @@ locations. The experimental frontend refuses the production channel; regular
 `make build-dev` still selects VTE. Do not distribute the feasibility Skia
 configuration or treat this opt-in as the completed default migration.
 
+`make linux-ghostty-bundle-dev` additionally assembles
+`build/linux-ghostty-dev-bundle` with the selected global Swift runtime and a
+checksum inventory of pinned native archives/notices. It may fetch missing
+public license texts; it never installs a compiler, creates a production build,
+or installs over the running app. See `LICENSES/README.md` and ADR 0003.
+
+The native notice collector and bundle tests run with:
+
+```sh
+python3 -B -m unittest Tests.Linux.test_native_notices Tests.Linux.test_assemble_linux -v
+```
+
+Native inventory tests skip when their experimental build inputs are absent.
+For relocated Ghostty bundle checks, set `DEVSPACE_TEST_FRONTEND_PREFIX` to the
+debug executable prefix, `DEVSPACE_TEST_SWIFT_RUNTIME` to the selected global
+runtime directory, `DEVSPACE_TEST_TERMINAL_RENDERER=ghostty`, and
+`DEVSPACE_TEST_NATIVE_NOTICES` to the assembled `share/doc/devspace/third-party`
+directory, then run `Tests.Linux.test_bundle_runtime`. That test uses an
+ephemeral backend listener and never polls or connects to a workspace.
+
 The GTK adapter keeps the shared Swift PTY, bounded output delivery and existing
 pane/generation IDs. It uses GtkGLArea on a hardware driver and reports a Skia
 raster fallback on software drivers/context failures. Tests explicitly allow
@@ -64,6 +84,21 @@ full terminal text/caret navigation and a real screen-reader check remain
 acceptance work. Actual IBus/Fcitx composition, non-US keyboard mappings,
 desktop Herdr clipboard, hardware rendering and packaged relocation must be
 verified before changing the default.
+
+For an identical 80×24, monospace-14px, 4,000-line styled Unicode burst:
+
+```sh
+GTK_A11Y=test GTK_THEME=Adwaita GDK_BACKEND=x11 DEVSPACE_PRIVATE_KEY_TEST=1 \
+  xvfb-run -a bash scripts/test-ghostty-gtk.sh --benchmark
+```
+
+This compares the actual VTE widget and Ghostty/Skia raster widget in one debug
+process, after warmup, from ingestion through final visible text and a subsequent
+frame. It reports nine samples and their medians, validates identical grids,
+and measures theme insets instead of assuming zero padding. On 2026-10-24,
+280,015 input bytes measured VTE 33.6 ms and Ghostty 49.2 ms median; the individual
+samples varied from 31.6–63.4 ms. This private-display/software sample is not
+sustained SSH throughput, hardware GPU performance or a production benchmark.
 
 ## Dependencies
 

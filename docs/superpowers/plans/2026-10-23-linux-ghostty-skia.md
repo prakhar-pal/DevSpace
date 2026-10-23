@@ -93,11 +93,13 @@ acceptance gates; basic accessibility label/visible-text metadata is present.
 ## M05 — Acceptance, packaging and cutover
 
 - [x] Keep VTE default until previous milestones pass; development opt-in only.
-- [ ] Run affected acceptance tests and compare like-for-like VTE performance.
+- [x] Run affected acceptance tests and compare like-for-like VTE software performance.
 - [ ] Check GPU/software paths, context loss, reconnect, hidden/multiple panes
       and shutdown, real wc-1, Herdr clipboard, hooks/notifications and editors.
-- [ ] Update runtime assembly, build/install tooling, licenses and architecture.
-- [ ] Verify relocated bundles; then switch default and remove VTE dependencies.
+- [x] Add development runtime assembly, pinned native notices and architecture ADR.
+- [x] Verify relocated experimental development bundles.
+- [ ] Approve shipping dependency policy and update production install/package inventory.
+- [ ] After all acceptance gates pass, switch default and remove VTE dependencies.
 - [ ] Verify real hardware-GPU rendering on a capable host before final cutover.
 - [ ] Commit verified cutover. Release builds/install changes need approval.
 
@@ -120,6 +122,22 @@ Ctrl+Shift+U Unicode preedit/commit using GtkIMContextSimple. Composition on
 Return inserts the composed character once. This narrows the IME uncertainty
 but does not establish IBus/Fcitx or screen-reader parity. A fresh experimental
 debug app was opened alongside the installed production app.
+
+M05 development packaging checkpoint: `make linux-ghostty-bundle-dev` builds a
+separate development bundle with the global Swift runtime and 20 pinned native
+notice files. Source revisions and notice checksums are validated; native
+archive hashes are recorded. 21 packaging/inventory tests and the relocated
+bundle loader/backend handshake check pass. No production build/install or .deb
+was performed. ADR 0003 records the opt-in architecture and remaining gates.
+
+The private-display comparison uses the actual VTE and Ghostty/Skia raster
+widgets, identical 80×24 grids and monospace-14px requests, 280,015 bytes of
+styled Unicode, one warmup and nine samples. Parse-to-next-frame medians were
+33.6 ms (VTE) and 49.2 ms (Ghostty); samples ranged 31.6–63.4 ms. This is a debug
+software comparison, not hardware-GPU or sustained SSH throughput acceptance.
+The isolated local Herdr mouse-copy test and hidden/sibling PTY shutdown test
+pass. Remote Herdr and actual desktop clipboard/IME/screen-reader checks remain
+open; the remote fixture is being diagnosed before claiming a pass.
 
 ## Verification and deferrals
 
