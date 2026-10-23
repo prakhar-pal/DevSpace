@@ -41,6 +41,23 @@ checksum inventory of pinned native archives/notices. It may fetch missing
 public license texts; it never installs a compiler, creates a production build,
 or installs over the running app. See `LICENSES/README.md` and ADR 0003.
 
+The experimental frontend has a separate desktop clipboard acceptance test.
+It replaces the clipboard with synthetic text and uses an external `xclip`
+process in both directions. For native Wayland, click the temporary window's
+Run clipboard check button to supply a real input event:
+
+```sh
+DEVSPACE_LINUX_TERMINAL=ghostty GDK_BACKEND=wayland \
+  DEVSPACE_HOST_CLIPBOARD_ACCEPTANCE=1 DEVSPACE_HOST_CLIPBOARD_INTERACTIVE=1 \
+  swift test --scratch-path .tmp/ghostty-skia/app \
+  --filter TerminalPaneTests.testOptInDesktopClipboardRoundTripWithExternalApplication
+```
+
+An actual desktop X11 run passes with `GDK_BACKEND=x11`; the automated Wayland
+attempt without a real input event sent selection serial zero and failed the
+external read. Native Wayland acceptance remains open pending the interactive
+check. This does not invalidate the earlier user acceptance of the VTE build.
+
 The native notice collector and bundle tests run with:
 
 ```sh

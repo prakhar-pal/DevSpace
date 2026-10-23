@@ -20,13 +20,32 @@ final class TerminalPaneTests: XCTestCase {
         defer { pane.dispose(); gtk_window_destroy(native) }
         gtk_window_set_title(native, "DevSpace clipboard acceptance — synthetic text")
         gtk_window_set_default_size(native, 640, 320)
-        gtk_window_set_child(native, pane.widget)
+        let clicked = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
+        clicked.initialize(to: false)
+        defer { clicked.deinitialize(count: 1); clicked.deallocate() }
+        if ProcessInfo.processInfo.environment["DEVSPACE_HOST_CLIPBOARD_INTERACTIVE"] == "1" {
+            let box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8)!
+            let button = gtk_button_new_with_label("Run clipboard check")!
+            let callback: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void = { _, data in
+                data?.assumingMemoryBound(to: Bool.self).pointee = true
+            }
+            _ = g_signal_connect_data(UnsafeMutableRawPointer(button), "clicked",
+                unsafeBitCast(callback, to: GCallback.self), clicked, nil, GConnectFlags(rawValue: 0))
+            gtk_box_append(UnsafeMutableRawPointer(box).assumingMemoryBound(to: GtkBox.self), button)
+            gtk_widget_set_vexpand(pane.widget, 1)
+            gtk_box_append(UnsafeMutableRawPointer(box).assumingMemoryBound(to: GtkBox.self), pane.widget)
+            gtk_window_set_child(native, box)
+        } else {
+            clicked.pointee = true
+            gtk_window_set_child(native, pane.widget)
+        }
         gtk_window_present(native)
         _ = gtk_widget_grab_focus(pane.widget)
-        guard pump(until: { pane.text.contains("READY") && gtk_window_is_active(native) != 0 }, timeout: 60) else {
-            XCTFail("desktop acceptance window must be active before clipboard write")
+        guard pump(until: { clicked.pointee && pane.text.contains("READY") && gtk_window_is_active(native) != 0 }, timeout: 60) else {
+            XCTFail("desktop acceptance requires the requested button click and an active window before clipboard write")
             return
         }
+        _ = gtk_widget_grab_focus(pane.widget)
         pane.feed("copy\n")
         XCTAssertTrue(pump { pane.text.contains("COPIED") })
         // Separate X11 application exercises the desktop clipboard bridge,
