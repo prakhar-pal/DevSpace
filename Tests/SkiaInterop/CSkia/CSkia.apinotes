@@ -1,0 +1,15 @@
+Name: CSkia
+Tags:
+  # Borrowed handles only; callers must retain the owning sk_sp for all uses.
+  - Name: SkCanvas
+    SwiftImportAs: reference
+    SwiftRetainOp: immortal
+    SwiftReleaseOp: immortal
+  - Name: SkSurface
+    SwiftImportAs: reference
+    SwiftRetainOp: immortal
+    SwiftReleaseOp: immortal
+  - Name: GrDirectContext
+    SwiftImportAs: reference
+    SwiftRetainOp: immortal
+    SwiftReleaseOp: immortal

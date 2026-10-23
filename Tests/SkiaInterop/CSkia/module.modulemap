@@ -1,0 +1,5 @@
+module CSkia {
+    requires cplusplus
+    header "SkiaImports.h"
+    export *
+}
