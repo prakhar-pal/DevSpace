@@ -94,8 +94,15 @@ acceptance gates; basic accessibility label/visible-text metadata is present.
 
 - [x] Keep VTE default until previous milestones pass; development opt-in only.
 - [x] Run affected acceptance tests and compare like-for-like VTE software performance.
-- [ ] Check GPU/software paths, context loss, reconnect, hidden/multiple panes
-      and shutdown, real wc-1, Herdr clipboard, hooks/notifications and editors.
+- [x] Check private-display raster/software-OpenGL and injected context-error fallback.
+- [x] Verify hidden/multiple PTYs and independent shutdown.
+- [x] Verify real wc-1 shell readiness, reconnect/generation replacement and disconnect.
+- [x] Verify isolated local/remote Herdr mouse-copy and OSC52 frontend ownership.
+- [x] Verify real Vim alternate-screen input and shell restoration.
+- [x] Verify image clipboard identity/private PNG handoff and real remote upload/cleanup.
+- [x] Verify hook preservation, reverse notification and editor-URL routing on wc-1.
+- [ ] Complete native Wayland desktop clipboard, IBus/Fcitx/non-US and full
+      accessible text/caret acceptance; basic accessibility metadata is insufficient.
 - [x] Add development runtime assembly, pinned native notices and architecture ADR.
 - [x] Verify relocated experimental development bundles.
 - [ ] Approve shipping dependency policy and update production install/package inventory.
@@ -151,6 +158,16 @@ The same automated attempt using GTK's default backend failed; native Wayland
 clipboard acceptance remains open. Do not infer a renderer bug or a successful
 Wayland bridge from the X11 result. The desktop accessibility bus is also
 unavailable in this session; no screen-reader acceptance is claimed.
+
+Further M05 software acceptance: nine affected frontend tests pass, with only
+the separately opted-in desktop clipboard test skipped on the private display.
+These include a real Vim alternate-screen session, private PNG image-paste
+handoff with pane/generation identity, and a real wc-1 reconnect that disposes
+the old pane and restores shell I/O in a fresh generation. The existing host
+integration check passes helper delivery, Claude settings/hook preservation,
+notification routing, editor URL routing, remote image bytes and cleanup. An
+earlier run timed out awaiting a notification; no production fix is claimed
+from the successful retry, and the helper result is now asserted explicitly.
 
 ## Verification and deferrals
 

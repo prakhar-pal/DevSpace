@@ -4,6 +4,70 @@ import CGTK
 @testable import DevSpaceLinuxApp
 
 final class TerminalPaneTests: XCTestCase {
+    func testImageClipboardKeepsUploadIdentityAndPrivatePNG() throws {
+        guard ProcessInfo.processInfo.environment["DEVSPACE_PRIVATE_KEY_TEST"] == "1" else {
+            throw XCTSkip("requires private GTK display")
+        }
+        gtk_init()
+        var events: [(String, [String: String])] = []
+        let paneID = UUID(), generation = UUID()
+        let launch = try XCTUnwrap(LinuxTerminalLaunch(kind: "terminal_launch", workspaceID: "image-acceptance",
+            paneID: paneID, generation: generation, executable: "/bin/sh", arguments: ["-c", "sleep 30"]))
+        let pane = try XCTUnwrap(TerminalPane(launch: launch) { events.append(($0, $1)) })
+        let window = gtk_window_new()!
+        let native = UnsafeMutableRawPointer(window).assumingMemoryBound(to: GtkWindow.self)
+        defer { pane.dispose(); gtk_window_destroy(native) }
+        gtk_window_set_child(native, pane.widget)
+        gtk_window_set_default_size(native, 640, 320)
+        gtk_window_present(native)
+        XCTAssertTrue(pump { gtk_widget_get_mapped(pane.widget) != 0 })
+        let bytes = Data([255, 0, 0, 255]).withUnsafeBytes { g_bytes_new($0.baseAddress, gsize($0.count)) }!
+        defer { g_bytes_unref(bytes) }
+        let texture = try XCTUnwrap(gdk_memory_texture_new(1, 1, GDK_MEMORY_R8G8B8A8, bytes, 4))
+        defer { g_object_unref(UnsafeMutableRawPointer(texture)) }
+        let clipboard = try XCTUnwrap(gdk_display_get_clipboard(try XCTUnwrap(gdk_display_get_default())))
+        gdk_clipboard_set_texture(clipboard, texture)
+        XCTAssertTrue(pane.handleKey(keyval: UInt32(GDK_KEY_v),
+            modifiers: GdkModifierType(rawValue: GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue)))
+        XCTAssertTrue(pump { events.contains { $0.0 == "paste_image" } })
+        let payload = try XCTUnwrap(events.first { $0.0 == "paste_image" }?.1)
+        XCTAssertEqual(payload["workspace_id"], "image-acceptance")
+        XCTAssertEqual(payload["pane_id"], paneID.uuidString.lowercased())
+        XCTAssertEqual(payload["generation"], generation.uuidString.lowercased())
+        let path = try XCTUnwrap(payload["source_path"])
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        var info = stat()
+        XCTAssertEqual(lstat(path, &info), 0)
+        XCTAssertEqual(info.st_mode & 0o777, 0o600)
+        XCTAssertTrue(try Data(contentsOf: URL(fileURLWithPath: path)).starts(with: [137, 80, 78, 71, 13, 10, 26, 10]))
+    }
+
+    func testRealVimUsesAlternateScreenAndReturnsToShell() throws {
+        guard ProcessInfo.processInfo.environment["DEVSPACE_PRIVATE_KEY_TEST"] == "1",
+              FileManager.default.isExecutableFile(atPath: "/usr/bin/vim") else {
+            throw XCTSkip("requires private GTK display and installed Vim")
+        }
+        gtk_init()
+        let launch = try XCTUnwrap(LinuxTerminalLaunch(kind: "terminal_launch", workspaceID: "editor-acceptance",
+            paneID: UUID(), generation: UUID(), executable: "/bin/sh",
+            arguments: ["-c", "printf SHELL_BEFORE_EDITOR; /usr/bin/vim -u NONE -i NONE -n -N; printf SHELL_AFTER_EDITOR; sleep 30"]))
+        let pane = try XCTUnwrap(TerminalPane(launch: launch))
+        let window = gtk_window_new()!
+        let native = UnsafeMutableRawPointer(window).assumingMemoryBound(to: GtkWindow.self)
+        defer { pane.dispose(); gtk_window_destroy(native) }
+        gtk_window_set_default_size(native, 800, 480)
+        gtk_window_set_child(native, pane.widget)
+        gtk_window_present(native)
+        XCTAssertTrue(pump { pane.text.contains("VIM - Vi IMproved") })
+        XCTAssertFalse(pane.text.contains("SHELL_BEFORE_EDITOR"))
+        pane.feed("iDEVSPACE_EDITOR_ACCEPTANCE")
+        XCTAssertTrue(pump { pane.text.contains("DEVSPACE_EDITOR_ACCEPTANCE") })
+        pane.feed("\u{1b}:q!\r")
+        XCTAssertTrue(pump { pane.text.contains("SHELL_AFTER_EDITOR") })
+        XCTAssertTrue(pane.text.contains("SHELL_BEFORE_EDITOR"))
+        XCTAssertFalse(pane.text.contains("DEVSPACE_EDITOR_ACCEPTANCE"))
+    }
+
     func testOptInDesktopClipboardRoundTripWithExternalApplication() throws {
         guard ProcessInfo.processInfo.environment["DEVSPACE_HOST_CLIPBOARD_ACCEPTANCE"] == "1" else {
             throw XCTSkip("requires explicit desktop clipboard acceptance; replaces clipboard with synthetic text")
@@ -144,6 +208,17 @@ final class TerminalPaneTests: XCTestCase {
         XCTAssertTrue(pump(until: { pane.text.contains("GHOSTTY_LIVE_OK") }, timeout: 20),
             "real SSH shell round trip; controlled terminal tail: \(pane.text.suffix(1500))")
         XCTAssertEqual(pane.identity.workspaceID, workspace)
+        let oldGeneration = pane.identity.generation
+        controller.sendCommand("reconnect", payload: ["workspace_id": workspace])
+        XCTAssertTrue(pump(until: {
+            guard let replacement = controller.window?.pane(forWorkspace: workspace) else { return false }
+            return replacement.identity.generation != oldGeneration && !replacement.text.isEmpty
+        }, timeout: 60))
+        let replacement = try XCTUnwrap(controller.window?.pane(forWorkspace: workspace))
+        XCTAssertTrue(pane.isClosed)
+        XCTAssertNotEqual(replacement.identity.generation, oldGeneration)
+        replacement.feed("unset HISTFILE; printf 'GHOSTTY_%s\\n' 'RECONNECTED_OK'\n")
+        XCTAssertTrue(pump(until: { replacement.text.contains("GHOSTTY_RECONNECTED_OK") }, timeout: 20))
         controller.sendCommand("disconnect", payload: ["workspace_id": workspace])
         XCTAssertTrue(pump(until: { controller.window?.pane(forWorkspace: workspace) == nil }, timeout: 20))
     }

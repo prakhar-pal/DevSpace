@@ -158,7 +158,8 @@ class HostIntegrationTests(unittest.TestCase):
         self.assertEqual(self.unrelated_hooks(before), self.unrelated_hooks(after))
         for name in ("Stop", "Notification", "PreToolUse"):
             self.assertTrue(after["hooks"][name])
-        self.remote('DEVSPACE_PROD_POD_FORWARD_PORT=1 ~/.devspace-notify Stop')
+        helper = self.remote('DEVSPACE_PROD_POD_FORWARD_PORT=1 ~/.devspace-notify Stop')
+        self.assertIn("sent event=Stop", helper, "manual helper could not reach the development reverse tunnel")
         notification = self.event("platform_notify", lambda frame:
             frame["payload"].get("workspace_id") == WORKSPACE
             and frame["payload"].get("message") == "Claude finished")
