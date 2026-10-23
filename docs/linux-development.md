@@ -10,6 +10,13 @@ The architecture choice is recorded in [ADR 0002](adr/0002-linux-swift-gtk-vte.m
 The [remaining-feature plan](superpowers/plans/2026-10-15-remaining-linux-features.md)
 records milestone implementation and outstanding host/release acceptance.
 
+The experimental `feat/linux-libghostty-migration` branch adds a portable Swift
+libghostty-vt engine and Swift/Skia acceptance fixtures. VTE remains the default
+application renderer until the opt-in frontend and acceptance gates are complete.
+After building the pinned native dependencies, run `make linux-test-ghostty` for
+the engine's native Swift XCTest suite; see [engine tests](../Tests/GhosttyVT/README.md)
+and [renderer dependency checks](../Tests/SkiaInterop/README.md).
+
 ## Dependencies
 
 On Ubuntu install GTK4/VTE headers and the native build tools:

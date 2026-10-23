@@ -41,7 +41,7 @@ LINUX_INSTALL_BUNDLE ?=
 SWIFT ?= swift
 SWIFTC ?= swiftc
 
-.PHONY: linux-build-dev linux-bundle-dev linux-bundle linux-run linux-package linux-install linux-test-core linux-test-protocol linux-test-gtk linux-test
+.PHONY: linux-build-dev linux-bundle-dev linux-bundle linux-run linux-package linux-install linux-test-core linux-test-ghostty linux-test-protocol linux-test-gtk linux-test
 
 install: linux-install
 build: linux-bundle
@@ -135,6 +135,9 @@ linux-package:
 linux-test-core:
 	$(SWIFT) test --scratch-path .tmp/swift-linux-tests
 
+linux-test-ghostty:
+	SWIFTC="$(SWIFTC)" bash scripts/test-ghostty-engine.sh
+
 linux-test-protocol:
 	DEVSPACE_SWIFTC="$(SWIFTC)" python3 -B -m unittest Tests.Linux.test_linux_backend_client -v
 
@@ -164,6 +167,7 @@ help:
 	@echo "  make linux-run           - build, bundle, and launch DevSpaceDev on Linux"
 	@echo "  make linux-package       - build a production Ubuntu .deb (requires copyright and maintainer metadata)"
 	@echo "  make linux-test-core     - run the Swift Core XCTest target"
+	@echo "  make linux-test-ghostty  - test the experimental Swift libghostty-vt engine"
 	@echo "  make linux-test-protocol - exercise the Swift backend protocol client"
 	@echo "  make linux-test-gtk      - test the GTK/VTE window and terminal lifecycle"
 

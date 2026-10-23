@@ -11,7 +11,7 @@ output_root="$repo_root/.tmp/ghostty-skia"
 mkdir -p -- "$output_root"
 "$compiler" -parse-as-library -warnings-as-errors \
     -module-cache-path "$output_root/ghostty-module-cache" \
-    -I "$repo_root/Tests/SkiaInterop/CGhosttyVT" -Xcc "-I$prefix/include" \
+    -I "$repo_root/Sources/GhosttyVTInterop" -Xcc "-I$prefix/include" \
     "$repo_root/Tests/SkiaInterop/GhosttySmoke.swift" \
     "$prefix/lib/libghostty-vt.a" -o "$output_root/ghostty-smoke"
 "$output_root/ghostty-smoke"

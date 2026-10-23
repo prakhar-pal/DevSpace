@@ -20,9 +20,9 @@ renderer compatibility. Preserve usability before changing the default.
 
 - [x] Pin Ghostty, compatible Zig, Skia and Skia dependency revisions.
 - [x] Compile real Skia APIs from Swift, including ownership, text and GPU APIs.
-- [ ] Draw using a GPU surface hosted by GTK; verify actual host hardware.
+- [x] Draw using an OpenGL surface hosted by GTK (software driver on this host).
 - [x] Exercise the same drawing through a raster surface, resize and recreation.
-- [ ] Commit the independently verified milestone.
+- [x] Commit the independently verified milestone (`dac30d6`).
 
 Do not proceed to engine integration if direct imports, ownership or
 presentation cannot work reliably. Revisit the design rather than introducing
@@ -32,17 +32,25 @@ a bridge silently. Do not claim software OpenGL proves hardware acceleration.
 dependencies. Swift ABI/ANSI tests, actual Skia raster pixel/font/ownership
 tests, and GTK OpenGL pixel/resize/widget-recreation tests pass. Both private
 X11 and actual Wayland expose llvmpipe; strict host hardware acceptance exits
-77 (unavailable), not success. M01 remains incomplete. A decision to move this
-external hardware check to the cutover gate is pending user direction.
+77 (unavailable), not success. The user approved deferring hardware-GPU
+verification to the final cutover step because this host does not support it.
+M01's implementation gate is satisfied; physical-GPU acceptance remains open.
 
 ## M02 — Ghostty terminal engine
 
-- [ ] Add GTK-independent Swift terminal state/render-snapshot/input adapter.
-- [ ] Preserve Swift PTY ownership, bounded delivery and launch identities.
-- [ ] Route terminal replies back to the PTY and preserve directory reporting.
-- [ ] Replace the VTE drain marker with ordered ingestion before exit delivery.
-- [ ] Swift tests: split sequences, Unicode, alternate screen, replies, resize,
+- [x] Add GTK-independent Swift terminal state/render-snapshot/input adapter.
+- [x] Preserve the existing host's PTY ownership and identities (engine owns none).
+- [x] Expose ordered PTY replies and directory changes for M04 host integration.
+- [x] Use synchronous native ingestion before exit delivery (no marker in this engine).
+- [x] Swift tests: split sequences, Unicode, alternate screen, replies, resize,
       final output and disposal. Commit after verification.
+
+M02 library checkpoint: 17 native Swift engine tests pass; baseline Core suite
+passes 260 tests with its opt-in real-workspace SSH test skipped (261 total).
+Snapshots own their buffers and preserve synchronized frames; a deliberate
+mutation removing the hold guard caused the expected two failing assertions,
+then the restored implementation passed. VTE's current frontend and drain
+marker remain unchanged until M04/M05; no live Ghostty PTY is claimed yet.
 
 ## M03 — Portable Skia renderer
 
@@ -70,6 +78,7 @@ external hardware check to the cutover gate is pending user direction.
       and shutdown, real wc-1, Herdr clipboard, hooks/notifications and editors.
 - [ ] Update runtime assembly, build/install tooling, licenses and architecture.
 - [ ] Verify relocated bundles; then switch default and remove VTE dependencies.
+- [ ] Verify real hardware-GPU rendering on a capable host before final cutover.
 - [ ] Commit verified cutover. Release builds/install changes need approval.
 
 ## Verification and deferrals
