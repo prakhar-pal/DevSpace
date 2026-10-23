@@ -16,6 +16,10 @@ application renderer until the opt-in frontend and acceptance gates are complete
 After building the pinned native dependencies, run `make linux-test-ghostty` for
 the engine's native Swift XCTest suite; see [engine tests](../Tests/GhosttyVT/README.md)
 and [renderer dependency checks](../Tests/SkiaInterop/README.md).
+`make linux-test-skia` additionally verifies the portable Swift/Skia renderer's
+pixels, shaping, fallback fonts, cursors, selection and scaling; see
+[renderer tests](../Tests/SkiaRenderer/README.md). Hardware-GPU acceptance is
+deferred to a capable host and remains required before default cutover.
 
 ## Dependencies
 

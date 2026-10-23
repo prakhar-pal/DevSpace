@@ -41,7 +41,7 @@ LINUX_INSTALL_BUNDLE ?=
 SWIFT ?= swift
 SWIFTC ?= swiftc
 
-.PHONY: linux-build-dev linux-bundle-dev linux-bundle linux-run linux-package linux-install linux-test-core linux-test-ghostty linux-test-protocol linux-test-gtk linux-test
+.PHONY: linux-build-dev linux-bundle-dev linux-bundle linux-run linux-package linux-install linux-test-core linux-test-ghostty linux-test-skia linux-test-protocol linux-test-gtk linux-test
 
 install: linux-install
 build: linux-bundle
@@ -137,6 +137,9 @@ linux-test-core:
 
 linux-test-ghostty:
 	SWIFTC="$(SWIFTC)" bash scripts/test-ghostty-engine.sh
+
+linux-test-skia:
+	SWIFTC="$(SWIFTC)" bash scripts/test-skia-renderer.sh
 
 linux-test-protocol:
 	DEVSPACE_SWIFTC="$(SWIFTC)" python3 -B -m unittest Tests.Linux.test_linux_backend_client -v

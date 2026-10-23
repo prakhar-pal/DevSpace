@@ -4,6 +4,12 @@ import CGhosttyVT
 @testable import DevSpaceGhosttyVT
 
 final class GhosttyTerminalEngineTests: XCTestCase {
+    func testProgramBackgroundOverrideWorksBeforeAnyForegroundOverride() throws {
+        let engine = try GhosttyTerminalEngine()
+        _ = try engine.receive(Data("\u{1b}]11;#102030\u{7}".utf8))
+        XCTAssertEqual(try engine.snapshot().background, 0xff102030)
+    }
+
     func testFragmentedUnicodeAndANSIProduceVisibleTextOnlyOnce() throws {
         let engine = try GhosttyTerminalEngine(columns: 40, rows: 4)
         XCTAssertEqual(try engine.receive(Data("\u{1b}[31".utf8)), [])
@@ -197,6 +203,7 @@ final class GhosttyTerminalEngineTests: XCTestCase {
     }
 
     static let allTests = [
+        ("testProgramBackgroundOverrideWorksBeforeAnyForegroundOverride", testProgramBackgroundOverrideWorksBeforeAnyForegroundOverride),
         ("testFragmentedUnicodeAndANSIProduceVisibleTextOnlyOnce", testFragmentedUnicodeAndANSIProduceVisibleTextOnlyOnce),
         ("testRepliesAreReturnedWithoutEstablishingVisibleOutput", testRepliesAreReturnedWithoutEstablishingVisibleOutput),
         ("testAlternateScreenRestoresPrimaryContents", testAlternateScreenRestoresPrimaryContents),

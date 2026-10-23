@@ -6,8 +6,11 @@
 #include "include/core/SkFont.h"
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkTypeface.h"
+#include "include/core/SkFontMetrics.h"
+#if defined(__linux__)
 #include "include/ports/SkFontMgr_fontconfig.h"
 #include "include/ports/SkFontScanner_FreeType.h"
+#endif
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkSurface.h"
@@ -21,6 +24,8 @@
 using SkiaSurface = sk_sp<SkSurface>;
 using SkiaDirectContext = sk_sp<GrDirectContext>;
 using SkiaColorSpace = sk_sp<SkColorSpace>;
+using SkiaFontManager = sk_sp<SkFontMgr>;
+using SkiaTypeface = sk_sp<SkTypeface>;
 
 // Swift cannot express C++ derived-to-base foreign reference conversions.
 // This borrows the same object: no retain, release or ownership transfer.

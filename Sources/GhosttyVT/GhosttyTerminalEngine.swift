@@ -47,6 +47,13 @@ public final class GhosttyTerminalEngine {
         do {
             guard let terminal else { throw GhosttyTerminalError.closed }
             try Self.check(ghostty_render_state_new(nil, &renderState))
+            // RenderState only adopts dynamic foreground/background changes
+            // once both colors have a value. Supply embedder defaults before
+            // programs override either one independently (OSC 10/11).
+            var foreground = GhosttyColorRgb(r: 255, g: 255, b: 255)
+            var background = GhosttyColorRgb(r: 0, g: 0, b: 0)
+            try Self.check(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &foreground))
+            try Self.check(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &background))
             var limit = scrollback
             try Self.check(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &limit))
             try Self.check(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_USERDATA,

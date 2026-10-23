@@ -95,11 +95,20 @@ struct GPUSmoke {
             pixel.withUnsafeMutableBytes {
                 glReadPixels(0, 0, 1, 1, GLenum(GL_RGBA), GLenum(GL_UNSIGNED_BYTE), $0.baseAddress)
             }
-            precondition(pixel == [0x10, 0x20, 0x30, 0xff], "GPU framebuffer clear did not match raster colors")
+            precondition(pixel == [0x10, 0x20, 0x30, 0xff], "GPU framebuffer clear did not match raster colors: \(pixel)")
             pixel.withUnsafeMutableBytes {
                 glReadPixels(3, height - 5, 1, 1, GLenum(GL_RGBA), GLenum(GL_UNSIGNED_BYTE), $0.baseAddress)
             }
             precondition(pixel == [0xab, 0xcd, 0xef, 0xff], "GPU rectangle did not match raster colors")
+            #if DEVSPACE_TERMINAL_GPU
+            var textPixels = [UInt8](repeating: 0, count: Int(width) * 20 * 4)
+            textPixels.withUnsafeMutableBytes {
+                glReadPixels(0, height - 40, width, 20, GLenum(GL_RGBA), GLenum(GL_UNSIGNED_BYTE), $0.baseAddress)
+            }
+            precondition(stride(from: 0, to: textPixels.count, by: 4).contains {
+                textPixels[$0] != 0x10 || textPixels[$0 + 1] != 0x20 || textPixels[$0 + 2] != 0x30
+            }, "GPU terminal text produced no visible glyph pixels")
+            #endif
         }
         surfaceOwner.reset()
         contextOwner.reset()

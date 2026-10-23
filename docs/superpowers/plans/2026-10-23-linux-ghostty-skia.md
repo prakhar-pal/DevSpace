@@ -54,12 +54,21 @@ marker remain unchanged until M04/M05; no live Ghostty PTY is claimed yet.
 
 ## M03 — Portable Skia renderer
 
-- [ ] Render styled/shaped text, fallback fonts, wide/combining characters,
+- [x] Render styled/shaped text, fallback fonts, wide/combining characters,
       emoji, backgrounds, cursor and selection.
-- [ ] Implement metrics, clipping, scrolling, dirty updates, bounded caches and
+- [x] Implement metrics, clipping, scrolling, dirty updates, bounded caches and
       scale-aware resource recreation. Share GPU/raster drawing logic.
-- [ ] Offscreen tests: long graphemes, fallback fonts, selection geometry and
+- [x] Offscreen tests: long graphemes, fallback fonts, selection geometry and
       fractional scaling. Commit after verification.
+
+M03 checkpoint: 18 native engine tests and eight offscreen renderer tests pass.
+The same Swift terminal drawing also passes framebuffer background/glyph pixel
+checks, resize and window recreation through GtkGLArea using llvmpipe. Shaping
+joins neighboring cells and anchors HarfBuzz clusters to terminal columns;
+unchanged rows reuse bounded shaped layouts. Painting still clears/redraws the
+surface; partial framebuffer damage is not assumed across GTK frames.
+Both native foreground/background defaults are initialized before independent
+OSC overrides, following the pinned Ghostty RenderState source contract.
 
 ## M04 — Linux interaction
 

@@ -28,7 +28,7 @@ mkdir -p -- "$output_root"
     -cxx-interoperability-mode=default \
     -Xcc -std=c++20 -Xcc -fapinotes-modules \
     -Xcc "-I$source_root" \
-    -I "$repo_root/Tests/SkiaInterop/CSkia" \
+    -I "$repo_root/Sources/SkiaInterop" \
     "$repo_root/Tests/SkiaInterop/ImportSmoke.swift" \
     -o "$output_root/ImportSmoke.o"
 printf 'Swift/Skia object compilation passed; linking, ownership and GPU runtime remain unverified.\n'

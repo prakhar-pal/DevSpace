@@ -1,3 +1,4 @@
+// Portable Skia declarations used by the Swift renderer.
 module CSkia {
     requires cplusplus
     header "SkiaImports.h"
