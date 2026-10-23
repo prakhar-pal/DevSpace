@@ -102,7 +102,8 @@ gtk_window_set_default_size(failureNative, 320, 180)
 gtk_window_set_child(failureNative, failureView.widget)
 gtk_window_present(failureNative)
 pump()
-let stack = gtk_overlay_get_child(OpaquePointer(failureView.widget))!
+let overlay = gtk_widget_get_first_child(failureView.widget)!
+let stack = gtk_overlay_get_child(OpaquePointer(overlay))!
 let glWidget = gtk_stack_get_child_by_name(OpaquePointer(stack), "gpu")!
 let glArea = UnsafeMutableRawPointer(glWidget).assumingMemoryBound(to: GtkGLArea.self)
 let syntheticError = g_error_new_literal(g_quark_from_static_string("devspace-test"), 1, "synthetic GL failure")!

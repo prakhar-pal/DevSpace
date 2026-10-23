@@ -15,13 +15,18 @@ packages=(gtk4 harfbuzz)
 extra_flags=()
 case "$mode" in
     --test) ;;
+    --input-methods)
+        test_source="$repo_root/Tests/GhosttyGTK/InputMethods.swift"
+        binary="$output/input-methods"
+        extra_flags=(-parse-as-library)
+        ;;
     --benchmark)
         test_source="$repo_root/Tests/GhosttyGTK/Benchmark.swift"
         binary="$output/benchmark"
         packages+=(vte-2.91-gtk4)
         extra_flags=(-parse-as-library -I "$repo_root/Sources/LinuxVTE")
         ;;
-    *) printf 'Usage: test-ghostty-gtk.sh [--test|--benchmark]\n' >&2; exit 2 ;;
+    *) printf 'Usage: test-ghostty-gtk.sh [--test|--input-methods|--benchmark]\n' >&2; exit 2 ;;
 esac
 common=(-D DEVSPACE_GHOSTTY -warnings-as-errors -cxx-interoperability-mode=default
     -Xcc -std=c++20 -Xcc -fapinotes-modules -Xcc -DNDEBUG -Xcc -DSK_R32_SHIFT=16
@@ -33,9 +38,10 @@ read -r -a native_flags <<< "$(pkg-config --cflags "${packages[@]}")"
 for flag in "${native_flags[@]}"; do common+=(-Xcc "$flag"); done
 read -r -a native_libraries <<< "$(pkg-config --libs "${packages[@]}")"
 "$compiler" "${common[@]}" "${extra_flags[@]}" "$repo_root/Sources/LinuxApp/GhosttyTerminalView.swift" \
+    "$repo_root/Sources/LinuxApp/TerminalAccessibility.swift" \
     "$repo_root/Tests/LinuxApp/NativeKeyInput.swift" "$test_source" -L "$engine" -lDevSpaceGhosttyVT \
     -Xlinker -rpath -Xlinker "$engine" -L "$renderer" -lDevSpaceSkiaRenderer \
     -Xlinker -rpath -Xlinker "$renderer" -L "$source_root/out/DevSpace" \
     -lskia -lskcms -lstdc++ -lfontconfig -lfreetype -lGL -lEGL -lGLESv2 -ldl \
     "${native_libraries[@]}" -o "$binary"
-GTK_IM_MODULE=simple "$binary"
+GTK_IM_MODULE=${GTK_IM_MODULE:-simple} "$binary"

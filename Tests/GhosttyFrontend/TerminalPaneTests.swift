@@ -212,13 +212,16 @@ final class TerminalPaneTests: XCTestCase {
         controller.sendCommand("reconnect", payload: ["workspace_id": workspace])
         XCTAssertTrue(pump(until: {
             guard let replacement = controller.window?.pane(forWorkspace: workspace) else { return false }
-            return replacement.identity.generation != oldGeneration && !replacement.text.isEmpty
+            return replacement.identity.generation != oldGeneration
+                && gtk_widget_get_mapped(replacement.widget) != 0
+                && !replacement.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }, timeout: 60))
         let replacement = try XCTUnwrap(controller.window?.pane(forWorkspace: workspace))
         XCTAssertTrue(pane.isClosed)
         XCTAssertNotEqual(replacement.identity.generation, oldGeneration)
         replacement.feed("unset HISTFILE; printf 'GHOSTTY_%s\\n' 'RECONNECTED_OK'\n")
-        XCTAssertTrue(pump(until: { replacement.text.contains("GHOSTTY_RECONNECTED_OK") }, timeout: 20))
+        XCTAssertTrue(pump(until: { replacement.text.contains("GHOSTTY_RECONNECTED_OK") }, timeout: 20),
+            "post-reconnect controlled terminal tail: \(replacement.text.suffix(1500))")
         controller.sendCommand("disconnect", payload: ["workspace_id": workspace])
         XCTAssertTrue(pump(until: { controller.window?.pane(forWorkspace: workspace) == nil }, timeout: 20))
     }

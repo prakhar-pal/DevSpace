@@ -101,8 +101,10 @@ acceptance gates; basic accessibility label/visible-text metadata is present.
 - [x] Verify real Vim alternate-screen input and shell restoration.
 - [x] Verify image clipboard identity/private PNG handoff and real remote upload/cleanup.
 - [x] Verify hook preservation, reverse notification and editor-URL routing on wc-1.
-- [ ] Complete native Wayland desktop clipboard, IBus/Fcitx/non-US and full
-      accessible text/caret acceptance; basic accessibility metadata is insufficient.
+- [x] Cross-app desktop clipboard acceptance (user-confirmed on the experimental build).
+- [x] Expose native GTK accessible text/caret/selection and verify AT-SPI queries.
+- [x] Verify a non-US layout, AltGr and dead-key composition on private X11.
+- [ ] Complete actual IBus/Fcitx composition and manual assistive-technology checks.
 - [x] Add development runtime assembly, pinned native notices and architecture ADR.
 - [x] Verify relocated experimental development bundles.
 - [ ] Approve shipping dependency policy and update production install/package inventory.
@@ -155,8 +157,9 @@ IME/screen-reader and hardware checks remain open.
 The explicit desktop synthetic-marker test passes in both directions between
 the experimental terminal and a separate `xclip` process with `GDK_BACKEND=x11`.
 The same automated attempt using GTK's default backend failed; native Wayland
-clipboard acceptance remains open. Do not infer a renderer bug or a successful
-Wayland bridge from the X11 result. The desktop accessibility bus is also
+clipboard automation remains unresolved. The user subsequently confirmed that
+cross-app clipboard works on the experimental build; this satisfies manual
+desktop clipboard acceptance, not the failed automated fixture. The desktop accessibility bus is also
 unavailable in this session; no screen-reader acceptance is claimed.
 
 Further M05 software acceptance: nine affected frontend tests pass, with only
@@ -170,6 +173,22 @@ earlier run timed out awaiting a notification; no production fix is claimed
 from the successful retry, and the helper result is now asserted explicitly.
 
 ## Verification and deferrals
+
+Accessibility continuation: the GTK host now implements `GtkAccessibleText`
+in Swift on a native terminal-role widget. Queries expose owned visible text,
+Unicode-scalar caret offsets, separate rectangular-selection ranges and cell
+geometry. Concealed cells remain concealed. Tests cover snapshot lifetime after
+view disposal, and an isolated real AT-SPI bus reads Unicode text, caret and
+selection through the public D-Bus interface. This is protocol verification,
+not a claim of manual spoken screen-reader acceptance. German XKB shifted
+punctuation, AltGr and dead-key composition pass with actual private-display
+key events. The installed IBus daemon could not establish its isolated bus;
+IBus/Fcitx composition remains unverified. The affected frontend run passed ten
+tests with the separately opted-in physical clipboard check skipped; desktop
+clipboard acceptance is supplied by the user's confirmation above.
+After the accessibility change, the same private software benchmark measured
+32.9 ms Ghostty/Skia and 33.6 ms VTE medians. This single debug benchmark run
+does not establish a general speedup or hardware-GPU performance.
 
 Use Swift tests for logic/rendering, existing Python orchestration only for
 build/package/process/UI checks. Use private displays for automation and host

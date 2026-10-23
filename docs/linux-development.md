@@ -55,8 +55,9 @@ DEVSPACE_LINUX_TERMINAL=ghostty GDK_BACKEND=wayland \
 
 An actual desktop X11 run passes with `GDK_BACKEND=x11`; the automated Wayland
 attempt without a real input event sent selection serial zero and failed the
-external read. Native Wayland acceptance remains open pending the interactive
-check. This does not invalidate the earlier user acceptance of the VTE build.
+external read. The user subsequently confirmed cross-app clipboard operation
+on the experimental build, satisfying manual desktop acceptance. That does not
+turn the failed or unclicked automated fixture into a passing result.
 
 The native notice collector and bundle tests run with:
 
@@ -96,11 +97,34 @@ GTK_A11Y=test GDK_BACKEND=x11 DEVSPACE_PRIVATE_KEY_TEST=1 \
   --scratch-path .tmp/ghostty-skia/app --filter TerminalPaneTests
 ```
 
-Accessibility currently exposes a label and bounded visible-text description;
-full terminal text/caret navigation and a real screen-reader check remain
-acceptance work. Actual IBus/Fcitx composition, non-US keyboard mappings,
-desktop Herdr clipboard, hardware rendering and packaged relocation must be
-verified before changing the default.
+The experimental terminal implements GTK's native `GtkAccessibleText` in Swift,
+with Unicode-scalar text/caret offsets, selection ranges and cell geometry.
+It exposes the visible viewport and masks concealed cells. Real AT-SPI text,
+caret and selection queries can be verified without changing the desktop bus:
+
+```sh
+dbus-run-session -- env -u AT_SPI_BUS_ADDRESS GTK_A11Y=atspi GDK_BACKEND=x11 \
+  DEVSPACE_PRIVATE_ATSPI_TEST=1 DEVSPACE_PRIVATE_KEY_TEST=1 \
+  DEVSPACE_LINUX_TERMINAL=ghostty xvfb-run -a swift test \
+  --scratch-path .tmp/ghostty-skia/app --filter 'AccessibilityTests|AccessibilityBusTests'
+```
+
+The experimental interface's text geometry requires GTK 4.16 or newer; the
+verified host has GTK 4.22.4. Manual screen-reader interaction and actual
+IBus/Fcitx composition remain unverified. The user confirmed experimental
+cross-app clipboard operation. German keyboard layout, AltGr and dead-key
+composition are checked entirely on a private display (never run `setxkbmap`
+against the user's display):
+
+```sh
+GTK_A11Y=test GDK_BACKEND=x11 DEVSPACE_PRIVATE_KEY_TEST=1 \
+  xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' bash -c \
+  'set -e; setxkbmap -layout de; bash scripts/test-ghostty-gtk.sh --input-methods'
+```
+
+`-noreset` preserves the private keymap when the configuring client exits.
+Hardware rendering and remaining acceptance gates must pass before default
+cutover. Development bundle relocation has passed separately.
 
 For an identical 80×24, monospace-14px, 4,000-line styled Unicode burst:
 

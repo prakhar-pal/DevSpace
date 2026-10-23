@@ -29,7 +29,7 @@ final class GhosttyTerminalView {
     private var scrollRemainder: Double = 0
     private var pendingKey: (UInt32, UInt32, GdkModifierType)?
     private var composingKey = false
-    private var accessibleText: String?
+    private let accessibility: TerminalAccessibility
     private(set) var renderPath = "pending"
     private(set) var grid: (columns: UInt16, rows: UInt16) = (80, 24)
     private(set) var currentDirectory: String?
@@ -42,7 +42,10 @@ final class GhosttyTerminalView {
         let owner = SkFontMgr_New_FontConfig(nil, SkFontScanner_Make_FreeType())
         guard let manager = owner.get() else { throw SkiaTerminalRendererError.fontUnavailable }
         renderer = try withExtendedLifetime(owner) { try SkiaTerminalRenderer(fontManager: manager) }
-        widget = gtk_overlay_new()!
+        let overlay = gtk_overlay_new()!
+        let textAccessibility = TerminalAccessibility()
+        accessibility = textAccessibility
+        widget = textAccessibility.makeWidget(child: overlay)
         _ = g_object_ref_sink(UnsafeMutableRawPointer(widget))
         gtk_widget_set_focusable(widget, 1)
         gtk_widget_set_hexpand(widget, 1)
@@ -57,7 +60,7 @@ final class GhosttyTerminalView {
         gtk_picture_set_content_fit(picture, GTK_CONTENT_FIT_FILL)
         let stackWidget = gtk_stack_new()!
         stack = OpaquePointer(stackWidget)
-        gtk_overlay_set_child(OpaquePointer(widget), stackWidget)
+        gtk_overlay_set_child(OpaquePointer(overlay), stackWidget)
         gtk_stack_add_named(stack, gl, "gpu")
         gtk_stack_add_named(stack, raster, "raster")
         preeditLabel = gtk_label_new("")!
@@ -65,7 +68,7 @@ final class GhosttyTerminalView {
         gtk_widget_set_valign(preeditLabel, GTK_ALIGN_START)
         gtk_widget_add_css_class(preeditLabel, "osd")
         gtk_widget_set_visible(preeditLabel, 0)
-        gtk_overlay_add_overlay(OpaquePointer(widget), preeditLabel)
+        gtk_overlay_add_overlay(OpaquePointer(overlay), preeditLabel)
         rasterRequested = forceRaster
         im = gtk_im_multicontext_new()!
         gtk_im_context_set_client_widget(im, widget)
@@ -411,18 +414,17 @@ final class GhosttyTerminalView {
     }
 
     private func updateAccessibility(_ frame: GhosttyTerminalFrame) {
-        let text = String(frame.cells.prefix(128).map { row in
-            row.prefix(512).filter { $0.width > 0 }.map { $0.invisible || $0.text.isEmpty ? " " : $0.text }.joined()
-        }.joined(separator: "\n").prefix(16_384))
-        guard text != accessibleText else { return }
-        accessibleText = text
+        let scale = Float(gtk_widget_get_scale_factor(widget))
+        guard let metrics = try? renderer.metrics(scale: scale) else { return }
+        accessibility.update(frame, widget: widget,
+            cellWidth: Float(metrics.cellWidth) / scale, cellHeight: Float(metrics.cellHeight) / scale)
         var properties = [GTK_ACCESSIBLE_PROPERTY_LABEL, GTK_ACCESSIBLE_PROPERTY_DESCRIPTION]
         var values = [GValue(), GValue()]
         gtk_accessible_property_init_value(properties[0], &values[0])
         gtk_accessible_property_init_value(properties[1], &values[1])
         defer { g_value_unset(&values[0]); g_value_unset(&values[1]) }
         "Terminal".withCString { g_value_set_string(&values[0], $0) }
-        text.withCString { g_value_set_string(&values[1], $0) }
+        "Terminal output".withCString { g_value_set_string(&values[1], $0) }
         properties.withUnsafeMutableBufferPointer { properties in
             values.withUnsafeBufferPointer { values in
                 gtk_accessible_update_property_value(OpaquePointer(widget), 2, properties.baseAddress, values.baseAddress)
