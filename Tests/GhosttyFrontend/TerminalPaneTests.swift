@@ -4,6 +4,62 @@ import CGTK
 @testable import DevSpaceLinuxApp
 
 final class TerminalPaneTests: XCTestCase {
+    func testOptInDesktopClipboardRoundTripWithExternalApplication() throws {
+        guard ProcessInfo.processInfo.environment["DEVSPACE_HOST_CLIPBOARD_ACCEPTANCE"] == "1" else {
+            throw XCTSkip("requires explicit desktop clipboard acceptance; replaces clipboard with synthetic text")
+        }
+        gtk_init()
+        let marker = "DEVSPACE_DESKTOP_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let encoded = Data(marker.utf8).base64EncodedString()
+        let launch = try XCTUnwrap(LinuxTerminalLaunch(kind: "terminal_launch", workspaceID: "clipboard-acceptance",
+            paneID: UUID(), generation: UUID(), executable: "/bin/sh",
+            arguments: ["-c", "stty -echo; printf READY; IFS= read -r line; stty -icanon min 1 time 0; printf '\\033]52;c;\(encoded)\\007COPIED'; line=$(dd bs=1 count=\(marker.count + 9) 2>/dev/null); printf '\\nPASTED:%s\\n' \"$line\"; sleep 30"]))
+        let pane = try XCTUnwrap(TerminalPane(launch: launch))
+        let window = gtk_window_new()!
+        let native = UnsafeMutableRawPointer(window).assumingMemoryBound(to: GtkWindow.self)
+        defer { pane.dispose(); gtk_window_destroy(native) }
+        gtk_window_set_title(native, "DevSpace clipboard acceptance — synthetic text")
+        gtk_window_set_default_size(native, 640, 320)
+        gtk_window_set_child(native, pane.widget)
+        gtk_window_present(native)
+        _ = gtk_widget_grab_focus(pane.widget)
+        guard pump(until: { pane.text.contains("READY") && gtk_window_is_active(native) != 0 }, timeout: 60) else {
+            XCTFail("desktop acceptance window must be active before clipboard write")
+            return
+        }
+        pane.feed("copy\n")
+        XCTAssertTrue(pump { pane.text.contains("COPIED") })
+        // Separate X11 application exercises the desktop clipboard bridge,
+        // rather than inspecting the GTK content provider in this process.
+        let reader = Process(), output = Pipe()
+        reader.executableURL = URL(fileURLWithPath: "/usr/bin/xclip")
+        reader.arguments = ["-selection", "clipboard", "-out"]
+        reader.standardOutput = output
+        reader.standardError = FileHandle.nullDevice
+        try reader.run()
+        defer { if reader.isRunning { reader.terminate() } }
+        guard pump(until: { !reader.isRunning }) else { XCTFail("external clipboard reader timed out"); return }
+        XCTAssertEqual(reader.terminationStatus, 0)
+        // Never print an unexpected clipboard value: it could be private.
+        let actual = output.fileHandleForReading.readDataToEndOfFile()
+        XCTAssertTrue(actual == Data(marker.utf8), "external app must receive the synthetic terminal marker")
+        let writer = Process(), input = Pipe()
+        writer.executableURL = URL(fileURLWithPath: "/usr/bin/xclip")
+        writer.arguments = ["-selection", "clipboard", "-in", "-quiet"]
+        writer.standardInput = input
+        writer.standardOutput = FileHandle.nullDevice
+        writer.standardError = FileHandle.nullDevice
+        try writer.run()
+        defer { if writer.isRunning { writer.terminate() } }
+        input.fileHandleForWriting.write(Data((marker + "_EXTERNAL").utf8))
+        try input.fileHandleForWriting.close()
+        let clipboard = try XCTUnwrap(gdk_display_get_clipboard(try XCTUnwrap(gdk_display_get_default())))
+        XCTAssertTrue(pump { gdk_clipboard_is_local(clipboard) == 0 })
+        XCTAssertTrue(pane.handleKey(keyval: UInt32(GDK_KEY_v),
+            modifiers: GdkModifierType(rawValue: GDK_CONTROL_MASK.rawValue | GDK_SHIFT_MASK.rawValue)))
+        XCTAssertTrue(pump { pane.text.contains("PASTED:" + marker + "_EXTERNAL") })
+    }
+
     func testHiddenPanesKeepIndependentPTYsAndClosingOnePreservesItsSibling() throws {
         guard ProcessInfo.processInfo.environment["DEVSPACE_PRIVATE_KEY_TEST"] == "1" else {
             throw XCTSkip("requires a private GTK display")

@@ -145,6 +145,13 @@ separate backend workspace test was skipped because its opt-in executable was
 not provided (its earlier M04 run passed). Actual desktop cross-app clipboard,
 IME/screen-reader and hardware checks remain open.
 
+The explicit desktop synthetic-marker test passes in both directions between
+the experimental terminal and a separate `xclip` process with `GDK_BACKEND=x11`.
+The same automated attempt using GTK's default backend failed; native Wayland
+clipboard acceptance remains open. Do not infer a renderer bug or a successful
+Wayland bridge from the X11 result. The desktop accessibility bus is also
+unavailable in this session; no screen-reader acceptance is claimed.
+
 ## Verification and deferrals
 
 Use Swift tests for logic/rendering, existing Python orchestration only for
