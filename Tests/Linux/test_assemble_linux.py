@@ -18,6 +18,33 @@ PACKAGE_SCRIPT = ROOT / "scripts/package-linux.py"
 
 
 class AssembleLinuxTests(unittest.TestCase):
+    def test_bundle_preserves_explicit_third_party_notices(self):
+        notices = self.directory / "native-notices"
+        notices.mkdir()
+        (notices / "manifest.json").write_text('{"renderer":"ghostty-skia"}\n')
+        (notices / "Skia-LICENSE.txt").write_text("controlled complete upstream notice\n")
+        result = subprocess.run([
+            sys.executable, str(SCRIPT), "--frontend", str(self.frontend), "--backend", str(self.backend),
+            "--swift-runtime", str(self.runtime), "--channel", "development", "--output", str(self.output),
+            "--third-party-notices", str(notices),
+        ], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        bundled = self.output / "share/doc/devspace/third-party"
+        self.assertEqual((bundled / "manifest.json").read_bytes(), (notices / "manifest.json").read_bytes())
+        self.assertEqual((bundled / "Skia-LICENSE.txt").read_bytes(), (notices / "Skia-LICENSE.txt").read_bytes())
+
+    def test_missing_third_party_notices_does_not_replace_bundle(self):
+        self.assertEqual(self.assemble().returncode, 0)
+        original = (self.output / "bin/DevSpaceDevBackend").read_bytes()
+        result = subprocess.run([
+            sys.executable, str(SCRIPT), "--frontend", str(self.frontend), "--backend", str(self.backend),
+            "--swift-runtime", str(self.runtime), "--channel", "development", "--output", str(self.output),
+            "--replace", "--third-party-notices", str(self.directory / "absent"),
+        ], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Third-party notice directory", result.stderr)
+        self.assertEqual((self.output / "bin/DevSpaceDevBackend").read_bytes(), original)
+
     def test_icu_notice_is_required_before_replacing_an_existing_bundle(self):
         self.assertEqual(self.assemble().returncode, 0)
         original = (self.output / "bin/DevSpaceDevBackend").read_bytes()

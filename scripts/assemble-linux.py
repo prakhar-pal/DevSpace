@@ -41,12 +41,22 @@ def main():
                         help="LICENSE.txt from the selected Swift toolchain (default: its usr/share/swift)")
     parser.add_argument("--icu-license", type=Path,
                         help="complete notice for the ICU version embedded in the selected Swift runtime")
+    parser.add_argument("--third-party-notices", type=Path,
+                        help="explicit native-component notice tree to preserve verbatim (not an automatic license audit)")
     parser.add_argument("--channel", choices=("development", "production"), required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--replace", action="store_true",
                         help="refresh only a bundle generated for the same channel")
     args = parser.parse_args()
     output = args.output.absolute()
+    if args.third_party_notices:
+        notices = args.third_party_notices.absolute()
+        if not notices.is_dir() or notices.is_symlink() or not any(notices.iterdir()):
+            parser.exit(1, "Third-party notice directory must exist, be nonempty and not be a symlink\n")
+        if output.resolve().is_relative_to(notices.resolve()):
+            parser.exit(1, "Bundle output must be outside the third-party notice directory\n")
+        if any(path.is_symlink() or (not path.is_dir() and not path.is_file()) for path in notices.rglob("*")):
+            parser.exit(1, "Third-party notice directory must contain only regular files and directories\n")
     marker = {"producer": "devspace-linux-bundle", "version": 1, "channel": args.channel}
     replacing = output.exists() or output.is_symlink()
     if replacing:
@@ -96,6 +106,8 @@ def main():
         shutil.copyfile(swift_license, documentation / "swift-runtime-LICENSE.txt")
         if args.icu_license:
             shutil.copyfile(args.icu_license, documentation / "icu-LICENSE.txt")
+        if args.third_party_notices:
+            shutil.copytree(args.third_party_notices, documentation / "third-party")
         (documentation / "licensing.txt").write_text(
             "DevSpace-owned source code and custom app icons: GPL-3.0-or-later. See LICENSE.\n"
             "Third-party components retain their own licenses. The Swift toolchain\n"
