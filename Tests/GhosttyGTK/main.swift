@@ -25,6 +25,13 @@ nativeKeys.press(["Control_L", "c"], in: nativeWindow)
 pump()
 precondition(writes == Data([3]), "control key must retain terminal semantics")
 writes.removeAll()
+// GtkIMContextSimple's Unicode composition exercises preedit followed by a
+// commit on Return, which must insert the composed text rather than Enter.
+nativeKeys.press(["Control_L", "Shift_L", "u"], in: nativeWindow)
+pump()
+for name in ["0", "3", "b", "b", "Return"] { nativeKeys.press([name], in: nativeWindow); pump() }
+precondition(writes == Data("λ".utf8), "Unicode IM composition must commit text exactly once")
+writes.removeAll()
 try view.receive(Data("hello\u{1b}[?1h".utf8))
 view.refresh()
 pump()

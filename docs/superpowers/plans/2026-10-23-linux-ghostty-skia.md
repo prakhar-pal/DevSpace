@@ -115,6 +115,12 @@ old-mapping mutation (failed), then restored and passed. Underline variants/colo
 minor renderer gaps. This checkpoint does not claim packaged, real Herdr,
 desktop IME/screen-reader, performance or hardware acceptance.
 
+2026-10-24 checkpoint: the private GTK harness also passes actual
+Ctrl+Shift+U Unicode preedit/commit using GtkIMContextSimple. Composition on
+Return inserts the composed character once. This narrows the IME uncertainty
+but does not establish IBus/Fcitx or screen-reader parity. A fresh experimental
+debug app was opened alongside the installed production app.
+
 ## Verification and deferrals
 
 Use Swift tests for logic/rendering, existing Python orchestration only for

@@ -23,4 +23,4 @@ read -r -a native_libraries <<< "$(pkg-config --libs gtk4 harfbuzz)"
     -Xlinker -rpath -Xlinker "$renderer" -L "$source_root/out/DevSpace" \
     -lskia -lskcms -lstdc++ -lfontconfig -lfreetype -lGL -lEGL -lGLESv2 -ldl \
     "${native_libraries[@]}" -o "$output/tests"
-"$output/tests"
+GTK_IM_MODULE=simple "$output/tests"
