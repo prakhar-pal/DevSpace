@@ -4,6 +4,41 @@ import CGTK
 @testable import DevSpaceLinuxApp
 
 final class TerminalPaneTests: XCTestCase {
+    func testHiddenPanesKeepIndependentPTYsAndClosingOnePreservesItsSibling() throws {
+        guard ProcessInfo.processInfo.environment["DEVSPACE_PRIVATE_KEY_TEST"] == "1" else {
+            throw XCTSkip("requires a private GTK display")
+        }
+        gtk_init()
+        func makePane(_ tag: String) throws -> TerminalPane {
+            let launch = try XCTUnwrap(LinuxTerminalLaunch(kind: "terminal_launch", workspaceID: tag,
+                paneID: UUID(), generation: UUID(), executable: "/bin/sh",
+                arguments: ["-c", "stty -echo; printf READY; while IFS= read -r line; do printf '\\n\(tag):%s\\n' \"$line\"; done"]))
+            return try XCTUnwrap(TerminalPane(launch: launch))
+        }
+        let first = try makePane("first"), second = try makePane("second")
+        let window = gtk_window_new()!
+        let native = UnsafeMutableRawPointer(window).assumingMemoryBound(to: GtkWindow.self)
+        let stackWidget = gtk_stack_new()!, stack = OpaquePointer(stackWidget)
+        gtk_stack_add_named(stack, first.widget, "first")
+        gtk_stack_add_named(stack, second.widget, "second")
+        gtk_window_set_default_size(native, 720, 360)
+        gtk_window_set_child(native, stackWidget)
+        gtk_window_present(native)
+        defer { first.dispose(); second.dispose(); gtk_window_destroy(native) }
+        XCTAssertTrue(pump { first.text.contains("READY") && second.text.contains("READY") })
+        gtk_stack_set_visible_child_name(stack, "second")
+        XCTAssertTrue(pump { gtk_widget_get_mapped(first.widget) == 0 && gtk_widget_get_mapped(second.widget) != 0 })
+        first.feed("hidden\n")
+        XCTAssertTrue(pump { first.text.contains("first:hidden") })
+        XCTAssertFalse(second.text.contains("first:hidden"))
+        let firstPID = try XCTUnwrap(first.childPID)
+        first.dispose()
+        XCTAssertTrue(pump { Glibc.kill(firstPID, 0) != 0 && errno == ESRCH })
+        second.feed("survived\n")
+        XCTAssertTrue(pump { second.text.contains("second:survived") })
+        XCTAssertFalse(second.isClosed)
+    }
+
     func testOptInRealWorkspaceRoundTripAndOrderlyDisconnect() throws {
         guard ProcessInfo.processInfo.environment["DEVSPACE_PRIVATE_KEY_TEST"] == "1",
               let workspace = ProcessInfo.processInfo.environment["DEVSPACE_HOST_WORKSPACE"],

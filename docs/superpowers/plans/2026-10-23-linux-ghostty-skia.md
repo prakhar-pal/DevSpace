@@ -136,8 +136,14 @@ styled Unicode, one warmup and nine samples. Parse-to-next-frame medians were
 33.6 ms (VTE) and 49.2 ms (Ghostty); samples ranged 31.6–63.4 ms. This is a debug
 software comparison, not hardware-GPU or sustained SSH throughput acceptance.
 The isolated local Herdr mouse-copy test and hidden/sibling PTY shutdown test
-pass. Remote Herdr and actual desktop clipboard/IME/screen-reader checks remain
-open; the remote fixture is being diagnosed before claiming a pass.
+pass. Remote Herdr mouse selection also passes through an isolated wc-1 SSH
+connection and OSC52 into the frontend-owned private-display clipboard. The
+fixture uses the existing Linux SSH supervisor: directly spawning OpenSSH can
+block Foundation child-exit tracking when SSH closes its inherited descriptor.
+The final affected frontend run passed six tests with zero failures; the
+separate backend workspace test was skipped because its opt-in executable was
+not provided (its earlier M04 run passed). Actual desktop cross-app clipboard,
+IME/screen-reader and hardware checks remain open.
 
 ## Verification and deferrals
 
