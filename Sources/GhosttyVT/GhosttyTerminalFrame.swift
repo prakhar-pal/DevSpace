@@ -38,6 +38,22 @@ public struct GhosttyTerminalFrame: Equatable {
 }
 
 extension GhosttyTerminalEngine {
+    /// Theme defaults preserve application OSC color overrides; OSC reset then
+    /// returns to the most recently configured host theme.
+    public func configureColors(foreground: UInt32, background: UInt32) throws {
+        try withTerminal { terminal in
+            func rgb(_ value: UInt32) -> GhosttyColorRgb {
+                GhosttyColorRgb(r: UInt8(truncatingIfNeeded: value >> 16),
+                    g: UInt8(truncatingIfNeeded: value >> 8), b: UInt8(truncatingIfNeeded: value))
+            }
+            var fg = rgb(foreground)
+            var bg = rgb(background)
+            try Self.check(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &fg))
+            try Self.check(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &bg))
+            revision &+= 1
+        }
+    }
+
     public func snapshot() throws -> GhosttyTerminalFrame {
         try withTerminal { terminal in
             guard let state = renderState else { throw GhosttyTerminalError.closed }

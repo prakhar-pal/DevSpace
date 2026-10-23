@@ -1,5 +1,6 @@
 // swift-tools-version: 5.9
 import PackageDescription
+import Foundation
 
 var dependencies: [Package.Dependency] = []
 var targets: [Target] = [
@@ -50,6 +51,37 @@ targets += [
     ),
 ]
 #elseif os(Linux)
+let ghosttyEnabled = ProcessInfo.processInfo.environment["DEVSPACE_LINUX_TERMINAL"] == "ghostty"
+var linuxAppDependencies: [Target.Dependency] = ["DevSpaceCore", "CGTK"]
+var linuxAppSettings: [SwiftSetting] = []
+if ghosttyEnabled {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
+    let skia = ProcessInfo.processInfo.environment["SKIA_SOURCE"] ?? "\(root)/.tmp/ghostty-skia/skia"
+    let ghostty = ProcessInfo.processInfo.environment["GHOSTTY_VT_PREFIX"] ?? "\(root)/.tmp/ghostty-skia/ghostty-vt"
+    let nativeIncludes = ["-Xcc", "-I\(skia)", "-Xcc", "-I\(ghostty)/include"]
+    let skiaSettings: [SwiftSetting] = [.interoperabilityMode(.Cxx), .unsafeFlags(nativeIncludes + [
+        "-Xcc", "-std=c++20", "-Xcc", "-fapinotes-modules", "-Xcc", "-DNDEBUG", "-Xcc", "-DSK_R32_SHIFT=16"
+    ])]
+    targets += [
+        .systemLibrary(name: "CGhosttyVT", path: "Sources/GhosttyVTInterop"),
+        .systemLibrary(name: "CSkia", path: "Sources/SkiaInterop"),
+        .systemLibrary(name: "CHarfBuzz", path: "Sources/HarfBuzzInterop", pkgConfig: "harfbuzz"),
+        .systemLibrary(name: "CGPU", path: "Sources/LinuxGPU", pkgConfig: "gl"),
+        .target(name: "DevSpaceGhosttyVT", dependencies: ["CGhosttyVT"], path: "Sources/GhosttyVT",
+            swiftSettings: [.unsafeFlags(["-Xcc", "-I\(ghostty)/include"])],
+            linkerSettings: [.unsafeFlags(["\(ghostty)/lib/libghostty-vt.a"])]),
+        .target(name: "DevSpaceSkiaRenderer", dependencies: ["DevSpaceGhosttyVT", "CSkia", "CHarfBuzz"],
+            path: "Sources/SkiaRenderer", swiftSettings: skiaSettings,
+            linkerSettings: [.unsafeFlags(["-L\(skia)/out/DevSpace"]), .linkedLibrary("skia"),
+                .linkedLibrary("skcms"), .linkedLibrary("stdc++"), .linkedLibrary("fontconfig"),
+                .linkedLibrary("freetype"), .linkedLibrary("GL"), .linkedLibrary("EGL"),
+                .linkedLibrary("GLESv2"), .linkedLibrary("dl")]),
+        .testTarget(name: "DevSpaceGhosttyFrontendTests", dependencies: ["DevSpaceLinuxApp"],
+            path: "Tests/GhosttyFrontend", swiftSettings: skiaSettings),
+    ]
+    linuxAppDependencies += ["DevSpaceGhosttyVT", "DevSpaceSkiaRenderer", "CGPU"]
+    linuxAppSettings = skiaSettings + [.define("DEVSPACE_GHOSTTY")]
+} else { linuxAppDependencies.append("CVTE") }
 targets += [
     .systemLibrary(
         name: "CGTK",
@@ -65,8 +97,9 @@ targets += [
     ),
     .executableTarget(
         name: "DevSpaceLinuxApp",
-        dependencies: ["DevSpaceCore", "CGTK", "CVTE"],
-        path: "Sources/LinuxApp"
+        dependencies: linuxAppDependencies,
+        path: "Sources/LinuxApp",
+        swiftSettings: linuxAppSettings
     ),
     // Child process owned by the GTK frontend. Its stdin/stdout are reserved
     // for the private control protocol; terminal bytes stay in VTE.

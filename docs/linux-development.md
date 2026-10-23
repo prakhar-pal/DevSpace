@@ -21,6 +21,50 @@ pixels, shaping, fallback fonts, cursors, selection and scaling; see
 [renderer tests](../Tests/SkiaRenderer/README.md). Hardware-GPU acceptance is
 deferred to a capable host and remains required before default cutover.
 
+To opt into the experimental frontend after building those dependencies:
+
+```sh
+make linux-ghostty-build-dev
+make linux-ghostty-run
+```
+
+These targets use `.tmp/ghostty-skia/app` for Swift build output and
+`build/linux-ghostty-dev` for debug executables. They use the global Swift
+installation. `SKIA_SOURCE` and `GHOSTTY_VT_PREFIX` override native dependency
+locations. The experimental frontend refuses the production channel; regular
+`make build-dev` still selects VTE. Do not distribute the feasibility Skia
+configuration or treat this opt-in as the completed default migration.
+
+The GTK adapter keeps the shared Swift PTY, bounded output delivery and existing
+pane/generation IDs. It uses GtkGLArea on a hardware driver and reports a Skia
+raster fallback on software drivers/context failures. Tests explicitly allow
+llvmpipe to exercise the OpenGL API. Keyboard/IM context, selection/scrolling,
+OSC 52 and image-paste routing stay in the GTK host. Portable engine/renderer
+modules contain no GTK or clipboard APIs.
+
+The private-display interaction harness is:
+
+```sh
+GTK_A11Y=test GDK_BACKEND=x11 DEVSPACE_PRIVATE_KEY_TEST=1 \
+  xvfb-run -a bash scripts/test-ghostty-gtk.sh
+```
+
+Set `DEVSPACE_GHOSTTY_TEST_OPENGL=1 DEVSPACE_GHOSTTY_ALLOW_SOFTWARE_GL=1` on that
+test command to exercise OpenGL on a software-only host. No hardware pass is
+implied. Swift frontend PTY/clipboard tests are available in the opt-in graph:
+
+```sh
+GTK_A11Y=test GDK_BACKEND=x11 DEVSPACE_PRIVATE_KEY_TEST=1 \
+  DEVSPACE_LINUX_TERMINAL=ghostty xvfb-run -a swift test \
+  --scratch-path .tmp/ghostty-skia/app --filter TerminalPaneTests
+```
+
+Accessibility currently exposes a label and bounded visible-text description;
+full terminal text/caret navigation and a real screen-reader check remain
+acceptance work. Actual IBus/Fcitx composition, non-US keyboard mappings,
+desktop Herdr clipboard, hardware rendering and packaged relocation must be
+verified before changing the default.
+
 ## Dependencies
 
 On Ubuntu install GTK4/VTE headers and the native build tools:

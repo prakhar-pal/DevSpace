@@ -1,7 +1,9 @@
 import Foundation
 import Glibc
 import CGTK
+#if !DEVSPACE_GHOSTTY
 import CVTE
+#endif
 import DevSpaceCore
 
 struct TerminalPaneIdentity: Hashable {
@@ -39,13 +41,19 @@ struct LinuxTerminalLaunch {
 }
 
 final class TerminalPane {
+    #if !DEVSPACE_GHOSTTY
     private static let drainPropertyName = "vte.ext.devspace.drain"
     // VTE requires extension properties to be installed before any terminals.
     private static let drainProperty = vte_install_termprop(drainPropertyName, VTE_PROPERTY_STRING, VtePropertyFlags(rawValue: 0))
+    #endif
     let launch: LinuxTerminalLaunch
     let identity: TerminalPaneIdentity
     let widget: UnsafeMutablePointer<GtkWidget>
+    #if DEVSPACE_GHOSTTY
+    private let terminal: GhosttyTerminalView
+    #else
     private let terminal: UnsafeMutablePointer<VteTerminal>
+    #endif
     private let onEvent: (String, [String: String]) -> Void
     private let pty = PTYSession()
     private let inputQueue = DispatchQueue(label: "devspace.terminal.input")
@@ -68,12 +76,19 @@ final class TerminalPane {
             workspaceID: launch.workspaceID, generation: launch.generation, paneID: launch.paneID
         )
         self.onEvent = onEvent
+        #if DEVSPACE_GHOSTTY
+        guard let view = try? GhosttyTerminalView() else { return nil }
+        terminal = view
+        widget = view.widget
+        _ = g_object_ref_sink(UnsafeMutableRawPointer(widget))
+        #else
         guard Self.drainProperty >= 0 else { return nil }
         widget = vte_terminal_new()!
         terminal = UnsafeMutableRawPointer(widget).assumingMemoryBound(to: VteTerminal.self)
         _ = g_object_ref_sink(UnsafeMutableRawPointer(widget))
         vte_terminal_set_scrollback_lines(terminal, 10_000)
         vte_terminal_set_size(terminal, 80, 24)
+        #endif
         applyTheme()
         connectSignals()
 
@@ -86,22 +101,34 @@ final class TerminalPane {
     deinit { dispose() }
 
     var text: String {
+        #if DEVSPACE_GHOSTTY
+        return terminal.text
+        #else
         guard let rawText = vte_terminal_get_text_format(terminal, VTE_FORMAT_TEXT) else { return "" }
         defer { g_free(UnsafeMutableRawPointer(rawText)) }
         return String(cString: rawText)
+        #endif
     }
 
     var currentDirectory: String? {
+        #if DEVSPACE_GHOSTTY
+        return isClosed ? nil : terminal.currentDirectory
+        #else
         guard !isClosed, let uri = vte_terminal_get_current_directory_uri(terminal),
               let components = URLComponents(string: String(cString: uri)), components.scheme == "file",
               let path = components.percentEncodedPath.removingPercentEncoding,
               path.hasPrefix("/"), !path.contains("\0") else { return nil }
         return path
+        #endif
     }
 
     func feed(_ text: String) {
         guard !isClosed else { return }
+        #if DEVSPACE_GHOSTTY
+        commit(Data(text.utf8))
+        #else
         text.withCString { vte_terminal_feed_child(terminal, $0, Int(text.utf8.count)) }
+        #endif
     }
 
     @discardableResult
@@ -113,7 +140,13 @@ final class TerminalPane {
         guard modifiers.rawValue & (control | shift | disallowed) == (control | shift) else { return false }
         switch gdk_keyval_to_lower(keyval) {
         case UInt32(GDK_KEY_c):
+            #if DEVSPACE_GHOSTTY
+            if let text = try? terminal.engine.selectedText(), let clipboard = gdk_display_get_clipboard(gtk_widget_get_display(widget)) {
+                text.withCString { gdk_clipboard_set_text(clipboard, $0) }
+            }
+            #else
             vte_terminal_copy_clipboard_format(terminal, VTE_FORMAT_TEXT)
+            #endif
             return true
         case UInt32(GDK_KEY_v):
             pasteClipboard()
@@ -133,6 +166,9 @@ final class TerminalPane {
 
     fileprivate func applyTheme() {
         guard !isClosed else { return }
+        #if DEVSPACE_GHOSTTY
+        terminal.applyTheme()
+        #else
         var foreground = GdkRGBA()
         gtk_widget_get_color(widget, &foreground)
         foreground = themeColor("theme_text_color") ?? foreground
@@ -153,17 +189,23 @@ final class TerminalPane {
             vte_terminal_set_color_highlight(terminal, nil)
             vte_terminal_set_color_highlight_foreground(terminal, nil)
         }
+        #endif
     }
 
+    #if !DEVSPACE_GHOSTTY
     private func themeColor(_ name: String) -> GdkRGBA? {
         var color = GdkRGBA()
         return gtk_style_context_lookup_color(gtk_widget_get_style_context(widget), name, &color) != 0 ? color : nil
     }
+    #endif
 
     func dispose() {
         guard !isClosed else { return }
         isClosed = true
         pty.terminate()
+        #if DEVSPACE_GHOSTTY
+        terminal.dispose()
+        #endif
         if resizeTick != 0 { gtk_widget_remove_tick_callback(widget, resizeTick); resizeTick = 0 }
         for (object, handler) in signalConnections {
             g_signal_handler_disconnect(object, handler)
@@ -256,6 +298,11 @@ final class TerminalPane {
 
     private func finishOutput(code: Int32) {
         guard !isClosed else { return }
+        #if DEVSPACE_GHOSTTY
+        try? terminal.finish(code)
+        contentsChanged()
+        reportExit(code: code)
+        #else
         pendingExit = code
         // feed() queues parsing on VTE's frame/100 ms fallback scheduler. An
         // invisible extension property after the final bytes is an exact drain
@@ -263,6 +310,7 @@ final class TerminalPane {
         // unfinished control string so it cannot swallow this host marker.
         let marker = "\u{18}\u{1b}]666;\(Self.drainPropertyName)=\(drainMarker)\u{1b}\\"
         marker.withCString { vte_terminal_feed(terminal, $0, marker.utf8.count) }
+        #endif
     }
 
     private func outputDrained() {
@@ -275,9 +323,14 @@ final class TerminalPane {
     private func receive(_ bytes: Data) {
         guard !isClosed else { return }
         let clipboardWrites = clipboardDecoder.consume(bytes)
+        #if DEVSPACE_GHOSTTY
+        do { try terminal.receive(bytes) }
+        catch { Log.write("Ghostty terminal receive failed: \(error)") }
+        #else
         bytes.withUnsafeBytes { raw in
             if let base = raw.baseAddress { vte_terminal_feed(terminal, base.assumingMemoryBound(to: CChar.self), bytes.count) }
         }
+        #endif
         guard !isClosed, gtk_widget_get_mapped(widget) != 0,
               gtk_widget_has_focus(widget) != 0,
               let root = gtk_widget_get_root(widget),
@@ -288,8 +341,14 @@ final class TerminalPane {
 
     private func resizePTY() {
         guard !isClosed, childPID != nil else { return }
+        #if DEVSPACE_GHOSTTY
+        terminal.refresh()
+        let rows = Int32(terminal.grid.rows)
+        let columns = Int32(terminal.grid.columns)
+        #else
         let rows = Int32(clamping: vte_terminal_get_row_count(terminal))
         let columns = Int32(clamping: vte_terminal_get_column_count(terminal))
+        #endif
         guard rows > 0, columns > 0, rows != terminalRows || columns != terminalColumns else { return }
         terminalRows = rows
         terminalColumns = columns
@@ -302,6 +361,17 @@ final class TerminalPane {
     }
 
     private func connectSignals() {
+        #if DEVSPACE_GHOSTTY
+        terminal.onWrite = { [weak self] in self?.commit($0) }
+        terminal.onFocus = { [weak self] in self?.focusEntered() }
+        terminal.onEvent = { [weak self] event in
+            switch event {
+            case .firstOutput: self?.contentsChanged()
+            case .directory: self?.directoryChanged()
+            default: break
+            }
+        }
+        #else
         let drained: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void = { _, _, data in
             guard let data else { return }
             let pane = Unmanaged<TerminalPane>.fromOpaque(data).takeUnretainedValue()
@@ -360,6 +430,7 @@ final class TerminalPane {
             to: GCallback.self
         )
         connectSignal(UnsafeMutableRawPointer(keyController), "key-pressed", keyPressed)
+        #endif
     }
 
     private func connectSignal(_ object: UnsafeMutableRawPointer, _ name: String, _ callback: GCallback) {
@@ -383,7 +454,9 @@ final class TerminalPane {
     private func pasteClipboard() {
         guard let display = gdk_display_get_default(),
               let clipboard = gdk_display_get_clipboard(display) else {
+            #if !DEVSPACE_GHOSTTY
             vte_terminal_paste_clipboard(terminal)
+            #endif
             return
         }
         let callback = unsafeBitCast(
@@ -435,7 +508,12 @@ final class TerminalPane {
         if let error { g_error_free(error) }
         defer { if let content { g_free(UnsafeMutableRawPointer(content)) } }
         guard !isClosed, gtk_widget_get_mapped(widget) != 0, let content else { return }
+        #if DEVSPACE_GHOSTTY
+        do { try terminal.paste(String(cString: content)) }
+        catch { onEvent("clipboard_error", ["message": "Terminal rejected unsafe clipboard text"]) }
+        #else
         vte_terminal_paste_text(terminal, content)
+        #endif
     }
 
     private func privatePNG(from texture: OpaquePointer) -> String? {

@@ -10,6 +10,28 @@ final class GhosttyTerminalEngineTests: XCTestCase {
         XCTAssertEqual(try engine.snapshot().background, 0xff102030)
     }
 
+    func testHostThemePreservesProgramOverridesAndResetsToLatestDefaults() throws {
+        let engine = try GhosttyTerminalEngine()
+        try engine.configureColors(foreground: 0xffeeeeee, background: 0xff102030)
+        XCTAssertEqual(try engine.snapshot().background, 0xff102030)
+        _ = try engine.receive(Data("\u{1b}]11;#abcdef\u{7}".utf8))
+        try engine.configureColors(foreground: 0xff111111, background: 0xff334455)
+        XCTAssertEqual(try engine.snapshot().background, 0xffabcdef)
+        _ = try engine.receive(Data("\u{1b}]111\u{7}".utf8))
+        XCTAssertEqual(try engine.snapshot().background, 0xff334455)
+        engine.close()
+        XCTAssertThrowsError(try engine.configureColors(foreground: 0, background: 0))
+    }
+
+    func testNativeWordAndLogicalLineSelection() throws {
+        let engine = try GhosttyTerminalEngine(columns: 8, rows: 4)
+        _ = try engine.receive(Data("hello world\r\nnext".utf8))
+        try engine.selectWord(column: 1, row: 1)
+        XCTAssertEqual(try engine.selectedText(), "world")
+        try engine.selectLine(column: 1, row: 1)
+        XCTAssertEqual(try engine.selectedText(), "hello world")
+    }
+
     func testFragmentedUnicodeAndANSIProduceVisibleTextOnlyOnce() throws {
         let engine = try GhosttyTerminalEngine(columns: 40, rows: 4)
         XCTAssertEqual(try engine.receive(Data("\u{1b}[31".utf8)), [])
@@ -203,6 +225,8 @@ final class GhosttyTerminalEngineTests: XCTestCase {
     }
 
     static let allTests = [
+        ("testNativeWordAndLogicalLineSelection", testNativeWordAndLogicalLineSelection),
+        ("testHostThemePreservesProgramOverridesAndResetsToLatestDefaults", testHostThemePreservesProgramOverridesAndResetsToLatestDefaults),
         ("testProgramBackgroundOverrideWorksBeforeAnyForegroundOverride", testProgramBackgroundOverrideWorksBeforeAnyForegroundOverride),
         ("testFragmentedUnicodeAndANSIProduceVisibleTextOnlyOnce", testFragmentedUnicodeAndANSIProduceVisibleTextOnlyOnce),
         ("testRepliesAreReturnedWithoutEstablishingVisibleOutput", testRepliesAreReturnedWithoutEstablishingVisibleOutput),

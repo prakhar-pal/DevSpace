@@ -26,6 +26,8 @@ ifeq ($(shell uname -s),Linux)
 LINUX_DEV_PREFIX ?= build/linux-dev
 LINUX_DEV_BUNDLE ?= build/linux-dev-bundle
 LINUX_SWIFT_SCRATCH ?= .tmp/swift-linux-app
+LINUX_GHOSTTY_SWIFT_SCRATCH ?= .tmp/ghostty-skia/app
+LINUX_GHOSTTY_DEV_PREFIX ?= build/linux-ghostty-dev
 LINUX_SWIFT_RUNTIME ?= $(shell $(SWIFT) -print-target-info | python3 -c 'import json,sys; print(json.load(sys.stdin)["paths"]["runtimeLibraryPaths"][0])')
 LINUX_RELEASE_SCRATCH ?= .tmp/swift-linux-release
 LINUX_RELEASE_BUNDLE ?= build/linux-production
@@ -41,7 +43,7 @@ LINUX_INSTALL_BUNDLE ?=
 SWIFT ?= swift
 SWIFTC ?= swiftc
 
-.PHONY: linux-build-dev linux-bundle-dev linux-bundle linux-run linux-package linux-install linux-test-core linux-test-ghostty linux-test-skia linux-test-protocol linux-test-gtk linux-test
+.PHONY: linux-build-dev linux-ghostty-build-dev linux-ghostty-run linux-bundle-dev linux-bundle linux-run linux-package linux-install linux-test-core linux-test-ghostty linux-test-skia linux-test-protocol linux-test-gtk linux-test
 
 install: linux-install
 build: linux-bundle
@@ -99,6 +101,15 @@ linux-build-dev:
 	mkdir -p "$(LINUX_DEV_PREFIX)/bin"
 	install -m 755 "$(LINUX_SWIFT_SCRATCH)/debug/DevSpaceLinuxApp" "$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxApp"
 	install -m 755 "$(LINUX_SWIFT_SCRATCH)/debug/DevSpaceLinuxBackend" "$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxBackend"
+
+# Experimental renderer: separate debug artifacts, VTE remains the default.
+linux-ghostty-build-dev:
+	DEVSPACE_LINUX_TERMINAL=ghostty $(MAKE) linux-build-dev \
+		LINUX_SWIFT_SCRATCH="$(LINUX_GHOSTTY_SWIFT_SCRATCH)" LINUX_DEV_PREFIX="$(LINUX_GHOSTTY_DEV_PREFIX)"
+
+linux-ghostty-run: linux-ghostty-build-dev
+	DEVSPACE_BUILD_CHANNEL=development DEVSPACE_BACKEND="$(abspath $(LINUX_GHOSTTY_DEV_PREFIX))/bin/DevSpaceLinuxBackend" \
+		"$(LINUX_GHOSTTY_DEV_PREFIX)/bin/DevSpaceLinuxApp"
 
 linux-bundle-dev: linux-build-dev
 	python3 scripts/assemble-linux.py --frontend "$(LINUX_DEV_PREFIX)" --backend "$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxBackend" --swift-runtime "$(LINUX_SWIFT_RUNTIME)" --swift-license "$(LINUX_SWIFT_LICENSE)" --icu-license "$(LINUX_ICU_LICENSE)" --channel development --output "$(LINUX_DEV_BUNDLE)" --replace

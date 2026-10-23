@@ -72,12 +72,23 @@ OSC overrides, following the pinned Ghostty RenderState source contract.
 
 ## M04 — Linux interaction
 
-- [ ] GTK surface/input adapter: keyboard/mouse/focus encoding, IME, selection,
+- [x] GTK surface/input adapter: keyboard/mouse/focus encoding, IME, selection,
       scrolling, paste, existing shortcuts and accessibility.
-- [ ] Preserve Herdr OSC 52 copy and text/image clipboard flows. Keep current
+- [x] Preserve Herdr OSC 52 copy and text/image clipboard flows. Keep current
       focused/active-pane clipboard restrictions and denial of remote reads.
-- [ ] Preserve theming, text inspection and directory-based editor actions.
+- [x] Preserve theming, text inspection and directory-based editor actions.
 - [ ] Test actual interaction and commit after verification.
+
+M04 implementation checkpoint: development-only opt-in SwiftPM frontend builds.
+Private GTK tests deliver real keyboard events through IM commit, encode TUI
+arrows/wheel and bracketed paste, select by drag/word, resize, render via raster
+and OpenGL and dispose. Swift app tests use real PTYs and verify final output
+before exit, generation/pane IDs, directory events, typing, resize and focused
+OSC 52 writes with a hidden-pane denial case. The existing image upload path is
+shared unchanged. VTE remains the default; the experimental binary refuses the
+production channel. Full screen-reader text/caret navigation, actual IBus/Fcitx
+composition, non-US key mapping, real Herdr and packaged artifacts remain M05
+acceptance gates; basic accessibility label/visible-text metadata is present.
 
 ## M05 — Acceptance, packaging and cutover
 

@@ -2,6 +2,46 @@ import Foundation
 import CGhosttyVT
 
 extension GhosttyTerminalEngine {
+    public func selectWord(column: UInt16, row: UInt16) throws {
+        try selectSemantic(column: column, row: row, word: true)
+    }
+
+    public func selectLine(column: UInt16, row: UInt16) throws {
+        try selectSemantic(column: column, row: row, word: false)
+    }
+
+    private func selectSemantic(column: UInt16, row: UInt16, word: Bool) throws {
+        try withTerminal { terminal in
+            var point = GhosttyPoint()
+            point.tag = GHOSTTY_POINT_TAG_VIEWPORT
+            point.value.coordinate = GhosttyPointCoordinate(x: column, y: UInt32(row))
+            var reference = GhosttyGridRef()
+            reference.size = MemoryLayout<GhosttyGridRef>.size
+            try Self.check(ghostty_terminal_grid_ref(terminal, point, &reference))
+            var selection = GhosttySelection()
+            selection.size = MemoryLayout<GhosttySelection>.size
+            let result: GhosttyResult
+            if word {
+                var options = GhosttyTerminalSelectWordOptions()
+                options.size = MemoryLayout<GhosttyTerminalSelectWordOptions>.size
+                options.ref = reference
+                result = ghostty_terminal_select_word(terminal, &options, &selection)
+            } else {
+                var options = GhosttyTerminalSelectLineOptions()
+                options.size = MemoryLayout<GhosttyTerminalSelectLineOptions>.size
+                options.ref = reference
+                result = ghostty_terminal_select_line(terminal, &options, &selection)
+            }
+            if result == GHOSTTY_NO_VALUE {
+                try Self.check(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SELECTION, nil))
+            } else {
+                try Self.check(result)
+                try Self.check(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SELECTION, &selection))
+            }
+            revision &+= 1
+        }
+    }
+
     public func scroll(lines: Int) throws {
         try withTerminal { terminal in
             var scroll = GhosttyTerminalScrollViewport()

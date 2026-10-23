@@ -48,7 +48,7 @@ fi
     -cxx-interoperability-mode=default -Xcc -std=c++20 \
     -Xcc -DNDEBUG -Xcc -DSK_R32_SHIFT=16 -Xcc -fapinotes-modules \
     -Xcc "-I$source_root" -I "$repo_root/Sources/SkiaInterop" \
-    -I "$repo_root/Tests/SkiaInterop/CGPU" -I "$repo_root/Sources/LinuxGTK" \
+    -I "$repo_root/Sources/LinuxGPU" -I "$repo_root/Sources/LinuxGTK" \
     "${native_flags[@]}" "$repo_root/Tests/SkiaInterop/$test_source" \
     "$sample_source" \
     -L "$source_root/out/DevSpace" -lskia -lskcms "${native_libraries[@]}" \

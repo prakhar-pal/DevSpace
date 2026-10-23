@@ -24,6 +24,12 @@ guard let channel = ProcessInfo.processInfo.environment["DEVSPACE_BUILD_CHANNEL"
 }
 
 Log.write("Linux GTK application starting")
+#if DEVSPACE_GHOSTTY
+guard channel == "development" else {
+    fputs("DevSpaceLinuxApp: experimental Ghostty renderer requires the development channel\n", stderr)
+    exit(EXIT_FAILURE)
+}
+#endif
 let application = gtk_application_new(applicationIdentifier, GApplicationFlags(rawValue: 0))!
 let backendExecutable = LinuxApplicationChannel.backendExecutableURL(
     URL(fileURLWithPath: CommandLine.arguments[0]),
