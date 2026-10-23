@@ -14,6 +14,18 @@ struct ShapedTerminalGlyph {
 /// that draws them. HarfBuzz owns copies of tables and releases the retained
 /// Swift context when the final face reference is destroyed.
 final class SkiaShapingFont {
+    /// Common/inherited characters stay with surrounding text; a strong
+    /// script change must start a new shaping run even when the font matches.
+    static func scriptTag(_ text: String) -> UInt32? {
+        for scalar in text.unicodeScalars {
+            let script = hb_unicode_script(hb_unicode_funcs_get_default(), scalar.value)
+            if script != HB_SCRIPT_COMMON && script != HB_SCRIPT_INHERITED && script != HB_SCRIPT_UNKNOWN {
+                return script.rawValue
+            }
+        }
+        return nil
+    }
+
     let typeface: SkiaTypeface
     let font: SkFont
     private let shapingFont: OpaquePointer

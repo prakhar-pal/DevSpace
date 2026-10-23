@@ -5,6 +5,15 @@ import DevSpaceGhosttyVT
 @testable import DevSpaceSkiaRenderer
 
 final class SkiaTerminalRendererTests: XCTestCase {
+    func testLatinPromptDoesNotPreventArabicJoining() throws {
+        let engine = try GhosttyTerminalEngine(columns: 12, rows: 3)
+        _ = try engine.receive(Data("a بب".utf8))
+        let renderer = try renderer()
+        let font = try renderer.resolvedFont(text: "ب", bold: false, italic: false, scale: 1)
+        let expected = try font.shape("بب").map(\.id)
+        let layout = try renderer.layout(row: engine.snapshot().cells[0], scale: 1)
+        XCTAssertEqual(layout.filter { $0.column >= 2 }.map(\.id), expected)
+    }
     private func renderer() throws -> SkiaTerminalRenderer {
         let owner = SkFontMgr_New_FontConfig(nil, SkFontScanner_Make_FreeType())
         guard let manager = owner.get() else { throw SkiaTerminalRendererError.fontUnavailable }
@@ -138,6 +147,7 @@ final class SkiaTerminalRendererTests: XCTestCase {
     }
 
     static let allTests = [
+        ("testLatinPromptDoesNotPreventArabicJoining", testLatinPromptDoesNotPreventArabicJoining),
         ("testBackgroundsUseExactTerminalGridCoordinates", testBackgroundsUseExactTerminalGridCoordinates),
         ("testTextRendersAndClearedRowsDoNotRetainOldGlyphs", testTextRendersAndClearedRowsDoNotRetainOldGlyphs),
         ("testFractionalScaleAndInvalidDimensions", testFractionalScaleAndInvalidDimensions),

@@ -61,7 +61,50 @@ writes.removeAll()
 try view.receive(Data("\u{1b}[?1000h\u{1b}[?1006h".utf8))
 view.scroll(delta: -1, modifiers: GdkModifierType(rawValue: 0))
 precondition(String(decoding: writes, as: UTF8.self).contains("\u{1b}[<64;"), "TUI wheel events must reach the PTY")
+var reviewFailures = 0
+func reviewCheck(_ condition: Bool, _ message: String) {
+    if !condition { fputs("FAIL: \(message)\n", stderr); reviewFailures += 1 }
+}
+writes.removeAll()
+view.key(keyval: UInt32(GDK_KEY_KP_Left), keycode: 83, modifiers: GdkModifierType(rawValue: 0), pressed: true)
+reviewCheck(writes == Data("\u{1b}OD".utf8), "keypad navigation retains application-cursor semantics")
+writes.removeAll()
+// Native mode 1035 defaults to ignoring application keypad mode. Disable it
+// before requesting DECKPAM, exactly as an application requiring it must do.
+try view.receive(Data("\u{1b}[?1035l\u{1b}=".utf8))
+view.key(keyval: UInt32(GDK_KEY_KP_Enter), keycode: 104, modifiers: GdkModifierType(rawValue: 0), pressed: true)
+reviewCheck(writes == Data("\u{1b}OM".utf8), "keypad Enter retains application-keypad semantics")
+try view.receive(Data((0..<(Int(view.grid.rows) + 5)).map { "ROW\($0)\r\n" }.joined().utf8))
+func topRow() throws -> String { try view.engine.snapshot().cells[0].map(\.text).joined() }
+let liveTop = try topRow()
+try view.engine.scroll(lines: -5)
+reviewCheck(try topRow() != liveTop, "fixture moved away from live prompt")
+view.key(keyval: UInt32(GDK_KEY_a), keycode: 38, modifiers: GdkModifierType(rawValue: 0), pressed: true)
+reviewCheck(try topRow() == liveTop, "typing returns viewport to live prompt")
+try view.engine.scroll(lines: -5)
+try view.paste("hello")
+reviewCheck(try topRow() == liveTop, "paste returns viewport to live prompt")
 view.dispose()
 view.dispose()
 gtk_window_destroy(nativeWindow)
+setenv("DEVSPACE_GHOSTTY_ALLOW_SOFTWARE_GL", "1", 1)
+let failureView = try GhosttyTerminalView()
+let failureWindow = gtk_window_new()!
+let failureNative = UnsafeMutableRawPointer(failureWindow).assumingMemoryBound(to: GtkWindow.self)
+gtk_window_set_default_size(failureNative, 320, 180)
+gtk_window_set_child(failureNative, failureView.widget)
+gtk_window_present(failureNative)
+pump()
+let stack = gtk_overlay_get_child(OpaquePointer(failureView.widget))!
+let glWidget = gtk_stack_get_child_by_name(OpaquePointer(stack), "gpu")!
+let glArea = UnsafeMutableRawPointer(glWidget).assumingMemoryBound(to: GtkGLArea.self)
+let syntheticError = g_error_new_literal(g_quark_from_static_string("devspace-test"), 1, "synthetic GL failure")!
+gtk_gl_area_set_error(glArea, syntheticError)
+g_error_free(syntheticError)
+failureView.refresh()
+pump()
+reviewCheck(failureView.renderPath == "raster", "GL context errors must fall back even when GTK suppresses render")
+failureView.dispose()
+gtk_window_destroy(failureNative)
+if reviewFailures > 0 { exit(1) }
 print("Ghostty GTK raster, actual GTK keys/IM commit, paste, pointer selection, resize and disposal passed")

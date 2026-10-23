@@ -83,7 +83,23 @@ final class GhosttyTerminalView {
 
     func receive(_ data: Data) throws { deliver(try engine.receive(data)); dirty = true }
     func finish(_ code: Int32) throws { deliver(try engine.finish(exitCode: code)); dirty = true }
-    func paste(_ text: String) throws { deliver(try engine.paste(text)); dirty = true }
+    func paste(_ text: String) throws {
+        let events = try engine.paste(text)
+        try engine.scrollToBottom()
+        try engine.clearSelection()
+        deliver(events)
+        dirty = true
+    }
+
+    func sendText(_ text: String) { writeUserInput(Data(text.utf8)) }
+
+    private func writeUserInput(_ bytes: Data) {
+        guard !closed, !bytes.isEmpty else { return }
+        try? engine.scrollToBottom()
+        try? engine.clearSelection()
+        dirty = true
+        onWrite(bytes)
+    }
 
     func applyTheme() {
         guard !closed else { return }
@@ -113,6 +129,14 @@ final class GhosttyTerminalView {
 
     func refresh() {
         guard !closed, gtk_widget_get_mapped(widget) != 0 else { return }
+        let glWidget = UnsafeMutableRawPointer(area).assumingMemoryBound(to: GtkWidget.self)
+        if !rasterRequested, gtk_widget_get_realized(glWidget) != 0,
+           gtk_gl_area_get_error(area) != nil || gtk_gl_area_get_context(area) == nil {
+            // GTK suppresses its render signal when context creation fails.
+            // This check must run independently of renderGPU().
+            rasterRequested = true
+            dirty = true
+        }
         do {
             let scale = Float(gtk_widget_get_scale_factor(widget))
             let metrics = try renderer.metrics(scale: scale)
@@ -213,7 +237,8 @@ final class GhosttyTerminalView {
             let bytes = try engine.encodeKey(Self.nativeKey(keyval), mods: Self.mods(modifiers),
                 action: pressed ? GHOSTTY_KEY_ACTION_PRESS : GHOSTTY_KEY_ACTION_RELEASE,
                 utf8: text, unshifted: gdk_keyval_to_unicode(gdk_keyval_to_lower(keyval)))
-            if !bytes.isEmpty { onWrite(bytes) }
+            if pressed { writeUserInput(bytes) }
+            else if !bytes.isEmpty { onWrite(bytes) }
         } catch { /* A retained pane after exit is read-only. */ }
     }
 
@@ -221,11 +246,39 @@ final class GhosttyTerminalView {
         let lower = gdk_keyval_to_lower(value)
         if lower >= 97 && lower <= 122 { return GhosttyKey(rawValue: GHOSTTY_KEY_A.rawValue + Int32(lower - 97)) }
         if lower >= 48 && lower <= 57 { return GhosttyKey(rawValue: GHOSTTY_KEY_DIGIT_0.rawValue + Int32(lower - 48)) }
+        if value >= UInt32(GDK_KEY_KP_0) && value <= UInt32(GDK_KEY_KP_9) {
+            return GhosttyKey(rawValue: GHOSTTY_KEY_NUMPAD_0.rawValue + Int32(value - UInt32(GDK_KEY_KP_0)))
+        }
         if value >= UInt32(GDK_KEY_F1) && value <= UInt32(GDK_KEY_F25) {
             return GhosttyKey(rawValue: GHOSTTY_KEY_F1.rawValue + Int32(value - UInt32(GDK_KEY_F1)))
         }
         switch Int32(value) {
-        case GDK_KEY_Return, GDK_KEY_KP_Enter: return GHOSTTY_KEY_ENTER
+        case GDK_KEY_Return: return GHOSTTY_KEY_ENTER
+        case GDK_KEY_KP_Enter: return GHOSTTY_KEY_NUMPAD_ENTER
+        case GDK_KEY_KP_Up: return GHOSTTY_KEY_NUMPAD_UP
+        case GDK_KEY_KP_Down: return GHOSTTY_KEY_NUMPAD_DOWN
+        case GDK_KEY_KP_Left: return GHOSTTY_KEY_NUMPAD_LEFT
+        case GDK_KEY_KP_Right: return GHOSTTY_KEY_NUMPAD_RIGHT
+        case GDK_KEY_KP_Begin: return GHOSTTY_KEY_NUMPAD_BEGIN
+        case GDK_KEY_KP_Home: return GHOSTTY_KEY_NUMPAD_HOME
+        case GDK_KEY_KP_End: return GHOSTTY_KEY_NUMPAD_END
+        case GDK_KEY_KP_Page_Up: return GHOSTTY_KEY_NUMPAD_PAGE_UP
+        case GDK_KEY_KP_Page_Down: return GHOSTTY_KEY_NUMPAD_PAGE_DOWN
+        case GDK_KEY_KP_Insert: return GHOSTTY_KEY_NUMPAD_INSERT
+        case GDK_KEY_KP_Delete: return GHOSTTY_KEY_NUMPAD_DELETE
+        case GDK_KEY_KP_Add: return GHOSTTY_KEY_NUMPAD_ADD
+        case GDK_KEY_KP_Subtract: return GHOSTTY_KEY_NUMPAD_SUBTRACT
+        case GDK_KEY_KP_Multiply: return GHOSTTY_KEY_NUMPAD_MULTIPLY
+        case GDK_KEY_KP_Divide: return GHOSTTY_KEY_NUMPAD_DIVIDE
+        case GDK_KEY_KP_Decimal: return GHOSTTY_KEY_NUMPAD_DECIMAL
+        case GDK_KEY_KP_Separator: return GHOSTTY_KEY_NUMPAD_SEPARATOR
+        case GDK_KEY_KP_Equal: return GHOSTTY_KEY_NUMPAD_EQUAL
+        case GDK_KEY_KP_Space: return GHOSTTY_KEY_SPACE
+        case GDK_KEY_KP_Tab: return GHOSTTY_KEY_TAB
+        case GDK_KEY_KP_F1: return GHOSTTY_KEY_F1
+        case GDK_KEY_KP_F2: return GHOSTTY_KEY_F2
+        case GDK_KEY_KP_F3: return GHOSTTY_KEY_F3
+        case GDK_KEY_KP_F4: return GHOSTTY_KEY_F4
         case GDK_KEY_BackSpace: return GHOSTTY_KEY_BACKSPACE
         case GDK_KEY_Tab, GDK_KEY_ISO_Left_Tab: return GHOSTTY_KEY_TAB
         case GDK_KEY_Escape: return GHOSTTY_KEY_ESCAPE
@@ -305,7 +358,7 @@ final class GhosttyTerminalView {
             guard let data, let text else { return }
             let view = Unmanaged<GhosttyTerminalView>.fromOpaque(data).takeUnretainedValue()
             if let key = view.pendingKey, !view.composingKey { view.sendKey(keyval: key.0, modifiers: key.2, text: String(cString: text), pressed: true) }
-            else { view.onWrite(Data(String(cString: text).utf8)) }
+            else { view.writeUserInput(Data(String(cString: text).utf8)) }
         }
         connect(UnsafeMutableRawPointer(im), "commit", unsafeBitCast(committed, to: GCallback.self))
         let preedit: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void = { _, data in

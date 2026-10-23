@@ -4,6 +4,23 @@ import CGhosttyVT
 @testable import DevSpaceGhosttyVT
 
 final class GhosttyTerminalEngineTests: XCTestCase {
+    func testInitialSizeQueriesAndInBandEnableReturnCurrentGeometry() throws {
+        let engine = try GhosttyTerminalEngine(columns: 40, rows: 12)
+        XCTAssertEqual(try engine.receive(Data("\u{1b}[18t".utf8)), [.writePTY(Data("\u{1b}[8;12;40t".utf8))])
+        try engine.resize(columns: 40, rows: 12, cellWidth: 9, cellHeight: 18)
+        XCTAssertEqual(try engine.receive(Data("\u{1b}[16t".utf8)), [.writePTY(Data("\u{1b}[6;18;9t".utf8))])
+        XCTAssertFalse(try engine.receive(Data("\u{1b}[?2048h".utf8)).isEmpty)
+    }
+
+    func testDeferredImageRendererDoesNotAdvertiseKittyGraphicsSuccess() throws {
+        let engine = try GhosttyTerminalEngine()
+        for prefix in ["", "\u{1b}[?1049h"] {
+            let events = try engine.receive(Data((prefix + "\u{1b}_Ga=q,i=31,s=1,v=1,f=32;AAAAAA==\u{1b}\\").utf8))
+            let reply = events.compactMap { if case let .writePTY(bytes) = $0 { return String(decoding: bytes, as: UTF8.self) }; return nil }.joined()
+            XCTAssertFalse(reply.contains(";OK"), "unsupported graphics must not advertise a working renderer")
+        }
+    }
+
     func testProgramBackgroundOverrideWorksBeforeAnyForegroundOverride() throws {
         let engine = try GhosttyTerminalEngine()
         _ = try engine.receive(Data("\u{1b}]11;#102030\u{7}".utf8))
@@ -225,6 +242,8 @@ final class GhosttyTerminalEngineTests: XCTestCase {
     }
 
     static let allTests = [
+        ("testInitialSizeQueriesAndInBandEnableReturnCurrentGeometry", testInitialSizeQueriesAndInBandEnableReturnCurrentGeometry),
+        ("testDeferredImageRendererDoesNotAdvertiseKittyGraphicsSuccess", testDeferredImageRendererDoesNotAdvertiseKittyGraphicsSuccess),
         ("testNativeWordAndLogicalLineSelection", testNativeWordAndLogicalLineSelection),
         ("testHostThemePreservesProgramOverridesAndResetsToLatestDefaults", testHostThemePreservesProgramOverridesAndResetsToLatestDefaults),
         ("testProgramBackgroundOverrideWorksBeforeAnyForegroundOverride", testProgramBackgroundOverrideWorksBeforeAnyForegroundOverride),

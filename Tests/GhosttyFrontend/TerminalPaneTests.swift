@@ -4,6 +4,40 @@ import CGTK
 @testable import DevSpaceLinuxApp
 
 final class TerminalPaneTests: XCTestCase {
+    func testOptInRealWorkspaceRoundTripAndOrderlyDisconnect() throws {
+        guard ProcessInfo.processInfo.environment["DEVSPACE_PRIVATE_KEY_TEST"] == "1",
+              let workspace = ProcessInfo.processInfo.environment["DEVSPACE_HOST_WORKSPACE"],
+              let backend = ProcessInfo.processInfo.environment["DEVSPACE_TEST_BACKEND"] else {
+            throw XCTSkip("opt-in authorized real workspace and private display required")
+        }
+        gtk_init()
+        let application = gtk_application_new("com.prakharp.devspace.dev.ghosttyacceptance", GApplicationFlags(rawValue: 0))!
+        defer { g_object_unref(UnsafeMutableRawPointer(application)) }
+        var error: UnsafeMutablePointer<GError>?
+        XCTAssertNotEqual(g_application_register(UnsafeMutableRawPointer(application).assumingMemoryBound(to: GApplication.self), nil, &error), 0)
+        if let error { g_error_free(error) }
+        let controller = LinuxApplicationController(application: application, channel: "development",
+            backendExecutableURL: URL(fileURLWithPath: backend))
+        try controller.start()
+        defer {
+            controller.requestShutdown()
+            XCTAssertTrue(pump(until: { controller.backend.state == .stopped }, timeout: 30))
+        }
+        XCTAssertTrue(pump(until: { controller.backend.state == .ready }, timeout: 10))
+        controller.sendCommand("select", payload: ["workspace_id": workspace])
+        controller.sendCommand("connect", payload: ["workspace_id": workspace])
+        XCTAssertTrue(pump(until: { controller.window?.pane(forWorkspace: workspace) != nil }, timeout: 60))
+        let pane = try XCTUnwrap(controller.window?.pane(forWorkspace: workspace))
+        XCTAssertTrue(pump(until: { gtk_widget_get_mapped(pane.widget) != 0
+            && !pane.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }, timeout: 20))
+        pane.feed("unset HISTFILE; printf 'GHOSTTY_%s\\n' 'LIVE_OK'\n")
+        XCTAssertTrue(pump(until: { pane.text.contains("GHOSTTY_LIVE_OK") }, timeout: 20),
+            "real SSH shell round trip; controlled terminal tail: \(pane.text.suffix(1500))")
+        XCTAssertEqual(pane.identity.workspaceID, workspace)
+        controller.sendCommand("disconnect", payload: ["workspace_id": workspace])
+        XCTAssertTrue(pump(until: { controller.window?.pane(forWorkspace: workspace) == nil }, timeout: 20))
+    }
+
     private func pump(until ready: () -> Bool, timeout: TimeInterval = 3) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while !ready() && Date() < deadline {

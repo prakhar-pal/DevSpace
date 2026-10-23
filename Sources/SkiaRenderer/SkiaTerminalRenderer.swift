@@ -195,6 +195,7 @@ public final class SkiaTerminalRenderer {
         var result: [TerminalGlyph] = []
         var runText = ""
         var runFont: SkiaShapingFont?
+        var runScript: UInt32?
         var starts: [(offset: Int, column: Int)] = []
         var endColumn = 0
         func flush() throws {
@@ -224,12 +225,16 @@ public final class SkiaTerminalRenderer {
             starts.removeAll(keepingCapacity: true)
             runText = ""
             runFont = nil
+            runScript = nil
         }
         for (column, cell) in row.enumerated() where cell.width > 0 {
             if cell.text.isEmpty { try flush(); continue }
             let font = try resolvedFont(text: cell.text, bold: cell.bold, italic: cell.italic, scale: scale)
             if let previous = runFont, previous !== font { try flush() }
+            let script = SkiaShapingFont.scriptTag(cell.text)
+            if let previous = runScript, let script, previous != script { try flush() }
             runFont = font
+            if let script { runScript = script }
             starts.append((runText.utf8.count, column))
             runText += cell.text
             endColumn = column + cell.width

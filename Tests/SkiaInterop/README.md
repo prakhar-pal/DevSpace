@@ -1,4 +1,4 @@
-# Direct Swift/Skia interoperability gate (M01, partial)
+# Direct Swift/Skia interoperability gate (M01)
 
 These isolated acceptance executables do not change the application's VTE
 implementation or SwiftPM targets. Compile-only and runtime checks are separate:
@@ -108,10 +108,13 @@ On the Ubuntu 26.04 host with global Swift 6.4.1 and Zig 0.17.0:
 - Strict actual-desktop Wayland hardware acceptance exits **77**, explicitly
   unavailable: the host also supplies llvmpipe. This is not a hardware pass.
 
-M01 is not complete without resolving that hardware gate. Automatic application
-fallback, full shaping and terminal-specific font fallback still belong to the
-production integration; a simple glyph draw is not evidence of correct
-complex-script shaping. VTE remains the application's renderer.
+The user approved moving hardware verification to the final M05 cutover gate
+because this host has no hardware renderer. M01's implementation gate is met.
+M03 adds actual contextual terminal shaping/font fallback tests and M04 adds a
+development-only GTK frontend with automatic raster fallback. See
+`Tests/SkiaRenderer/README.md`, `Tests/GhosttyGTK/README.md` and the current plan.
+The primitive M01 glyph sample alone does not establish complex-script shaping.
+VTE remains the default; no hardware or production-cutover pass is claimed.
 
 At initial execution, GN, Ninja and Zig were unavailable on PATH, and the
 filesystem had approximately 2 GB free. Those tools are now installed, and the

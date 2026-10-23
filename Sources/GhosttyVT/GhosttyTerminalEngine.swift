@@ -33,6 +33,7 @@ public final class GhosttyTerminalEngine {
     private var holdStartedAt: UInt64?
     private var pendingNativeFailure: GhosttyResult?
     private let nowNanoseconds: () -> UInt64
+    private var geometry = GhosttySizeReportSize(rows: 24, columns: 80, cell_width: 0, cell_height: 0)
 
     public convenience init(columns: UInt16 = 80, rows: UInt16 = 24, scrollback: Int = 10_000) throws {
         try self.init(columns: columns, rows: rows, scrollback: scrollback,
@@ -44,6 +45,7 @@ public final class GhosttyTerminalEngine {
         self.nowNanoseconds = nowNanoseconds
         guard columns > 0, rows > 0, scrollback >= 0 else { throw GhosttyTerminalError.invalidSize }
         try Self.check(ghostty_terminal_new(nil, &terminal, columns, rows))
+        geometry = GhosttySizeReportSize(rows: rows, columns: columns, cell_width: 0, cell_height: 0)
         do {
             guard let terminal else { throw GhosttyTerminalError.closed }
             try Self.check(ghostty_render_state_new(nil, &renderState))
@@ -58,6 +60,17 @@ public final class GhosttyTerminalEngine {
             try Self.check(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &limit))
             try Self.check(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_USERDATA,
                 Unmanaged.passUnretained(self).toOpaque()))
+            // No image renderer is installed yet. Advertising native storage
+            // support would cause applications to choose invisible image output.
+            var imageLimit: UInt64 = 0
+            try Self.check(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT, &imageLimit))
+            let size: GhosttyTerminalSizeFn = { _, userdata, output in
+                guard let userdata, let output else { return false }
+                output.pointee = Unmanaged<GhosttyTerminalEngine>.fromOpaque(userdata).takeUnretainedValue().geometry
+                return true
+            }
+            try Self.check(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SIZE,
+                unsafeBitCast(size, to: UnsafeRawPointer.self)))
             let write: GhosttyTerminalWritePtyFn = { _, userdata, bytes, count in
                 guard let userdata, let bytes, count > 0 else { return }
                 let engine = Unmanaged<GhosttyTerminalEngine>.fromOpaque(userdata).takeUnretainedValue()
@@ -119,8 +132,14 @@ public final class GhosttyTerminalEngine {
     public func resize(columns: UInt16, rows: UInt16, cellWidth: UInt32 = 0, cellHeight: UInt32 = 0) throws -> [GhosttyTerminalEvent] {
         lock.lock()
         defer { lock.unlock() }
-        guard columns > 0, rows > 0 else { throw GhosttyTerminalError.invalidSize }
-        try Self.check(ghostty_terminal_resize(openTerminal(), columns, rows, cellWidth, cellHeight))
+        guard columns > 0, rows > 0,
+              UInt64(columns) * UInt64(cellWidth) <= UInt32.max,
+              UInt64(rows) * UInt64(cellHeight) <= UInt32.max else { throw GhosttyTerminalError.invalidSize }
+        let terminal = try openTerminal()
+        let previous = geometry
+        geometry = GhosttySizeReportSize(rows: rows, columns: columns, cell_width: cellWidth, cell_height: cellHeight)
+        do { try Self.check(ghostty_terminal_resize(terminal, columns, rows, cellWidth, cellHeight)) }
+        catch { geometry = previous; throw error }
         revision &+= 1
         return takeEvents()
     }

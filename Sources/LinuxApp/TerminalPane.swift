@@ -125,7 +125,7 @@ final class TerminalPane {
     func feed(_ text: String) {
         guard !isClosed else { return }
         #if DEVSPACE_GHOSTTY
-        commit(Data(text.utf8))
+        terminal.sendText(text)
         #else
         text.withCString { vte_terminal_feed_child(terminal, $0, Int(text.utf8.count)) }
         #endif

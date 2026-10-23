@@ -77,7 +77,7 @@ OSC overrides, following the pinned Ghostty RenderState source contract.
 - [x] Preserve Herdr OSC 52 copy and text/image clipboard flows. Keep current
       focused/active-pane clipboard restrictions and denial of remote reads.
 - [x] Preserve theming, text inspection and directory-based editor actions.
-- [ ] Test actual interaction and commit after verification.
+- [x] Test actual interaction and commit after verification (`5428ad7`).
 
 M04 implementation checkpoint: development-only opt-in SwiftPM frontend builds.
 Private GTK tests deliver real keyboard events through IM commit, encode TUI
@@ -92,7 +92,7 @@ acceptance gates; basic accessibility label/visible-text metadata is present.
 
 ## M05 — Acceptance, packaging and cutover
 
-- [ ] Keep VTE default until previous milestones pass; development opt-in only.
+- [x] Keep VTE default until previous milestones pass; development opt-in only.
 - [ ] Run affected acceptance tests and compare like-for-like VTE performance.
 - [ ] Check GPU/software paths, context loss, reconnect, hidden/multiple panes
       and shutdown, real wc-1, Herdr clipboard, hooks/notifications and editors.
@@ -100,6 +100,20 @@ acceptance gates; basic accessibility label/visible-text metadata is present.
 - [ ] Verify relocated bundles; then switch default and remove VTE dependencies.
 - [ ] Verify real hardware-GPU rendering on a capable host before final cutover.
 - [ ] Commit verified cutover. Release builds/install changes need approval.
+
+M05 acceptance checkpoint: real wc-1 was started with existing authorization.
+The actual GTK controller/backend/Swift PTY/Ghostty path passes a synthetic SSH
+shell round trip and orderly disconnect on a private display. Production was
+kept running. A fresh branch review identified six implemented-path defects;
+regressions cover GL initialization fallback, input returning to the live
+prompt, keypad identity, mixed-script shaping, initial size replies and false
+Kitty-image capability advertisement. All six fixes passed their regression
+checks: 22 engine tests, nine renderer tests, private GTK raster/OpenGL/error
+fallback tests, four frontend tests including actual wc-1, and the default VTE
+source typecheck. The corrected keypad test was also proven with a deliberate
+old-mapping mutation (failed), then restored and passed. Underline variants/colors and OSC12 cursor color remain
+minor renderer gaps. This checkpoint does not claim packaged, real Herdr,
+desktop IME/screen-reader, performance or hardware acceptance.
 
 ## Verification and deferrals
 
