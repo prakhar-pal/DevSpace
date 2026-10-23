@@ -8,22 +8,32 @@ Approved in conversation on 2026-10-23. Execute inline with
 Replace Linux VTE with libghostty-vt and a portable Swift/Skia renderer. Keep
 GTK as the application shell and keep the macOS implementation unchanged.
 Call Skia directly through Swift C++ interoperability: declaration-only import
-headers/type aliases are allowed, custom C++ wrapper implementations are not.
+headers/type aliases are allowed. Following the M01 compiler investigation,
+the user approved one minimal C++ context-conversion helper on 2026-10-23;
+all drawing and application behavior must remain Swift, not expand into a
+general C++ rendering bridge.
 GPU rendering is the normal path; report a Skia software fallback when hardware
 rendering is unavailable. Linux-only verification does not establish macOS
 renderer compatibility. Preserve usability before changing the default.
 
 ## M01 — Direct interoperability and GPU presentation
 
-- [ ] Pin Ghostty, compatible Zig, Skia and Skia dependency revisions.
-- [ ] Compile real Skia APIs from Swift, including ownership, text and GPU APIs.
+- [x] Pin Ghostty, compatible Zig, Skia and Skia dependency revisions.
+- [x] Compile real Skia APIs from Swift, including ownership, text and GPU APIs.
 - [ ] Draw using a GPU surface hosted by GTK; verify actual host hardware.
-- [ ] Exercise the same drawing through a raster surface, resize and recreation.
+- [x] Exercise the same drawing through a raster surface, resize and recreation.
 - [ ] Commit the independently verified milestone.
 
 Do not proceed to engine integration if direct imports, ownership or
 presentation cannot work reliably. Revisit the design rather than introducing
 a bridge silently. Do not claim software OpenGL proves hardware acceleration.
+
+2026-10-23 checkpoint: global Swift 6.4.1/Zig 0.17.0 built the pinned native
+dependencies. Swift ABI/ANSI tests, actual Skia raster pixel/font/ownership
+tests, and GTK OpenGL pixel/resize/widget-recreation tests pass. Both private
+X11 and actual Wayland expose llvmpipe; strict host hardware acceptance exits
+77 (unavailable), not success. M01 remains incomplete. A decision to move this
+external hardware check to the cutover gate is pending user direction.
 
 ## M02 — Ghostty terminal engine
 

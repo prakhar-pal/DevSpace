@@ -32,3 +32,13 @@ func textDrawingImports(_ canvas: SkCanvas) {
         canvas.drawSimpleText(text, 7, SkTextEncoding.kUTF8, 0, 16, font, paint)
     }
 }
+
+func fontFallbackImports() {
+    let managerOwner = SkFontMgr_New_FontConfig(nil, SkFontScanner_Make_FreeType())
+    guard let manager = managerOwner.get() else { return }
+    withExtendedLifetime(managerOwner) {
+        let face = "monospace".withCString { manager.matchFamilyStyle($0, SkFontStyle()) }
+        let font = SkFont(face, 16)
+        _ = font.getSize()
+    }
+}
