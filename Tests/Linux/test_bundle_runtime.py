@@ -1,4 +1,4 @@
-"""Check that a relocated Swift GTK/VTE bundle resolves its native runtime."""
+"""Check that a relocated Swift GTK terminal bundle resolves its native runtime."""
 
 import json
 import hashlib
@@ -12,7 +12,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 PREFIX = Path(os.environ.get("DEVSPACE_TEST_FRONTEND_PREFIX", ROOT / "build/linux-dev"))
 RUNTIME = Path(os.environ.get("DEVSPACE_TEST_SWIFT_RUNTIME", "/nonexistent/swift-runtime"))
-RENDERER = os.environ.get("DEVSPACE_TEST_TERMINAL_RENDERER", "vte")
+RENDERER = os.environ.get("DEVSPACE_TEST_TERMINAL_RENDERER", "ghostty")
 NOTICES = os.environ.get("DEVSPACE_TEST_NATIVE_NOTICES")
 
 

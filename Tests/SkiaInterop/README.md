@@ -1,7 +1,7 @@
 # Direct Swift/Skia interoperability gate (M01)
 
-These isolated acceptance executables do not change the application's VTE
-implementation or SwiftPM targets. Compile-only and runtime checks are separate:
+These isolated acceptance executables exercise the Linux application's default
+libghostty/Skia dependencies. Compile-only and runtime checks are separate:
 successful object compilation does **not** prove hardware acceleration.
 
 ## Reproduce
@@ -56,9 +56,9 @@ GDK_BACKEND=x11 xvfb-run -a bash scripts/check-skia-runtime.sh --gpu
 The Skia build uses installed Clang, GN and Ninja, plus system Fontconfig,
 FreeType, HarfBuzz and ICU. GTK's OpenGL context is EGL-backed: the Skia build
 must use `skia_use_egl=true`, not its default GLX loader. The build script is
-an optimized, reduced-dependency **feasibility configuration**, not a shipping
-dependency policy. PartitionAlloc, unrelated image codecs and tools are not
-enabled in this experiment. No compiler is downloaded or installed.
+an optimized, terminal-only configuration. PartitionAlloc, unrelated image
+codecs, PDF/SVG/animation and tools are disabled. Image clipboard decoding is
+handled by GTK. No compiler is downloaded or installed.
 
 Raster acceptance verifies literal pixel colors, real system-font glyph output,
 smart-pointer ownership transitions and 64 differently sized surface lifecycles.
@@ -121,7 +121,8 @@ M03 adds actual contextual terminal shaping/font fallback tests and M04 adds a
 development-only GTK frontend with automatic raster fallback. See
 `Tests/SkiaRenderer/README.md`, `Tests/GhosttyGTK/README.md` and the current plan.
 The primitive M01 glyph sample alone does not establish complex-script shaping.
-VTE remains the default; production cutover is not complete.
+The user selected libghostty/Skia as the Linux default on 2026-10-26. VTE remains
+available only through an explicit fallback selection.
 
 At initial execution, GN, Ninja and Zig were unavailable on PATH, and the
 filesystem had approximately 2 GB free. Those tools are now installed, and the

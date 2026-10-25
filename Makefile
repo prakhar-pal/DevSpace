@@ -23,9 +23,10 @@ APP_INSTALL_LOCATION ?= /Applications
 .PHONY: bootstrap build-dev build test run clean install help
 
 ifeq ($(shell uname -s),Linux)
+export DEVSPACE_LINUX_TERMINAL ?= ghostty
 LINUX_DEV_PREFIX ?= build/linux-dev
 LINUX_DEV_BUNDLE ?= build/linux-dev-bundle
-LINUX_SWIFT_SCRATCH ?= .tmp/swift-linux-app
+LINUX_SWIFT_SCRATCH ?= $(if $(filter vte,$(DEVSPACE_LINUX_TERMINAL)),.tmp/swift-linux-app,.tmp/ghostty-skia/app)
 LINUX_GHOSTTY_SWIFT_SCRATCH ?= .tmp/ghostty-skia/app
 LINUX_GHOSTTY_DEV_PREFIX ?= build/linux-ghostty-dev
 LINUX_GHOSTTY_DEV_BUNDLE ?= build/linux-ghostty-dev-bundle
@@ -43,6 +44,16 @@ LINUX_INSTALL_PREFIX ?= $(HOME)/.local
 LINUX_INSTALL_BUNDLE ?=
 SWIFT ?= swift
 SWIFTC ?= swiftc
+
+# Each bundle receives an inventory generated from the native archives used
+# by this renderer. Explicit VTE fallback bundles need no static native notices.
+define linux-native-notices
+notice_args=(); \
+if [ "$(DEVSPACE_LINUX_TERMINAL)" = ghostty ]; then \
+  python3 scripts/collect-linux-native-notices.py --fetch-missing --output "$$work/notices"; \
+  notice_args=(--third-party-notices "$$work/notices"); \
+fi
+endef
 
 .PHONY: linux-build-dev linux-ghostty-build-dev linux-ghostty-bundle-dev linux-ghostty-run linux-bundle-dev linux-bundle linux-run linux-package linux-install linux-test-core linux-test-ghostty linux-test-skia linux-test-protocol linux-test-gtk linux-test
 
@@ -66,9 +77,10 @@ linux-bundle:
 	mkdir -p "$$work/prefix/bin"; \
 	install -m 755 "$(LINUX_RELEASE_SCRATCH)/release/DevSpaceLinuxApp" "$$work/prefix/bin/DevSpaceLinuxApp"; \
 	install -m 755 "$(LINUX_RELEASE_SCRATCH)/release/DevSpaceLinuxBackend" "$$work/prefix/bin/DevSpaceLinuxBackend"; \
+	$(linux-native-notices); \
 	python3 scripts/assemble-linux.py --frontend "$$work/prefix" --backend "$$work/prefix/bin/DevSpaceLinuxBackend" \
 	  --swift-runtime "$(LINUX_SWIFT_RUNTIME)" --swift-license "$(LINUX_SWIFT_LICENSE)" --icu-license "$(LINUX_ICU_LICENSE)" \
-	  --channel production --output "$(LINUX_RELEASE_BUNDLE)" --replace
+	  "$${notice_args[@]}" --channel production --output "$(LINUX_RELEASE_BUNDLE)" --replace
 
 # An explicit bundle skips compilation. Otherwise build a fresh release in an
 # isolated staging directory; installation itself refuses a running destination.
@@ -91,8 +103,9 @@ linux-install:
 	  mkdir -p "$$work/prefix/bin"; \
 	  install -m 755 "$(LINUX_RELEASE_SCRATCH)/release/DevSpaceLinuxApp" "$$work/prefix/bin/DevSpaceLinuxApp"; \
 	  install -m 755 "$(LINUX_RELEASE_SCRATCH)/release/DevSpaceLinuxBackend" "$$work/prefix/bin/DevSpaceLinuxBackend"; \
+	  $(linux-native-notices); \
 	  python3 scripts/assemble-linux.py --frontend "$$work/prefix" --backend "$$work/prefix/bin/DevSpaceLinuxBackend" \
-	    --swift-runtime "$(LINUX_SWIFT_RUNTIME)" --swift-license "$(LINUX_SWIFT_LICENSE)" --icu-license "$(LINUX_ICU_LICENSE)" --channel production --output "$$work/bundle"; \
+	    --swift-runtime "$(LINUX_SWIFT_RUNTIME)" --swift-license "$(LINUX_SWIFT_LICENSE)" --icu-license "$(LINUX_ICU_LICENSE)" "$${notice_args[@]}" --channel production --output "$$work/bundle"; \
 	  python3 scripts/install-linux.py --bundle "$$work/bundle" --prefix "$(LINUX_INSTALL_PREFIX)"; \
 	fi
 
@@ -103,9 +116,9 @@ linux-build-dev:
 	install -m 755 "$(LINUX_SWIFT_SCRATCH)/debug/DevSpaceLinuxApp" "$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxApp"
 	install -m 755 "$(LINUX_SWIFT_SCRATCH)/debug/DevSpaceLinuxBackend" "$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxBackend"
 
-# Experimental renderer: separate debug artifacts, VTE remains the default.
+# Compatibility aliases retaining the separate migration artifact paths.
 linux-ghostty-build-dev:
-	DEVSPACE_LINUX_TERMINAL=ghostty $(MAKE) linux-build-dev \
+	$(MAKE) linux-build-dev DEVSPACE_LINUX_TERMINAL=ghostty \
 		LINUX_SWIFT_SCRATCH="$(LINUX_GHOSTTY_SWIFT_SCRATCH)" LINUX_DEV_PREFIX="$(LINUX_GHOSTTY_DEV_PREFIX)"
 
 linux-ghostty-run: linux-ghostty-build-dev
@@ -125,7 +138,11 @@ linux-ghostty-bundle-dev: linux-ghostty-build-dev
 	  --channel development --output "$(LINUX_GHOSTTY_DEV_BUNDLE)" --replace
 
 linux-bundle-dev: linux-build-dev
-	python3 scripts/assemble-linux.py --frontend "$(LINUX_DEV_PREFIX)" --backend "$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxBackend" --swift-runtime "$(LINUX_SWIFT_RUNTIME)" --swift-license "$(LINUX_SWIFT_LICENSE)" --icu-license "$(LINUX_ICU_LICENSE)" --channel development --output "$(LINUX_DEV_BUNDLE)" --replace
+	@set -eu; mkdir -p .tmp; \
+	work=$$(mktemp -d .tmp/linux-dev-bundle.XXXXXX); \
+	trap 'rm -rf "$$work"' EXIT; \
+	$(linux-native-notices); \
+	python3 scripts/assemble-linux.py --frontend "$(LINUX_DEV_PREFIX)" --backend "$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxBackend" --swift-runtime "$(LINUX_SWIFT_RUNTIME)" --swift-license "$(LINUX_SWIFT_LICENSE)" --icu-license "$(LINUX_ICU_LICENSE)" "$${notice_args[@]}" --channel development --output "$(LINUX_DEV_BUNDLE)" --replace
 
 linux-run: linux-bundle-dev
 	"$(LINUX_DEV_BUNDLE)/bin/devspace-dev"
@@ -150,8 +167,9 @@ linux-package:
 	mkdir -p "$$work/prefix/bin"; \
 	install -m 755 "$(LINUX_RELEASE_SCRATCH)/release/DevSpaceLinuxApp" "$$work/prefix/bin/DevSpaceLinuxApp"; \
 	install -m 755 "$(LINUX_RELEASE_SCRATCH)/release/DevSpaceLinuxBackend" "$$work/prefix/bin/DevSpaceLinuxBackend"; \
+	$(linux-native-notices); \
 	python3 scripts/assemble-linux.py --frontend "$$work/prefix" --backend "$$work/prefix/bin/DevSpaceLinuxBackend" \
-		--swift-runtime "$(LINUX_SWIFT_RUNTIME)" --swift-license "$(LINUX_SWIFT_LICENSE)" --icu-license "$(LINUX_ICU_LICENSE)" --channel production --output "$$work/bundle"; \
+		--swift-runtime "$(LINUX_SWIFT_RUNTIME)" --swift-license "$(LINUX_SWIFT_LICENSE)" --icu-license "$(LINUX_ICU_LICENSE)" "$${notice_args[@]}" --channel production --output "$$work/bundle"; \
 	python3 scripts/package-linux.py --bundle "$$work/bundle" --copyright-file "$(LINUX_PACKAGE_COPYRIGHT)" \
 		--swift-license "$(LINUX_SWIFT_LICENSE)" --maintainer "$(LINUX_PACKAGE_MAINTAINER)" \
 		--output "$(LINUX_PACKAGE_OUTPUT)"
@@ -168,15 +186,28 @@ linux-test-skia:
 linux-test-protocol:
 	DEVSPACE_SWIFTC="$(SWIFTC)" python3 -B -m unittest Tests.Linux.test_linux_backend_client -v
 
+ifeq ($(DEVSPACE_LINUX_TERMINAL),ghostty)
+linux-test-gtk:
+	GTK_A11Y=test GTK_IM_MODULE=simple GDK_BACKEND=x11 DEVSPACE_PRIVATE_KEY_TEST=1 \
+	dbus-run-session -- xvfb-run -a $(SWIFT) test --scratch-path "$(LINUX_SWIFT_SCRATCH)" \
+	--filter 'AccessibilityTests|AccessibilityBusTests|HerdrClipboardTests|TerminalPaneTests'
+else
 linux-test-gtk:
 	env -u WAYLAND_DISPLAY GDK_BACKEND=x11 DEVSPACE_SWIFTC="$(SWIFTC)" \
 	dbus-run-session -- python3 -B -m unittest Tests.Linux.test_linux_workspace_window Tests.Linux.test_linux_gtk_app -v
+endif
 
-linux-test: linux-build-dev
+linux-test: linux-bundle-dev
 	DEVSPACE_TEST_BACKEND="$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxBackend" \
 	DEVSPACE_TEST_FRONTEND_PREFIX="$(LINUX_DEV_PREFIX)" \
 	DEVSPACE_TEST_SWIFT_RUNTIME="$(LINUX_SWIFT_RUNTIME)" \
+	DEVSPACE_TEST_TERMINAL_RENDERER="$(DEVSPACE_LINUX_TERMINAL)" \
+	DEVSPACE_TEST_NATIVE_NOTICES="$(if $(filter ghostty,$(DEVSPACE_LINUX_TERMINAL)),$(abspath $(LINUX_DEV_BUNDLE))/share/doc/devspace/third-party)" \
 	DEVSPACE_SWIFTC="$(SWIFTC)" dbus-run-session -- python3 -B -m unittest discover -s Tests/Linux -v
+
+ifeq ($(DEVSPACE_LINUX_TERMINAL),ghostty)
+linux-test: linux-test-gtk
+endif
 
 endif
 
@@ -188,21 +219,31 @@ help:
 	@echo "  make run        - build-dev and launch the app"
 	@echo "  make install    - release build + install ($(if $(filter Linux,$(shell uname -s)),default ~/.local; LINUX_INSTALL_PREFIX overrides,default /Applications; APP_INSTALL_LOCATION overrides))"
 	@echo "  make clean      - remove build output"
-	@echo "  make linux-build-dev     - build the Swift GTK/VTE frontend and backend"
+	@echo "  make linux-build-dev     - build the Swift GTK/libghostty/Skia frontend and backend"
 	@echo "  make linux-bundle-dev    - assemble a relocatable development bundle"
-	@echo "  make linux-ghostty-bundle-dev - assemble the experimental renderer with pinned native notices"
+	@echo "  make linux-ghostty-bundle-dev - compatibility alias using the migration artifact path"
 	@echo "  make linux-bundle        - assemble a relocatable production bundle (same as make build on Linux)"
 	@echo "  make linux-run           - build, bundle, and launch DevSpaceDev on Linux"
 	@echo "  make linux-package       - build a production Ubuntu .deb (requires copyright and maintainer metadata)"
 	@echo "  make linux-test-core     - run the Swift Core XCTest target"
-	@echo "  make linux-test-ghostty  - test the experimental Swift libghostty-vt engine"
+	@echo "  make linux-test-ghostty  - test the Swift libghostty-vt engine"
 	@echo "  make linux-test-skia     - test the portable Swift/Skia renderer"
 	@echo "  make linux-test-protocol - exercise the Swift backend protocol client"
-	@echo "  make linux-test-gtk      - test the GTK/VTE window and terminal lifecycle"
+	@echo "  make linux-test-gtk      - test GTK terminal interaction and PTY lifecycle"
 
 bootstrap:
+ifeq ($(shell uname -s),Linux)
+	@echo "Install the global Swift/native dependencies and build the pinned libraries; see docs/linux-development.md and Tests/SkiaInterop/README.md."
+else
 	@echo "Uses the Swift toolchain bundled with Xcode — nothing to install."
+endif
 
+ifeq ($(shell uname -s),Linux)
+build-dev: linux-bundle-dev
+run: linux-run
+test:
+	$(SWIFT) test --scratch-path "$(LINUX_SWIFT_SCRATCH)"
+else
 build-dev:
 	swift build --product DevSpaceApp
 	bash scripts/assemble-app.sh debug "DevSpaceDev" DevSpaceDev "$(LOG_PATH)"
@@ -223,6 +264,7 @@ run: build-dev
 	@pkill -f "$(CURDIR)/$(APP_DEV)/Contents/MacOS/DevSpace" 2>/dev/null || true
 	@sleep 0.3
 	open "$(APP_DEV)"
+endif
 
 ifneq ($(shell uname -s),Linux)
 install: build

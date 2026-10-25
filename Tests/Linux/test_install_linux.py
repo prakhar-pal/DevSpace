@@ -158,7 +158,8 @@ class InstallLinuxTests(unittest.TestCase):
                     f"LINUX_RELEASE_SCRATCH={self.directory / 'release-cache'}",
                     f"LINUX_RELEASE_BUNDLE={output}", f"LINUX_SWIFT_RUNTIME={self.runtime}",
                     f"LINUX_INSTALL_PREFIX={self.prefix}"], cwd=project,
-                    env=dict(os.environ, PATH=f"{self.directory}:{os.environ['PATH']}"), capture_output=True, text=True)
+                    env=dict(os.environ, DEVSPACE_LINUX_TERMINAL="vte",
+                             PATH=f"{self.directory}:{os.environ['PATH']}"), capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(json.loads((output / ".devspace-bundle.json").read_text())["channel"], "production")
                 self.assertTrue((output / "bin/devspace").is_file())
@@ -179,7 +180,7 @@ class InstallLinuxTests(unittest.TestCase):
         result = subprocess.run(["make", "install", f"SWIFT={compiler}",
             f"LINUX_RELEASE_SCRATCH={self.directory / 'release-cache'}",
             f"LINUX_SWIFT_RUNTIME={self.runtime}", f"LINUX_INSTALL_PREFIX={self.prefix}"],
-            cwd=project, capture_output=True, text=True)
+            cwd=project, env=dict(os.environ, DEVSPACE_LINUX_TERMINAL="vte"), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual([json.loads(line)[4] for line in calls.read_text().splitlines()],
                          ["DevSpaceLinuxApp", "DevSpaceLinuxBackend"])

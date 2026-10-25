@@ -23,5 +23,5 @@ not bidi paragraph layout. Shaped row caches retain at most 128 rows of at most
 512 cells; larger rows render without caching. All drawing is Swift; the sole
 C++ implementation remains the previously approved borrowed context upcast.
 
-VTE is still the app default. These tests do not establish live SSH, clipboard,
+The Swift wrapper/Skia renderer is the Linux default. These tests do not establish live SSH, clipboard,
 IME, accessibility, packaged artifacts or macOS renderer compatibility.

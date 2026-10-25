@@ -94,10 +94,10 @@ def collect(args):
             if hashlib.sha256(data).hexdigest() != digest:
                 raise ValueError(f"Notice checksum mismatch: {name}")
             preserve(name, data, url)
-        manifest = {"renderer": "ghostty-skia", "distribution": "development-only",
+        manifest = {"renderer": "ghostty-skia", "distribution": "inventory-only",
                     "ghostty_revision": GHOSTTY, "skia_revision": SKIA, "zig_version": "0.17.0",
                     "notices": inventory,
-                    "limitations": "Pinned experimental build inventory; not a shipping dependency-policy approval. System libraries retain distro notices."}
+                    "limitations": "Pinned native build inventory; not release authorization or a complete source distribution. System libraries retain distro notices."}
         artifacts = [args.ghostty_prefix / "lib/libghostty-vt.a", args.skia_source / "out/DevSpace/libskia.a",
                      args.skia_source / "out/DevSpace/libskcms.a"]
         manifest["native_artifacts"] = [{"file": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}

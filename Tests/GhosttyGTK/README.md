@@ -1,4 +1,4 @@
-# Experimental GTK adapter acceptance
+# GTK terminal adapter acceptance
 
 Build the native dependencies and run `make linux-test-skia` first. Then use
 the private-display commands in `docs/linux-development.md`. The Swift harness

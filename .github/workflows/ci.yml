@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   linux-build-test:
-    name: Build & test (Linux GTK/VTE)
+    name: Build & test (Linux VTE fallback)
     if: >-
       github.head_ref != 'release/main' &&
       !contains(github.event.head_commit.message, 'chore: release v')
@@ -19,6 +19,9 @@ jobs:
     container: swift:6.4.1-resolute
     timeout-minutes: 30
     env:
+      # Keep explicit fallback coverage while pinned Skia/Ghostty artifacts
+      # are not provisioned in this job. Native acceptance is verified locally.
+      DEVSPACE_LINUX_TERMINAL: vte
       GDK_BACKEND: x11
       GTK_A11Y: none
     steps:

@@ -34,7 +34,7 @@ make install     # release build + install to $APP_INSTALL_LOCATION (default /Ap
 make clean       # remove build output
 ```
 
-On Linux, `make install` builds and installs the Swift/GTK/VTE production
+On Linux, `make install` builds and installs the Swift/GTK/libghostty/Skia production
 bundle under `~/.local` (no sudo, no .deb). Override `LINUX_INSTALL_PREFIX`
 for an isolated verification prefix, or pass `LINUX_INSTALL_BUNDLE` to install
 an existing production bundle without rebuilding. The installer refuses a

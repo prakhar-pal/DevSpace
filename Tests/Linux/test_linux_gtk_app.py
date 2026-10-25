@@ -11,6 +11,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@unittest.skipUnless(os.environ.get("DEVSPACE_LINUX_TERMINAL", "ghostty") == "vte",
+                     "legacy VTE fixture; select DEVSPACE_LINUX_TERMINAL=vte for fallback coverage")
 class LinuxGtkAppTests(unittest.TestCase):
     def test_invalid_or_missing_channel_fails_before_gtk_or_backend_startup(self):
         compiler = os.environ.get("DEVSPACE_SWIFTC") or shutil.which("swiftc")

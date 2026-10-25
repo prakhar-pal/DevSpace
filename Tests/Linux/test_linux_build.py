@@ -71,8 +71,11 @@ class LinuxBuildTests(unittest.TestCase):
         self.zig.write_text("#!/bin/sh\ntouch zig-was-invoked\nexit 99\n")
         self.zig.chmod(0o755)
 
-    def run_make(self, target, *extra, fail_product=None):
+    def run_make(self, target, *extra, fail_product=None, renderer="vte"):
         environment = dict(os.environ, DEVSPACE_TEST_PRODUCTS=str(self.products))
+        environment.pop("DEVSPACE_LINUX_TERMINAL", None)
+        if renderer is not None:
+            environment["DEVSPACE_LINUX_TERMINAL"] = renderer
         if fail_product:
             environment["DEVSPACE_TEST_FAIL_PRODUCT"] = fail_product
         return subprocess.run(
@@ -80,6 +83,44 @@ class LinuxBuildTests(unittest.TestCase):
              f"LINUX_SWIFT_RUNTIME={self.runtime}", *extra],
             cwd=self.directory, env=environment, capture_output=True, text=True,
         )
+
+    def package_targets(self, renderer=None):
+        environment = dict(os.environ, CLANG_MODULE_CACHE_PATH=str(ROOT / ".tmp/ghostty-skia/app-module-cache"))
+        environment.pop("DEVSPACE_LINUX_TERMINAL", None)
+        if renderer is not None:
+            environment["DEVSPACE_LINUX_TERMINAL"] = renderer
+        result = subprocess.run([shutil.which("swift"), "package", "--cache-path",
+            str(ROOT / ".tmp/ghostty-skia/swift-cache"), "dump-package"],
+            cwd=ROOT, env=environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return {target["name"]: target for target in json.loads(result.stdout)["targets"]}
+
+    def test_default_package_graph_uses_ghostty_without_vte(self):
+        targets = self.package_targets()
+        dependencies = [dependency["byName"][0] for dependency in targets["DevSpaceLinuxApp"]["dependencies"]]
+        self.assertIn("DevSpaceGhosttyVT", dependencies)
+        self.assertIn("DevSpaceSkiaRenderer", dependencies)
+        self.assertNotIn("CVTE", targets)
+
+    def test_explicit_vte_package_graph_keeps_fallback(self):
+        targets = self.package_targets("vte")
+        dependencies = [dependency["byName"][0] for dependency in targets["DevSpaceLinuxApp"]["dependencies"]]
+        self.assertIn("CVTE", dependencies)
+        self.assertNotIn("DevSpaceSkiaRenderer", targets)
+
+    def test_default_dev_bundle_includes_native_notices(self):
+        collector = self.directory / "scripts/collect-linux-native-notices.py"
+        collector.write_text(
+            "import json,sys\nfrom pathlib import Path\n"
+            "output=Path(sys.argv[sys.argv.index('--output')+1]); output.mkdir()\n"
+            "(output/'manifest.json').write_text(json.dumps({'renderer':'ghostty-skia'}))\n"
+            "(output/'ghostty-LICENSE.txt').write_text('controlled native license fixture')\n"
+        )
+        result = self.run_make("build-dev", renderer=None)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        notices = self.directory / "build/linux-dev-bundle/share/doc/devspace/third-party"
+        self.assertTrue((notices / "manifest.json").is_file(), "default bundle must preserve native license inventory")
+        self.assertTrue((notices / "ghostty-LICENSE.txt").is_file())
 
     def test_linux_build_installs_swift_frontend_and_backend_without_zig(self):
         result = self.run_make("linux-build-dev")
@@ -172,6 +213,8 @@ class LinuxBuildTests(unittest.TestCase):
             self.assertTrue((bundle / "bin/DevSpaceDev").is_file())
             self.assertTrue((bundle / "bin/DevSpaceDevBackend").is_file())
 
+    @unittest.skipUnless(os.environ.get("DEVSPACE_LINUX_TERMINAL", "ghostty") == "vte",
+                         "legacy VTE typecheck; select the fallback explicitly")
     def test_linux_app_typechecks_against_system_gtk_and_vte_modules(self):
         compiler = os.environ.get("DEVSPACE_SWIFTC") or shutil.which("swiftc")
         self.assertIsNotNone(compiler, "Swift compiler must be installed")

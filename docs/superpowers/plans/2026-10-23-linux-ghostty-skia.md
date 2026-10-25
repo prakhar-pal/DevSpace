@@ -107,10 +107,13 @@ acceptance gates; basic accessibility label/visible-text metadata is present.
 - [ ] Complete actual IBus/Fcitx composition and manual assistive-technology checks.
 - [x] Add development runtime assembly, pinned native notices and architecture ADR.
 - [x] Verify relocated experimental development bundles.
-- [ ] Approve shipping dependency policy and update production install/package inventory.
-- [ ] After all acceptance gates pass, switch default and remove VTE dependencies.
+- [x] Select pinned static native libraries/system text+GL dependencies and update package inventory.
+- [x] Switch the Linux default to the wrapper, removing VTE from the default graph.
+      The user explicitly requested the switch with manual input/accessibility gaps recorded.
+      An explicit VTE fallback remains available; its dependencies are conditional.
 - [x] Verify accelerated GPU rendering on the actual host before final cutover.
-- [ ] Commit verified cutover. Release builds/install changes need approval.
+- [x] Commit verified default selection with explicit fallback retained.
+- [ ] Produce/install production artifacts when requested with release approval.
 
 M05 acceptance checkpoint: real wc-1 was started with existing authorization.
 The actual GTK controller/backend/Swift PTY/Ghostty path passes a synthetic SSH
@@ -173,6 +176,16 @@ earlier run timed out awaiting a notification; no production fix is claimed
 from the successful retry, and the helper result is now asserted explicitly.
 
 ## Verification and deferrals
+
+2026-10-26 default selection: the user requested libghostty wrapper as the
+Linux default. Normal SwiftPM/Make development and release assembly now select
+the Swift libghostty-vt/Skia graph, omit VTE unless explicitly requested, and
+preserve pinned native notices. The production-channel migration refusal is
+removed. No installed production app is replaced and no production build is
+performed by this change. The existing hosted Linux CI job explicitly tests
+the VTE fallback until it provisions the pinned native artifacts; default
+renderer compilation/runtime is verified locally, not claimed as hosted CI
+coverage. macOS remains unchanged.
 
 2026-10-26 hardware checkpoint: the actual desktop now reports accelerated
 VirGL backed by Mesa Intel UHD Graphics 630, OpenGL 4.3 (Mesa 26.0.8). Strict

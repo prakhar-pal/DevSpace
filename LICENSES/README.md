@@ -29,9 +29,9 @@ The custom DevSpace icons are GPL-3.0-or-later, as confirmed by their creator.
 Swift.org 6.4.1 toolchain. It must be reviewed again when bundled components
 change; it does not relicense third-party libraries.
 
-## Experimental Linux Ghostty/Skia renderer
+## Linux Ghostty/Skia renderer
 
-`make linux-ghostty-bundle-dev` collects a separate pinned notice tree and copies
+Normal Linux bundle targets collect a separate pinned notice tree and copy
 it into `share/doc/devspace/third-party`. The collector checks both source Git
 revisions and rejects tracked modifications. It records SHA-256 values for
 every copied notice and the three native archives. This is build provenance,
@@ -54,7 +54,10 @@ and Zig dependency cache already used for compilation. Copied native notices
 retain upstream terms; DevSpace's GPL-3.0-or-later declaration does not replace
 them. System GTK/GL/Fontconfig/FreeType/HarfBuzz libraries remain system-provided.
 
-The current native profile remains **experimental and development-only**.
-Before production cutover, review native compiler flags, exact linked inventory,
-source-distribution obligations and the Debian manifest together. The existing
-Debian manifest describes the default VTE package, not a Ghostty release.
+The selected native profile is optimized and terminal-only: OpenGL/EGL with
+system font/text libraries; unrelated codecs, PDF/SVG/animation and tools are
+disabled. Image clipboard decoding belongs to GTK. The Debian manifest records
+these static components and preserves their complete notices. Release builders
+must provide matching source/build inputs as required by the project license;
+the inventory alone does not establish a complete source distribution.
+Selecting this default does not authorize publishing or installing a release.

@@ -23,7 +23,7 @@ directory validation, terminal replies, resize/reflow, final output, disposal,
 scrollback/selection, keyboard modes and Kitty release events, mouse geometry,
 focus reports and native paste safety/bracketing.
 
-The root SwiftPM app still uses VTE. This standalone module is intentionally
-not added to its default dependency graph before the opt-in UI integration.
+The root Linux SwiftPM app uses this module and Swift/Skia by default.
+`DEVSPACE_LINUX_TERMINAL=vte` selects the compatibility fallback explicitly.
 Tests do not establish actual desktop input, clipboard, IME or notification
 behavior for the Ghostty frontend; those are later acceptance checks.

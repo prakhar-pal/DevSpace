@@ -3,11 +3,19 @@ Upstream-Name: DevSpace
 Upstream-Contact: prakhar-pal <prakharpalpfdr+github@gmail.com>
 Source: https://github.com/prakhar-pal/DevSpace
 Comment: This manifest describes the Linux binary package, including the
- bundled Swift.org 6.4.1 Ubuntu 26.04 runtime. GTK4, VTE, OpenSSH, util-linux,
+ bundled Swift.org 6.4.1 Ubuntu 26.04 runtime. GTK4, HarfBuzz, FreeType,
+ Fontconfig, OpenGL/EGL, OpenSSH, util-linux,
  and other declared system dependencies are not bundled; their packages
  provide their own copyright notices. DevPod is installed separately.
  The custom production/development ICNS artwork and extracted PNG icons
  are licensed by the DevSpace creator under GPL-3.0-or-later.
+ The Linux terminal executables statically link pinned libghostty-vt, Skia,
+ skcms and their native dependencies. Complete upstream notices and a
+ checksum/source inventory accompany the bundle under
+ usr/lib/devspace/share/doc/devspace/third-party and the package under
+ usr/share/doc/devspace/third-party. These components retain their own
+ license terms; DevSpace's GPL declaration does not replace those notices.
+ VTE is required only by an explicitly selected fallback build.
  Recheck this inventory when changing the toolchain or bundled components.
 
 Files: *

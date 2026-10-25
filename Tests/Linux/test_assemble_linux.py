@@ -18,6 +18,18 @@ PACKAGE_SCRIPT = ROOT / "scripts/package-linux.py"
 
 
 class AssembleLinuxTests(unittest.TestCase):
+    def test_package_dependencies_do_not_force_vte(self):
+        specification = importlib.util.spec_from_file_location("package_linux", PACKAGE_SCRIPT)
+        packager = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(packager)
+        prefix = self.directory / "dependency-prefix"
+        (prefix / "bin").mkdir(parents=True)
+        (prefix / "lib").mkdir()
+        result = packager.dependencies(prefix, self.directory)
+        self.assertNotIn("libvte", result)
+        for required in ("libgtk-4-1", "openssh-client", "util-linux"):
+            self.assertIn(required, result)
+
     def test_bundle_preserves_explicit_third_party_notices(self):
         notices = self.directory / "native-notices"
         notices.mkdir()
@@ -207,8 +219,9 @@ class AssembleLinuxTests(unittest.TestCase):
         self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(package), "Maintainer"], text=True).strip(),
                          maintainer)
         dependencies = subprocess.check_output(["dpkg-deb", "-f", str(package), "Depends"], text=True)
-        for dependency in ("libgtk-4-1", "libvte-2.91-gtk4-0", "openssh-client", "util-linux"):
+        for dependency in ("libgtk-4-1", "openssh-client", "util-linux"):
             self.assertIn(dependency, dependencies)
+        self.assertNotIn("libvte", dependencies)
         self.assertRegex(dependencies, r"libxml2[^,]* \(>= [^)]+\)")
 
         extracted = self.directory / "extracted"

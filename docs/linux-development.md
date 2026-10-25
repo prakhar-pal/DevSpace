@@ -1,47 +1,51 @@
 # Linux development (in progress)
 
 Linux is a small, native DevSpace GTK application. GTK4 owns the
-window/sidebar, and VTE is only the terminal renderer/input widget. DevSpace
+window/sidebar, and the Swift libghostty-vt wrapper plus Skia render the terminal. DevSpace
 application, backend protocol, and lifecycle logic remain Swift. macOS retains
 its SwiftUI/libghostty frontend. See the
 [Linux UI design](superpowers/specs/2026-10-13-devspace-owned-linux-ui-design.md)
 and [implementation plan](superpowers/plans/2026-10-13-devspace-owned-linux-ui.md).
-The architecture choice is recorded in [ADR 0002](adr/0002-linux-swift-gtk-vte.md).
+The current terminal architecture is recorded in [ADR 0003](adr/0003-portable-ghostty-swift-skia.md),
+which amends [ADR 0002](adr/0002-linux-swift-gtk-vte.md).
 The [remaining-feature plan](superpowers/plans/2026-10-15-remaining-linux-features.md)
 records milestone implementation and outstanding host/release acceptance.
 
-The experimental `feat/linux-libghostty-migration` branch adds a portable Swift
-libghostty-vt engine and Swift/Skia acceptance fixtures. VTE remains the default
-application renderer until the opt-in frontend and acceptance gates are complete.
+Linux uses the portable Swift libghostty-vt engine and Swift/Skia by default.
+The default SwiftPM graph does not depend on VTE. Set
+`DEVSPACE_LINUX_TERMINAL=vte` explicitly to build the compatibility fallback.
 After building the pinned native dependencies, run `make linux-test-ghostty` for
 the engine's native Swift XCTest suite; see [engine tests](../Tests/GhosttyVT/README.md)
 and [renderer dependency checks](../Tests/SkiaInterop/README.md).
 `make linux-test-skia` additionally verifies the portable Swift/Skia renderer's
 pixels, shaping, fallback fonts, cursors, selection and scaling; see
-[renderer tests](../Tests/SkiaRenderer/README.md). Hardware-GPU acceptance is
-deferred to a capable host and remains required before default cutover.
+[renderer tests](../Tests/SkiaRenderer/README.md). Hardware rendering passed on
+the current accelerated VirGL host; manual IBus/Fcitx and screen-reader checks
+remain unverified.
 
-To opt into the experimental frontend after building those dependencies:
+After building those pinned native dependencies with the global toolchains:
 
 ```sh
-make linux-ghostty-build-dev
-make linux-ghostty-run
+make build-dev
+make run
 ```
 
 These targets use `.tmp/ghostty-skia/app` for Swift build output and
-`build/linux-ghostty-dev` for debug executables. They use the global Swift
+`build/linux-dev` for debug executables and `build/linux-dev-bundle` for the
+relocatable development bundle. They use the global Swift
 installation. `SKIA_SOURCE` and `GHOSTTY_VT_PREFIX` override native dependency
-locations. The experimental frontend refuses the production channel; regular
-`make build-dev` still selects VTE. Do not distribute the feasibility Skia
-configuration or treat this opt-in as the completed default migration.
+locations. Both development and production identities support the wrapper.
+Release builds/installations still require approval. The older
+`linux-ghostty-build-dev`, `linux-ghostty-run` and `linux-ghostty-bundle-dev`
+targets retain their separate `build/linux-ghostty-*` paths as compatibility aliases.
 
-`make linux-ghostty-bundle-dev` additionally assembles
-`build/linux-ghostty-dev-bundle` with the selected global Swift runtime and a
-checksum inventory of pinned native archives/notices. It may fetch missing
-public license texts; it never installs a compiler, creates a production build,
-or installs over the running app. See `LICENSES/README.md` and ADR 0003.
+All normal bundle targets include the selected global Swift runtime and a
+checksum inventory of pinned native archives/notices. They may fetch missing
+public license texts. Development bundle assembly never installs a compiler,
+creates a production build or installs over the running app.
+See `LICENSES/README.md` and ADR 0003.
 
-The experimental frontend has a separate desktop clipboard acceptance test.
+The frontend has a separate desktop clipboard acceptance test.
 It replaces the clipboard with synthetic text and uses an external `xclip`
 process in both directions. For native Wayland, click the temporary window's
 Run clipboard check button to supply a real input event:
@@ -147,16 +151,22 @@ sustained SSH throughput, hardware GPU performance or a production benchmark.
 
 ## Dependencies
 
-On Ubuntu install GTK4/VTE headers and the native build tools:
+On Ubuntu install GTK4, font/text/OpenGL headers and native build tools:
 
 ```sh
-sudo apt-get install -y build-essential dpkg-dev pkg-config libgtk-4-dev \
-  libvte-2.91-gtk4-dev
+sudo apt-get install -y build-essential clang ninja-build dpkg-dev pkg-config \
+  libgtk-4-dev libfontconfig-dev libfreetype-dev libharfbuzz-dev libicu-dev \
+  libgl-dev libegl-dev libgles-dev
 ```
 
-The app links against the system GTK4 and VTE GTK4 runtime libraries. It also
-uses OpenSSH, `setsid` from `util-linux`, and the user's `devpod` CLI. The
-development bundle carries Swift runtime libraries, not GTK/VTE or DevPod.
+Install GN and globally available Zig 0.17.0 for the pinned native build, and
+use the global Swift toolchain; see `Tests/SkiaInterop/README.md`. Native
+libraries must be built before the default app; SwiftPM does not download a
+compiler or bootstrap Skia. The app links system GTK, HarfBuzz, FreeType,
+Fontconfig and OpenGL/EGL; libghostty-vt/Skia/skcms are static. It also uses
+OpenSSH, `setsid` from `util-linux`, and the user's `devpod` CLI. The bundle
+carries Swift runtime libraries and native notices, not those system libraries
+or DevPod. Only the explicit VTE fallback needs `libvte-2.91-gtk4-dev`.
 
 For the test suites, also install the shell and private-display tools:
 
@@ -259,7 +269,8 @@ python3 -B -m unittest Tests.Linux.test_install_linux Tests.Linux.test_assemble_
 ### Debian packaging
 
 The production package build uses the release SwiftPM configuration, embeds the
-Swift runtime and its license notice, and keeps GTK/VTE as system dependencies.
+Swift runtime and native license notices, and keeps GTK/font/text/OpenGL as
+system dependencies. VTE is included only when the fallback binary links it.
 `dpkg-shlibdeps` derives versioned system-library dependencies from both app
 executables and every bundled Swift library, including Foundation's XML and
 networking libraries. Packages built on Ubuntu 26.04 declare that host ABI;
@@ -311,7 +322,10 @@ Logging never uses the backend's protocol stdout.
 The Linux job in `.github/workflows/ci.yml` uses the official
 [`swift:6.4.1-resolute` image](https://www.swift.org/install/linux/ubuntu/26_04/)
 on the [Ubuntu 26.04 runner](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2604-Readme.md).
-It installs GTK/VTE headers and test tools (including Bash and Zsh), runs Core XCTest, the Swift protocol
+This job explicitly selects `DEVSPACE_LINUX_TERMINAL=vte` for fallback coverage;
+it does not provision the pinned Skia/Ghostty native archives or claim native
+default-renderer build coverage. Local native acceptance is recorded in the
+migration plan. It installs GTK/VTE headers and test tools (including Bash and Zsh), runs Core XCTest, the Swift protocol
 client, Linux integration and synthetic package assembly checks, then assembles a
 development bundle. GUI checks use private Xvfb displays with accessibility
 disabled for test processes. Real workspaces, physical clipboard/IME, and
@@ -331,7 +345,7 @@ macOS job remains in the same workflow.
 `DevSpaceLinuxBackend` continues to own DevPod commands, workspace state and
 actions, SSH masters, Claude hooks, notification routing, image uploads, and
 the private versioned protocol. The Swift GTK layer presents snapshots and
-maps validated terminal effects to VTE. Shared Swift `PTYSession` owns the
+maps validated terminal effects to the selected renderer. Shared Swift `PTYSession` owns the
 terminal child/PTY, forwarding output to VTE and VTE-encoded input to the child;
 bytes are never sent through the backend control pipe. Terminal identities include
 workspace, pane, and connection generation so delayed events cannot target a

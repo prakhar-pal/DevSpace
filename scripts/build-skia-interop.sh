@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build only the pinned experimental renderer dependency, not a DevSpace bundle.
+# Build only the pinned terminal renderer dependency, not a DevSpace bundle.
 set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 source_root=${SKIA_SOURCE:-"$repo_root/.tmp/ghostty-skia/skia"}
@@ -10,8 +10,8 @@ pkg-config --exists fontconfig freetype2 harfbuzz icu-uc
 bash "$repo_root/scripts/check-skia-interop.sh"
 cd -- "$source_root"
 
-# Optimized dependency, no debug symbols or unrelated codecs/tools: keep the
-# feasibility build bounded on disk. This is NOT a production configuration.
+# Optimized terminal-only dependency. Image paste/PNG decoding belongs to GTK;
+# PDF/SVG/animation/codecs and build tools are not used by this renderer.
 gn gen out/DevSpace --args="
     is_debug=false is_official_build=true
     cc=\"$compiler_c\" cxx=\"$compiler_cxx\" extra_cflags=[\"-g0\"]

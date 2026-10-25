@@ -30,7 +30,7 @@ class NativeNoticeTests(unittest.TestCase):
         result = self.collect()
         self.assertEqual(result.returncode, 0, result.stderr)
         manifest = json.loads((self.output / "manifest.json").read_text())
-        self.assertEqual(manifest["distribution"], "development-only")
+        self.assertEqual(manifest["distribution"], "inventory-only")
         self.assertEqual(len(manifest["native_artifacts"]), 3)
         for entry in manifest["notices"]:
             self.assertEqual(hashlib.sha256((self.output / entry["file"]).read_bytes()).hexdigest(), entry["sha256"])

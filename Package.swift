@@ -51,7 +51,11 @@ targets += [
     ),
 ]
 #elseif os(Linux)
-let ghosttyEnabled = ProcessInfo.processInfo.environment["DEVSPACE_LINUX_TERMINAL"] == "ghostty"
+let linuxTerminal = ProcessInfo.processInfo.environment["DEVSPACE_LINUX_TERMINAL"] ?? "ghostty"
+guard ["ghostty", "vte"].contains(linuxTerminal) else {
+    fatalError("DEVSPACE_LINUX_TERMINAL must be ghostty or vte")
+}
+let ghosttyEnabled = linuxTerminal == "ghostty"
 var linuxAppDependencies: [Target.Dependency] = ["DevSpaceCore", "CGTK"]
 var linuxAppSettings: [SwiftSetting] = []
 if ghosttyEnabled {
@@ -81,19 +85,17 @@ if ghosttyEnabled {
     ]
     linuxAppDependencies += ["DevSpaceGhosttyVT", "DevSpaceSkiaRenderer", "CGPU"]
     linuxAppSettings = skiaSettings + [.define("DEVSPACE_GHOSTTY")]
-} else { linuxAppDependencies.append("CVTE") }
+} else {
+    linuxAppDependencies.append("CVTE")
+    targets.append(.systemLibrary(name: "CVTE", path: "Sources/LinuxVTE", pkgConfig: "vte-2.91-gtk4",
+        providers: [.apt(["libvte-2.91-gtk4-dev"])]))
+}
 targets += [
     .systemLibrary(
         name: "CGTK",
         path: "Sources/LinuxGTK",
         pkgConfig: "gtk4",
         providers: [.apt(["libgtk-4-dev"])]
-    ),
-    .systemLibrary(
-        name: "CVTE",
-        path: "Sources/LinuxVTE",
-        pkgConfig: "vte-2.91-gtk4",
-        providers: [.apt(["libvte-2.91-gtk4-dev"])]
     ),
     .executableTarget(
         name: "DevSpaceLinuxApp",
@@ -102,7 +104,7 @@ targets += [
         swiftSettings: linuxAppSettings
     ),
     // Child process owned by the GTK frontend. Its stdin/stdout are reserved
-    // for the private control protocol; terminal bytes stay in VTE.
+    // for the private control protocol; terminal bytes stay in the frontend.
     .executableTarget(
         name: "DevSpaceLinuxBackend",
         dependencies: ["DevSpaceCore"],

@@ -14,6 +14,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@unittest.skipUnless(os.environ.get("DEVSPACE_LINUX_TERMINAL", "ghostty") == "vte",
+                     "legacy VTE fixture; select DEVSPACE_LINUX_TERMINAL=vte for fallback coverage")
 class LinuxWorkspaceWindowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

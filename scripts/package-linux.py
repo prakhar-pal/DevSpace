@@ -15,7 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "devspace"
 IDENTITY = "com.prakharp.devspace"
 COPYRIGHT_FORMAT = "https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/"
-DEPENDENCIES = ("libgtk-4-1", "libvte-2.91-gtk4-0", "openssh-client", "util-linux")
+# Renderer libraries come from the actual ELF dependency inventory. Keep only
+# shared host/tool requirements here, so a Ghostty bundle never requires VTE.
+DEPENDENCIES = ("libgtk-4-1", "openssh-client", "util-linux")
 
 
 def dependencies(prefix, work):
@@ -135,6 +137,9 @@ def main():
             notice = bundle / "share/doc/devspace" / name
             if notice.is_file():
                 shutil.copyfile(notice, documentation / name)
+        native_notices = bundle / "share/doc/devspace/third-party"
+        if native_notices.is_dir():
+            shutil.copytree(native_notices, documentation / "third-party")
 
         control = root / "DEBIAN/control"
         control.parent.mkdir()
@@ -142,7 +147,7 @@ def main():
             f"Package: {PACKAGE}\nVersion: {version}\nSection: devel\nPriority: optional\n"
             f"Architecture: {architecture}\nMaintainer: {args.maintainer.strip()}\n"
             f"Depends: {dependencies(prefix, work)}\nDescription: DevPod workspace manager\n"
-            " Native GTK application with an embedded VTE terminal.\n"
+            " Native GTK application with an embedded terminal.\n"
         )
 
         staged_package = work / output.name
