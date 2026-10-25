@@ -15,6 +15,11 @@ packages=(gtk4 harfbuzz)
 extra_flags=()
 case "$mode" in
     --test) ;;
+    --hardware-gpu)
+        test_source="$repo_root/Tests/GhosttyGTK/HardwareGPU.swift"
+        binary="$output/hardware-gpu"
+        extra_flags=(-parse-as-library)
+        ;;
     --input-methods)
         test_source="$repo_root/Tests/GhosttyGTK/InputMethods.swift"
         binary="$output/input-methods"
@@ -26,7 +31,7 @@ case "$mode" in
         packages+=(vte-2.91-gtk4)
         extra_flags=(-parse-as-library -I "$repo_root/Sources/LinuxVTE")
         ;;
-    *) printf 'Usage: test-ghostty-gtk.sh [--test|--input-methods|--benchmark]\n' >&2; exit 2 ;;
+    *) printf 'Usage: test-ghostty-gtk.sh [--test|--hardware-gpu|--input-methods|--benchmark]\n' >&2; exit 2 ;;
 esac
 common=(-D DEVSPACE_GHOSTTY -warnings-as-errors -cxx-interoperability-mode=default
     -Xcc -std=c++20 -Xcc -fapinotes-modules -Xcc -DNDEBUG -Xcc -DSK_R32_SHIFT=16

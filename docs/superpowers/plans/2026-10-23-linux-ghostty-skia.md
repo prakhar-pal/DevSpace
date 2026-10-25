@@ -109,7 +109,7 @@ acceptance gates; basic accessibility label/visible-text metadata is present.
 - [x] Verify relocated experimental development bundles.
 - [ ] Approve shipping dependency policy and update production install/package inventory.
 - [ ] After all acceptance gates pass, switch default and remove VTE dependencies.
-- [ ] Verify real hardware-GPU rendering on a capable host before final cutover.
+- [x] Verify accelerated GPU rendering on the actual host before final cutover.
 - [ ] Commit verified cutover. Release builds/install changes need approval.
 
 M05 acceptance checkpoint: real wc-1 was started with existing authorization.
@@ -173,6 +173,16 @@ earlier run timed out awaiting a notification; no production fix is claimed
 from the successful retry, and the helper result is now asserted explicitly.
 
 ## Verification and deferrals
+
+2026-10-26 hardware checkpoint: the actual desktop now reports accelerated
+VirGL backed by Mesa Intel UHD Graphics 630, OpenGL 4.3 (Mesa 26.0.8). Strict
+Wayland terminal-renderer acceptance passes glyph/pixel readback, resize, two
+widget lifecycles and Skia context disposal. A separate actual GTK terminal
+widget check passes automatic OpenGL selection with no software override,
+resize with frame acknowledgement, no GL errors and widget recreation. This
+clears the current-host hardware-rendering gate through a hardware-backed
+virtual GPU; it is not a direct GPU passthrough or hardware performance claim.
+No default renderer switch, production build or install was performed.
 
 Accessibility continuation: the GTK host now implements `GtkAccessibleText`
 in Swift on a native terminal-role widget. Queries expose owned visible text,

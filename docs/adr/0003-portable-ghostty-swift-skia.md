@@ -30,8 +30,10 @@ install over either running application. No Ghostty themes or application UI
 are bundled. Inline Kitty image drawing is deferred and its capability is
 disabled; existing clipboard-image uploads remain a host/backend function.
 
-Hardware verification, actual desktop IME/screen reader/Herdr acceptance,
-shipping dependency policy and release approval remain cutover gates. A private
-software-rendering benchmark and basic accessibility metadata do not establish
-GPU performance or screen-reader parity. See the migration plan and
+Hardware rendering was verified on 2026-10-26 through accelerated VirGL on the
+actual desktop. Herdr and cross-app clipboard acceptance also passed. Actual
+IBus/Fcitx and manual screen-reader acceptance, shipping dependency policy and
+release approval remain cutover gates. Native AT-SPI text/caret/selection
+queries pass; this does not establish manual screen-reader parity or hardware
+performance. See the migration plan and
 `docs/linux-development.md` for current evidence and remaining work.

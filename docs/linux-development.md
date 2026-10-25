@@ -123,8 +123,12 @@ GTK_A11Y=test GDK_BACKEND=x11 DEVSPACE_PRIVATE_KEY_TEST=1 \
 ```
 
 `-noreset` preserves the private keymap when the configuring client exits.
-Hardware rendering and remaining acceptance gates must pass before default
-cutover. Development bundle relocation has passed separately.
+Hardware rendering passed on 2026-10-26 through accelerated VirGL backed by
+Intel UHD Graphics 630. Strict terminal pixel/glyph readback and actual widget
+OpenGL selection, resize and recreation passed on the Wayland desktop. See
+`Tests/GhosttyGTK/README.md` for reproduction commands. Remaining acceptance
+gates still apply before default cutover. Development bundle relocation has
+passed separately.
 
 For an identical 80×24, monospace-14px, 4,000-line styled Unicode burst:
 

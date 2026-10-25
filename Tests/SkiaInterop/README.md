@@ -105,16 +105,23 @@ On the Ubuntu 26.04 host with global Swift 6.4.1 and Zig 0.17.0:
   pass over repeated surface lifecycles.
 - GTK/EGL pixel readback, resize, context disposal and widget recreation pass
   on a private X11 display using llvmpipe.
-- Strict actual-desktop Wayland hardware acceptance exits **77**, explicitly
-  unavailable: the host also supplies llvmpipe. This is not a hardware pass.
+- The initial actual-desktop Wayland hardware attempt exited **77** because
+  the host supplied llvmpipe; that historical result was not a hardware pass.
+- On 2026-10-26, strict Wayland terminal GPU acceptance passes with accelerated
+  VirGL backed by Intel UHD Graphics 630 (OpenGL 4.3, Mesa 26.0.8), including
+  pixel/glyph readback, resize, widget recreation and context disposal. The
+  actual GTK terminal adapter also selects OpenGL without a software override
+  and passes resize/recreation. This validates hardware-backed virtual 3D on
+  this host, not GPU passthrough or general hardware performance.
 
 The user approved moving hardware verification to the final M05 cutover gate
-because this host has no hardware renderer. M01's implementation gate is met.
+because the host then had no hardware renderer. That deferred rendering gate
+is now verified on the accelerated VirGL host. M01's implementation gate is met.
 M03 adds actual contextual terminal shaping/font fallback tests and M04 adds a
 development-only GTK frontend with automatic raster fallback. See
 `Tests/SkiaRenderer/README.md`, `Tests/GhosttyGTK/README.md` and the current plan.
 The primitive M01 glyph sample alone does not establish complex-script shaping.
-VTE remains the default; no hardware or production-cutover pass is claimed.
+VTE remains the default; production cutover is not complete.
 
 At initial execution, GN, Ninja and Zig were unavailable on PATH, and the
 filesystem had approximately 2 GB free. Those tools are now installed, and the
