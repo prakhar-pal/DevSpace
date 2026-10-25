@@ -2,9 +2,9 @@ import Foundation
 
 // Port of src-tauri/src/layout.rs — persisted sidebar preferences (order,
 // hidden set, friendly-name aliases, collapsed flag) stored as JSON at
-// ~/Library/Application Support/DevSpace/layout.json (same dir as the notify
-// token). The JSON keys match the Rust/TS schema so an existing file migrates.
-public struct Layout: Codable, Equatable {
+// the platform configuration directory (same dir as the notify token). The
+// JSON keys match the Rust/TS schema so an existing file migrates.
+public struct Layout: Codable, Equatable, Sendable {
     public var order: [String]
     public var hidden: [String]
     public var aliases: [String: String]
@@ -49,23 +49,19 @@ public struct Layout: Codable, Equatable {
 }
 
 public enum LayoutStore {
-    static func dir() -> URL? {
-        guard let home = ProcessInfo.processInfo.environment["HOME"] else { return nil }
-        return URL(fileURLWithPath: home)
-            .appendingPathComponent("Library/Application Support/DevSpace")
+    static func dir(paths: DevSpacePaths = .current) -> URL {
+        paths.configDirectory
     }
 
-    public static func load() -> Layout {
-        guard
-            let file = dir()?.appendingPathComponent("layout.json"),
-            let s = try? String(contentsOf: file, encoding: .utf8)
-        else { return Layout() }
+    public static func load(paths: DevSpacePaths = .current) -> Layout {
+        let file = dir(paths: paths).appendingPathComponent("layout.json")
+        guard let s = try? String(contentsOf: file, encoding: .utf8) else { return Layout() }
         return Layout.parse(s)
     }
 
     /// Best-effort write — a lost preference is non-fatal.
-    public static func save(_ layout: Layout) {
-        guard let d = dir() else { return }
+    public static func save(_ layout: Layout, paths: DevSpacePaths = .current) {
+        let d = dir(paths: paths)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         try? Layout.serialize(layout)
             .write(to: d.appendingPathComponent("layout.json"), atomically: true, encoding: .utf8)

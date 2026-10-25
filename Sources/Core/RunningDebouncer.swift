@@ -34,7 +34,10 @@ public struct RunningDebouncer {
     ) -> [String: Result<WorkspaceStatus, DevpodError>] {
         var out = statuses
         for (id, result) in statuses {
-            guard case let .success(status) = result else { continue }
+            guard case let .success(status) = result else {
+                pendingRunning.remove(id)
+                continue
+            }
             switch status.state {
             case "Running":
                 guard accepted[id] == "Stopped" else {

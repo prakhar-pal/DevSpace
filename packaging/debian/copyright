@@ -1,0 +1,101 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: DevSpace
+Upstream-Contact: prakhar-pal <prakharpalpfdr+github@gmail.com>
+Source: https://github.com/prakhar-pal/DevSpace
+Comment: This manifest describes the Linux binary package, including the
+ bundled Swift.org 6.4.1 Ubuntu 26.04 runtime. GTK4, HarfBuzz, FreeType,
+ Fontconfig, OpenGL/EGL, OpenSSH, util-linux,
+ and other declared system dependencies are not bundled; their packages
+ provide their own copyright notices. DevPod is installed separately.
+ The custom production/development ICNS artwork and extracted PNG icons
+ are licensed by the DevSpace creator under GPL-3.0-or-later.
+ The Linux terminal executables statically link pinned libghostty-vt, Skia,
+ skcms and their native dependencies. Complete upstream notices and a
+ checksum/source inventory accompany the bundle under
+ usr/lib/devspace/share/doc/devspace/third-party and the package under
+ usr/share/doc/devspace/third-party. These components retain their own
+ license terms; DevSpace's GPL declaration does not replace those notices.
+ VTE is required only by an explicitly selected fallback build.
+ Recheck this inventory when changing the toolchain or bundled components.
+
+Files: *
+Copyright: 2026 prakhar-pal <prakharpalpfdr+github@gmail.com>
+License: GPL-3.0-or-later
+Comment: DevSpace executables, launchers, desktop entries, documentation,
+ and custom app icons. Third-party runtime exceptions follow below.
+
+Files: usr/lib/devspace/lib/libswift*.so*
+ usr/lib/devspace/lib/libFoundation*.so*
+ usr/lib/devspace/lib/lib_InternalSwiftStaticMirror.so*
+ usr/lib/devspace/lib/libTesting.so*
+ usr/lib/devspace/lib/lib_Testing*.so*
+ usr/lib/devspace/lib/libXCTest.so*
+ usr/lib/devspace/lib/libBlocksRuntime.so*
+ usr/share/doc/devspace/swift-runtime-LICENSE.txt
+ usr/lib/devspace/share/doc/devspace/swift-runtime-LICENSE.txt
+Copyright: Apple Inc. and the Swift project authors
+License: Apache-2.0-with-Swift-runtime-exception
+Comment: Unmodified libraries from the Swift.org toolchain. Swift,
+ swift-foundation, swift-corelibs-foundation, swift-corelibs-xctest,
+ swift-testing, and BlocksRuntime retain their upstream license.
+ Release source: https://github.com/swiftlang/swift/tree/swift-6.4.1-RELEASE
+ https://github.com/swiftlang/swift-foundation/tree/swift-6.4.1-RELEASE
+ https://github.com/swiftlang/swift-corelibs-foundation/tree/swift-6.4.1-RELEASE
+ https://github.com/swiftlang/swift-corelibs-xctest/tree/swift-6.4.1-RELEASE
+ https://github.com/swiftlang/swift-testing/tree/swift-6.4.1-RELEASE
+ https://github.com/swiftlang/swift-corelibs-libdispatch/tree/swift-6.4.1-RELEASE/src/BlocksRuntime
+
+Files: usr/lib/devspace/lib/libdispatch.so*
+Copyright: Apple Inc. and libdispatch contributors
+License: Apache-2.0
+Comment: https://github.com/swiftlang/swift-corelibs-libdispatch/tree/swift-6.4.1-RELEASE
+
+Files: usr/lib/devspace/lib/lib_FoundationICU.so*
+ usr/share/doc/devspace/icu-LICENSE.txt
+ usr/lib/devspace/share/doc/devspace/icu-LICENSE.txt
+Copyright: Apple Inc. and the Swift project authors
+ Unicode, Inc.
+ International Business Machines Corporation and others
+ Additional contributors identified in icu-LICENSE.txt
+License: Apache-2.0-with-Swift-runtime-exception and ICU-notices
+Comment: Swift Foundation ICU wrapper plus ICU 76.1 and its data.
+ The complete upstream notice, including each third-party copyright and
+ license, is preserved in /usr/share/doc/devspace/icu-LICENSE.txt.
+ https://github.com/swiftlang/swift-foundation-icu/tree/swift-6.4.1-RELEASE
+ https://github.com/unicode-org/icu/tree/release-76-1
+
+License: GPL-3.0-or-later
+ This program is free software: you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the
+ Free Software Foundation, either version 3 of the License, or (at your
+ option) any later version.
+ .
+ This program is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ General Public License for more details.
+ .
+ The complete GPL version 3 is included in /usr/share/doc/devspace/LICENSE
+ and on Debian systems in /usr/share/common-licenses/GPL-3.
+
+License: Apache-2.0
+ The complete Apache License version 2.0 is included in
+ /usr/share/doc/devspace/swift-runtime-LICENSE.txt and on Debian systems
+ in /usr/share/common-licenses/Apache-2.0.
+
+License: Apache-2.0-with-Swift-runtime-exception
+ Apache License version 2.0 with the following Runtime Library Exception:
+ .
+ As an exception, if you use this Software to compile your source code and
+ portions of this Software are embedded into the binary product as a result,
+ you may redistribute such product without providing attribution as would
+ otherwise be required by Sections 4(a), 4(b) and 4(d) of the License.
+ .
+ The complete license and exception from the selected toolchain are
+ included in /usr/share/doc/devspace/swift-runtime-LICENSE.txt.
+
+License: ICU-notices
+ The complete unmodified ICU 76.1 license, copyright, and third-party data
+ notices are included in /usr/share/doc/devspace/icu-LICENSE.txt. These
+ include Unicode-3.0, the legacy ICU permission notice, and the additional
+ licenses reproduced in that file; the Swift license does not replace them.

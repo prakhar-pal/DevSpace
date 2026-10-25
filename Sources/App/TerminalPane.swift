@@ -37,7 +37,7 @@ struct TerminalClientFailure: Equatable {
 
 @MainActor
 final class TerminalPaneModel: ObservableObject, Identifiable {
-    static let restartRemoteShellCommand = "\u{3}\rreset; exec \"${SHELL:-/bin/sh}\" -i\r"
+    static let restartRemoteShellCommand = ShellIntegration.restartRemoteShellCommand
 
     let id: UUID
     let state: TerminalViewState

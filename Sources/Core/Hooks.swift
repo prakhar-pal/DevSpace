@@ -30,8 +30,27 @@ public enum Hooks {
         else { return false }
         return hooks.contains { h in
             guard let hd = h as? [String: Any], let c = hd["command"] as? String else { return false }
-            return c.contains("/notify") && c.contains("pod_id")
+            return isDevspaceCommand(c)
         }
+    }
+
+    private static func isDevspaceCommand(_ command: String) -> Bool {
+        // Recognize our resolver, including hooks installed before explicit
+        // markers, without deleting another tool's /notify command.
+        command.contains("__devspace_resolve_port") &&
+            command.contains("http://localhost:$port/notify") && command.contains("pod_id")
+    }
+
+    private static func preservingUnmanagedCommands(_ entry: Any) -> Any? {
+        guard isDevspaceEntry(entry), var object = entry as? [String: Any],
+              let commands = object["hooks"] as? [Any] else { return entry }
+        let unrelated = commands.filter { command in
+            guard let value = command as? [String: Any], let text = value["command"] as? String else { return true }
+            return !isDevspaceCommand(text)
+        }
+        guard !unrelated.isEmpty else { return nil }
+        object["hooks"] = unrelated
+        return object
     }
 
     static func devspaceHookEntry(matcher: String?, label: String, podID: String, token: String) -> [String: Any] {
@@ -49,12 +68,74 @@ public enum Hooks {
         var hooks = (root["hooks"] as? [String: Any]) ?? [:] // wrong-typed -> treat as missing
         for (key, matcher, label) in hookEvents {
             var arr = (hooks[key] as? [Any]) ?? [] // wrong-typed -> treat as missing
-            arr.removeAll { isDevspaceEntry($0) }
+            arr = arr.compactMap(preservingUnmanagedCommands)
             arr.append(devspaceHookEntry(matcher: matcher, label: label, podID: podID, token: token))
             hooks[key] = arr
         }
         root["hooks"] = hooks
         return root
+    }
+
+    /// Remove only entries previously injected by DevSpace. Returns nil when
+    /// there is nothing to remove so disconnecting never creates settings.json.
+    static func removingSettings(_ existing: [String: Any]) -> [String: Any]? {
+        guard var hooks = existing["hooks"] as? [String: Any] else { return nil }
+        var removed = false
+        for (event, value) in Array(hooks) {
+            guard let entries = value as? [Any] else { continue }
+            guard entries.contains(where: isDevspaceEntry) else { continue }
+            removed = true
+            let remaining = entries.compactMap(preservingUnmanagedCommands)
+            hooks[event] = remaining.isEmpty ? nil : remaining
+        }
+        guard removed else { return nil }
+        var root = existing
+        if hooks.isEmpty { root.removeValue(forKey: "hooks") }
+        else { root["hooks"] = hooks }
+        return root
+    }
+
+    /// Remove DevSpace's Claude hooks from a pod without disturbing other
+    /// tools' hooks or settings. Used when the app disconnects from a pod.
+    public static func remove(_ runner: CommandRunning, podID: String, preservingTunnelOnPort: UInt16? = nil) throws {
+        try Devpod.validateId(podID)
+        let probe = preservingTunnelOnPort.map {
+            "curl --noproxy '*' -fsS --max-time 1 -o /dev/null http://127.0.0.1:\($0)/ 2>/dev/null"
+        }
+        let settingsRead = "if [ -e \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\" ]; then cat \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\"; else printf '{}'; fi"
+        let readCommand = probe.map {
+            "if \($0); then printf '__DEVSPACE_OTHER_TUNNEL_ACTIVE__'; else \(settingsRead); fi"
+        } ?? settingsRead
+        let read = try runner.run([
+            "ssh", "--command",
+            readCommand,
+            "--start-services=false",
+            "--", podID,
+        ])
+        if read == "__DEVSPACE_OTHER_TUNNEL_ACTIVE__" { return }
+        guard let existing = try JSONSerialization.jsonObject(
+            with: Data(read.trimmingCharacters(in: .whitespacesAndNewlines).utf8)
+        ) as? [String: Any] else {
+            throw DevpodError("Claude settings must be a JSON object; existing settings left untouched")
+        }
+        guard let cleaned = removingSettings(existing) else { return }
+        let originalB64 = Data(read.utf8).base64EncodedString()
+        let serialized = try JSONSerialization.data(withJSONObject: cleaned)
+        let settingsB64 = serialized.base64EncodedString()
+        let cmd = "umask 077; CLAUDE_DIR=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\" "
+            + "&& mkdir -p \"$CLAUDE_DIR\" "
+            + "&& lock_dir=\"$CLAUDE_DIR/.devspace-settings.lock\" && mkdir \"$lock_dir\" "
+            + "&& trap 'rmdir -- \"$lock_dir\"' EXIT && trap 'exit 1' HUP INT TERM "
+            + (probe.map { "&& if \($0); then exit 0; fi " } ?? "")
+            + "&& settings_tmp=$(mktemp \"$CLAUDE_DIR/.devspace-settings-XXXXXX\") "
+            + "&& trap 'rm -f -- \"$settings_tmp\"; rmdir -- \"$lock_dir\"' EXIT "
+            + "&& echo \(settingsB64) | base64 -d > \"$settings_tmp\" "
+            + "&& chmod 600 \"$settings_tmp\" "
+            + "&& current_b64=$(if [ -e \"$CLAUDE_DIR/settings.json\" ]; then base64 < \"$CLAUDE_DIR/settings.json\"; else printf e30=; fi) "
+            + "&& current_b64=$(printf '%s' \"$current_b64\" | tr -d '\\n') "
+            + "&& [ \"$current_b64\" = '\(originalB64)' ] "
+            + "&& mv -f -- \"$settings_tmp\" \"$CLAUDE_DIR/settings.json\""
+        _ = try runner.run(["ssh", "--command", cmd, "--start-services=false", "--", podID])
     }
 
     /// The manual-trigger helper written to ~/.devspace-notify in the pod.
@@ -88,23 +169,37 @@ public enum Hooks {
         try Devpod.validateId(podID)
         let read = try runner.run([
             "ssh", "--command",
-            "cat \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\" 2>/dev/null || echo '{}'",
+            "if [ -e \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\" ]; then cat \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json\"; else printf '{}'; fi",
             "--start-services=false",
             "--", podID,
         ])
-        let existing = try? JSONSerialization.jsonObject(
+        guard let existing = try JSONSerialization.jsonObject(
             with: Data(read.trimmingCharacters(in: .whitespacesAndNewlines).utf8)
-        )
+        ) as? [String: Any] else {
+            throw DevpodError("Claude settings must be a JSON object; existing settings left untouched")
+        }
         let merged = mergeSettings(existing, podID: podID, token: token)
         let serialized = try JSONSerialization.data(withJSONObject: merged)
         let settingsB64 = serialized.base64EncodedString()
-        var cmd = "CLAUDE_DIR=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\" "
+        let originalB64 = Data(read.utf8).base64EncodedString()
+        var cmd = "umask 077; CLAUDE_DIR=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\" "
             + "&& mkdir -p \"$CLAUDE_DIR\" "
-            + "&& echo \(settingsB64) | base64 -d > \"$CLAUDE_DIR/settings.json\""
+            + "&& lock_dir=\"$CLAUDE_DIR/.devspace-settings.lock\" && mkdir \"$lock_dir\" "
+            + "&& trap 'rmdir -- \"$lock_dir\"' EXIT && trap 'exit 1' HUP INT TERM "
+            + "&& settings_tmp=$(mktemp \"$CLAUDE_DIR/.devspace-settings-XXXXXX\") "
+            + "&& trap 'rm -f -- \"$settings_tmp\"; rmdir -- \"$lock_dir\"' EXIT "
+            + "&& echo \(settingsB64) | base64 -d > \"$settings_tmp\" "
+            + "&& chmod 600 \"$settings_tmp\" "
+            + "&& current_b64=$(if [ -e \"$CLAUDE_DIR/settings.json\" ]; then base64 < \"$CLAUDE_DIR/settings.json\"; else printf e30=; fi) "
+            + "&& current_b64=$(printf '%s' \"$current_b64\" | tr -d '\\n') "
+            + "&& [ \"$current_b64\" = '\(originalB64)' ] "
+            + "&& mv -f -- \"$settings_tmp\" \"$CLAUDE_DIR/settings.json\""
         if installManualHelper {
             let helperB64 = base64Encode(Data(notifyHelperScript(podID: podID, token: token).utf8))
-            cmd += " && echo \(helperB64) | base64 -d > ~/.devspace-notify"
-            cmd += " && chmod +x ~/.devspace-notify"
+            cmd += " && helper_tmp=$(mktemp \"$HOME/.devspace-notify-XXXXXX\")"
+            cmd += " && trap 'rm -f -- \"$settings_tmp\" \"$helper_tmp\"; rmdir -- \"$lock_dir\"' EXIT"
+            cmd += " && echo \(helperB64) | base64 -d > \"$helper_tmp\""
+            cmd += " && chmod 700 \"$helper_tmp\" && mv -f -- \"$helper_tmp\" ~/.devspace-notify"
         }
         _ = try runner.run(["ssh", "--command", cmd, "--start-services=false", "--", podID])
     }

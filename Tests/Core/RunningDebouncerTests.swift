@@ -2,6 +2,15 @@ import XCTest
 @testable import DevSpaceCore
 
 final class RunningDebouncerTests: XCTestCase {
+    func testFailedFetchBreaksTheConsecutiveRunningStreak() {
+        var debouncer = RunningDebouncer()
+        _ = debouncer.filter(stopped("pod"))
+        XCTAssertNil(debouncer.filter(running("pod"))["pod"])
+        _ = debouncer.filter(["pod": .failure(DevpodError("provider unavailable"))])
+        XCTAssertNil(debouncer.filter(running("pod"))["pod"],
+                     "Running samples separated by an error are not consecutive")
+        XCTAssertEqual(state(debouncer.filter(running("pod")), "pod"), "Running")
+    }
     private func running(_ id: String) -> [String: Result<WorkspaceStatus, DevpodError>] {
         [id: .success(WorkspaceStatus(id: id, state: "Running"))]
     }

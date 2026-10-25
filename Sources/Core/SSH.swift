@@ -4,6 +4,12 @@ import Foundation
 // notify port constants. We connect through the `<id>.devpod` host alias DevPod
 // writes into ~/.ssh/config and carry the reverse notification tunnel via -R.
 public enum SSH {
+    public static func workspaceCommandArgs(podID: String, controlPath: String, command: String) throws -> [String] {
+        try Devpod.validateId(podID)
+        guard !controlPath.isEmpty else { throw DevpodError("workspace command requires an owned SSH master") }
+        return ["-S", controlPath, "-o", "ControlMaster=no", "-o", "ProxyCommand=/bin/false",
+            "-o", "BatchMode=yes", "\(podID).devpod", command]
+    }
     public enum BuildChannel: Equatable {
         case production
         case development
@@ -23,7 +29,18 @@ public enum SSH {
     /// DevSpaceDev must not bind the daily-driver app's listener: otherwise
     /// reverse-tunnel traffic reaches whichever bundle won port 17865.
     public static func ports(bundleIdentifier: String?) -> Ports {
-        switch buildChannel(bundleIdentifier: bundleIdentifier) {
+        ports(channel: buildChannel(bundleIdentifier: bundleIdentifier))
+    }
+
+    /// Resolve ports from the launcher-provided runtime identity. This is the
+    /// Linux path, where there is no application bundle from which to infer a
+    /// build channel.
+    public static func ports(identity: DevSpaceRuntimeIdentity) -> Ports {
+        ports(channel: identity.channel == .development ? .development : .production)
+    }
+
+    private static func ports(channel: BuildChannel) -> Ports {
+        switch channel {
         case .production:
             Ports(listenerPort: 17865, podForwardPort: PodPortRouting.productionPort)
         case .development:
@@ -201,7 +218,7 @@ public enum SSH {
     /// Resolve the effective DevPod ProxyCommand for the host alias. This is
     /// intentionally synchronous: callers run it off the main actor before
     /// constructing their SSH PTY.
-    public static func resolveDevpodProxyCommand(podID: String) -> String? {
+    public static func resolveDevpodProxyCommand(podID: String, runner: CommandRunning? = nil) -> String? {
         do {
             try Devpod.validateId(podID)
         } catch {
@@ -209,39 +226,15 @@ public enum SSH {
             return nil
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = ["-G", "\(podID).devpod"]
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-
+        let command = runner ?? DesktopCommandRunner(executable: "/usr/bin/ssh", superviseSSH: true)
+        let output: String
         do {
-            try process.run()
-            process.waitUntilExit()
+            output = try command.run(["-G", "\(podID).devpod"])
         } catch {
             Log.write("ssh-proxy: could not launch ssh -G for \(podID): \(error)")
             return nil
         }
 
-        let output = String(
-            data: stdout.fileHandleForReading.readDataToEndOfFile(),
-            encoding: .utf8
-        ) ?? ""
-        let errorOutput = String(
-            data: stderr.fileHandleForReading.readDataToEndOfFile(),
-            encoding: .utf8
-        ) ?? ""
-        guard process.terminationStatus == 0 else {
-            let reason = errorOutput
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .split(separator: "\n")
-                .first
-                .map(String.init) ?? "no stderr"
-            Log.write("ssh-proxy: ssh -G failed for \(podID) (exit \(process.terminationStatus)): \(reason)")
-            return nil
-        }
         guard let proxyCommand = devpodProxyCommand(effectiveConfig: output) else {
             Log.write("ssh-proxy: no valid DevPod ProxyCommand for \(podID)")
             return nil

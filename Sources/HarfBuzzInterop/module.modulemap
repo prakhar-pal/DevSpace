@@ -1,0 +1,5 @@
+module CHarfBuzz [system] {
+    header "HarfBuzzImports.h"
+    link "harfbuzz"
+    export *
+}

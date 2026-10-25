@@ -1,0 +1,356 @@
+import Foundation
+
+/// Control effects only; terminal bytes and PTYs remain owned by the frontend.
+public struct WorkspaceTerminalEffect: Codable, Equatable, Sendable {
+    public let kind: String
+    public let workspaceID: String
+    public let generation: UUID
+    public let paneID: UUID?
+    public let executable: String?
+    public let arguments: [String]
+    public let message: String?
+    public var retrying: Bool? = nil
+    public var handoffPending: Bool? = nil
+}
+
+/// Called on the controller event queue. An old master retains its lease until
+/// onStopped; a reload never starts its replacement before that notification.
+public final class WorkspaceTerminalController {
+    public enum Failure: Equatable {
+        case startup(SSHTransportSession.StartError)
+        case disruption(Int32)
+    }
+    public var onFirstOutput: ((String, UUID) -> Bool)?
+    public var onDisconnect: ((String, UUID) -> Void)?
+    public var beforeDisconnect: ((String, UUID, String, @escaping () -> Void) -> Void)?
+    public var onFocus: ((String) -> Void)?
+    public var onConnectionChange: (() -> Void)?
+    public var onFailure: ((String, Failure) -> Void)?
+    public var onLastPaneClosed: ((String) -> Void)?
+    private final class Connection {
+        let generation = UUID()
+        let transport: SSHTransportControlling
+        var panes: [UUID: String?] = [:]
+        var producedOutput: Set<UUID> = []
+        var hasProducedOutput = false
+        var integrationStarted = false
+        var stopping = false
+        var reconnect = false
+        var afterStop: [() -> Void] = []
+        var clientAttempts: [UUID: Int] = [:]
+        var clientRetryTokens: [UUID: UUID] = [:]
+        var initialPane: UUID?
+        var handoffPending = false
+        init(_ transport: SSHTransportControlling) { self.transport = transport }
+    }
+
+    private let identity: DevSpaceRuntimeIdentity
+    private let makeTransport: (String) -> SSHTransportControlling
+    private let emit: (WorkspaceTerminalEffect) -> Void
+    private let scheduler: SSHTransportScheduling
+    private var connections: [String: Connection] = [:]
+    private var shuttingDown = false
+
+    public init(identity: DevSpaceRuntimeIdentity,
+                makeTransport: @escaping (String) -> SSHTransportControlling,
+                emit: @escaping (WorkspaceTerminalEffect) -> Void,
+                scheduler: SSHTransportScheduling = MainQueueSSHTransportScheduler()) {
+        self.identity = identity
+        self.makeTransport = makeTransport
+        self.emit = emit
+        self.scheduler = scheduler
+    }
+
+    public var panes: [TerminalPaneDescriptor] {
+        connections.flatMap { workspace, connection in
+            connection.panes.keys.map { TerminalPaneDescriptor(id: $0, workspaceID: workspace) }
+        }.sorted { $0.id.uuidString < $1.id.uuidString }
+    }
+
+    public var hasOwnedTransports: Bool { !connections.isEmpty }
+    public var openedWorkspaces: Set<String> { Set(connections.keys) }
+
+    public var connectionStates: [String: String] {
+        connections.mapValues { connection in
+            connection.stopping ? "disconnecting" : (connection.panes.isEmpty || connection.handoffPending) ? "connecting" : "connected"
+        }
+    }
+
+    public func hasProducedOutput(_ workspace: String) -> Bool {
+        connections[workspace]?.hasProducedOutput == true
+    }
+
+    /// Only definitive stop/removal withdraws terminal intent. Unknown status
+    /// must not destroy a working shell; a stale queued reload must not reopen it.
+    public func reconcile(_ workspaces: [WorkspaceView]) {
+        let states = Dictionary(workspaces.map { ($0.id, $0.state) }, uniquingKeysWith: { _, last in last })
+        for workspace in Array(connections.keys) where states[workspace] == nil || states[workspace] == "Stopped" {
+            disconnect(workspace)
+        }
+    }
+
+    /// A cancelled installer may finish after a replacement shell produces its
+    /// first output. Retry only that current, live, not-yet-accepted generation.
+    public func retryIntegration(_ workspace: String) {
+        guard let connection = connections[workspace], !connection.stopping,
+              !connection.integrationStarted, !connection.producedOutput.isEmpty else { return }
+        connection.integrationStarted = onFirstOutput?(workspace, connection.generation) ?? true
+    }
+
+    @discardableResult
+    public func finishShellIntegration(workspace: String, generation: UUID, succeeded: Bool) -> Bool {
+        guard let connection = connections[workspace], connection.generation == generation,
+              !connection.stopping, connection.handoffPending,
+              let pane = connection.initialPane, connection.panes.keys.contains(pane) else { return false }
+        if WorkspaceController.terminalHandoffAction(integrationSucceeded: succeeded,
+            sshProducedOutput: connection.producedOutput.contains(pane)) == .restartRemoteShellThenReveal {
+            _ = injectText(workspace: workspace, generation: generation, pane: pane,
+                text: ShellIntegration.restartRemoteShellCommand)
+        }
+        connection.handoffPending = false
+        emit(WorkspaceTerminalEffect(kind: "terminal_ready", workspaceID: workspace, generation: generation,
+            paneID: pane, executable: nil, arguments: [], message: nil))
+        onConnectionChange?()
+        return true
+    }
+
+    public func controlPath(for workspace: String) -> String? {
+        guard let connection = connections[workspace], !connection.stopping,
+              connection.transport.state == .ready else { return nil }
+        return connection.transport.controlPath
+    }
+
+    public func imageTarget(workspace: String, generation: UUID, pane: UUID) -> String? {
+        guard let connection = connections[workspace], !connection.stopping,
+              connection.generation == generation, connection.transport.state == .ready,
+              connection.panes.keys.contains(pane), connection.producedOutput.contains(pane) else { return nil }
+        return connection.transport.controlPath
+    }
+    @discardableResult
+    public func injectText(workspace: String, generation: UUID, pane: UUID, text: String) -> Bool {
+        guard imageTarget(workspace: workspace, generation: generation, pane: pane) != nil else { return false }
+        emit(WorkspaceTerminalEffect(kind: "terminal_inject", workspaceID: workspace, generation: generation,
+            paneID: pane, executable: nil, arguments: [], message: text))
+        return true
+    }
+
+    public func connect(_ workspace: String) throws {
+        try Devpod.validateId(workspace)
+        guard !shuttingDown else { throw DevpodError("terminal controller is shutting down") }
+        if let connection = connections[workspace] {
+            if connection.stopping { connection.reconnect = true }
+            else if connection.transport.state == .ready {
+                launchPane(workspace, connection)
+            }
+            return
+        }
+        let connection = Connection(makeTransport(workspace))
+        connections[workspace] = connection
+        connection.transport.onReady = { [weak self, weak connection] in
+            guard let self, let connection, self.isCurrent(workspace, connection), !connection.stopping else { return }
+            self.launchPane(workspace, connection)
+        }
+        connection.transport.onStopped = { [weak self, weak connection] in
+            guard let self, let connection, self.isCurrent(workspace, connection) else { return }
+            // A readiness timeout also stops the transport, but reports its
+            // failure immediately after onStopped. Keep that connection until
+            // onStartError can publish the reason; only our own stop/reload
+            // path is complete at this callback.
+            guard connection.stopping else { return }
+            self.connections.removeValue(forKey: workspace)
+            for completion in connection.afterStop { completion() }
+            connection.afterStop.removeAll()
+            if connection.reconnect, !self.shuttingDown { try? self.connect(workspace) }
+            else { self.onConnectionChange?() }
+        }
+        connection.transport.onExit = { [weak self, weak connection] code in
+            guard let self, let connection, self.isCurrent(workspace, connection) else { return }
+            if !connection.stopping { self.onDisconnect?(workspace, connection.generation) }
+            self.closePanes(workspace, connection)
+            self.connections.removeValue(forKey: workspace)
+            self.effect("terminal_error", workspace, connection, message: "SSH master exited: \(code)")
+            if !connection.stopping {
+                self.onFailure?(workspace, connection.hasProducedOutput ? .disruption(code) : .startup(.exitedBeforeReady(code)))
+            }
+            self.onConnectionChange?()
+        }
+        connection.transport.onStartError = { [weak self, weak connection] error in
+            guard let self, let connection, self.isCurrent(workspace, connection) else { return }
+            self.effect("terminal_error", workspace, connection, message: "SSH connection failed: \(error)")
+            if connection.transport.state == .exited {
+                self.connections.removeValue(forKey: workspace)
+                if !connection.stopping { self.onFailure?(workspace, .startup(error)) }
+                self.onConnectionChange?()
+            }
+        }
+        onConnectionChange?()
+        connection.transport.start()
+    }
+
+    public func reconnect(_ workspace: String) throws {
+        try Devpod.validateId(workspace)
+        guard !shuttingDown else { throw DevpodError("terminal controller is shutting down") }
+        guard let connection = connections[workspace] else { try connect(workspace); return }
+        connection.reconnect = true
+        stop(workspace, connection)
+    }
+
+    public func disconnect(_ workspace: String) {
+        guard let connection = connections[workspace] else { return }
+        connection.reconnect = false
+        stop(workspace, connection)
+    }
+
+    public func disconnect(_ workspace: String, completion: @escaping () -> Void) {
+        guard let connection = connections[workspace] else { completion(); return }
+        connection.afterStop.append(completion)
+        disconnect(workspace)
+    }
+
+    public func shutdown() {
+        shuttingDown = true
+        for (workspace, connection) in connections {
+            connection.reconnect = false
+            stop(workspace, connection)
+        }
+    }
+
+    /// Stale terminal events cannot close or modify a replacement pane.
+    @discardableResult
+    public func report(workspace: String, generation: UUID, pane: UUID,
+                       kind: String, directory: String? = nil, exitCode: Int32 = 0, explicitClose: Bool = false) -> Bool {
+        guard let connection = connections[workspace], !connection.stopping,
+              connection.generation == generation, connection.panes.keys.contains(pane) else { return false }
+        switch kind {
+        case "terminal_focus": onFocus?(workspace)
+        case "terminal_output":
+            connection.clientAttempts[pane] = nil
+            connection.clientRetryTokens[pane] = nil
+            connection.producedOutput.insert(pane)
+            connection.hasProducedOutput = true
+            retryIntegration(workspace)
+        case "terminal_directory": connection.panes[pane] = .some(directory)
+        case "terminal_retry":
+            guard connection.clientAttempts[pane] == SSHRecoveryBudget.startupDelays.count,
+                  connection.clientRetryTokens[pane] == nil, connection.transport.state == .ready else { return false }
+            connection.clientAttempts[pane] = nil
+            launchPane(workspace, connection, paneID: pane)
+        case "terminal_exit", "terminal_launch_failed":
+            if kind == "terminal_exit", exitCode != 0, !explicitClose {
+                retryClient(workspace, connection, pane: pane, exitCode: exitCode)
+                return true
+            }
+            connection.clientAttempts[pane] = nil
+            connection.clientRetryTokens[pane] = nil
+            if kind == "terminal_launch_failed" {
+                effect("terminal_error", workspace, connection, message: "Terminal could not start")
+            }
+            connection.panes.removeValue(forKey: pane)
+            connection.producedOutput.remove(pane)
+            if kind == "terminal_exit" {
+                emit(WorkspaceTerminalEffect(kind: "terminal_close", workspaceID: workspace,
+                    generation: generation, paneID: pane, executable: nil, arguments: [], message: nil))
+            }
+            if connection.panes.isEmpty {
+                if !explicitClose && (kind == "terminal_launch_failed" || !connection.hasProducedOutput) {
+                    if kind == "terminal_exit" {
+                        effect("terminal_error", workspace, connection, message: "SSH shell exited before producing output")
+                    }
+                    // Startup failure is not a deliberate disconnect. Recovery
+                    // may begin only after this master's cleanup/lease release,
+                    // and must not race a subsequent explicit reload.
+                    connection.afterStop.append { [weak self, weak connection] in
+                        guard let self, let connection, !self.shuttingDown,
+                              !connection.reconnect, self.connections[workspace] == nil else { return }
+                        self.onFailure?(workspace, .startup(.launchFailed))
+                    }
+                } else { onLastPaneClosed?(workspace) }
+                disconnect(workspace)
+            }
+        default: return false
+        }
+        return true
+    }
+
+    private func isCurrent(_ workspace: String, _ connection: Connection) -> Bool {
+        connections[workspace] === connection
+    }
+
+    private func retryClient(_ workspace: String, _ connection: Connection, pane: UUID, exitCode: Int32) {
+        connection.producedOutput.remove(pane)
+        let attempts = connection.clientAttempts[pane] ?? 0
+        let retrying = attempts < SSHRecoveryBudget.startupDelays.count
+        if !retrying, connection.initialPane == pane {
+            _ = finishShellIntegration(workspace: workspace, generation: connection.generation, succeeded: false)
+        }
+        emit(WorkspaceTerminalEffect(kind: "terminal_client_failed", workspaceID: workspace,
+            generation: connection.generation, paneID: pane, executable: nil, arguments: [],
+            message: retrying ? "Reconnecting SSH terminal…" : "SSH terminal failed (exit \(exitCode)).", retrying: retrying))
+        guard retrying else { connection.clientRetryTokens[pane] = nil; return }
+        let token = UUID()
+        connection.clientAttempts[pane] = attempts + 1
+        connection.clientRetryTokens[pane] = token
+        scheduler.schedule(after: SSHRecoveryBudget.startupDelays[attempts]) { [weak self, weak connection] in
+            guard let self, let connection, self.isCurrent(workspace, connection), !connection.stopping,
+                  connection.transport.state == .ready, connection.panes.keys.contains(pane),
+                  connection.clientRetryTokens[pane] == token else { return }
+            connection.clientRetryTokens[pane] = nil
+            self.launchPane(workspace, connection, paneID: pane)
+        }
+    }
+
+    private func launchPane(_ workspace: String, _ connection: Connection, paneID: UUID = UUID()) {
+        let pane = paneID
+        connection.panes[pane] = .some(nil)
+        if connection.initialPane == nil {
+            connection.initialPane = pane
+            connection.handoffPending = onFirstOutput != nil
+            if connection.handoffPending {
+                let generation = connection.generation
+                scheduler.schedule(after: 10) { [weak self] in
+                    _ = self?.finishShellIntegration(workspace: workspace, generation: generation, succeeded: false)
+                }
+            }
+        }
+        emit(WorkspaceTerminalEffect(kind: "terminal_launch", workspaceID: workspace,
+            generation: connection.generation, paneID: pane, executable: "/usr/bin/ssh",
+            arguments: SSH.clientArgs(podID: workspace, proxyCommand: connection.transport.proxyCommand,
+                controlPath: connection.transport.controlPath,
+                bundleIdentifier: identity.channel.applicationIdentifier), message: nil,
+            handoffPending: connection.handoffPending && connection.initialPane == pane))
+    }
+
+    private func stop(_ workspace: String, _ connection: Connection) {
+        guard !connection.stopping else { return }
+        connection.stopping = true
+        onConnectionChange?()
+        onDisconnect?(workspace, connection.generation)
+        let finish = { [weak self, weak connection] in
+            guard let self, let connection, self.isCurrent(workspace, connection) else { return }
+            self.closePanes(workspace, connection)
+            connection.transport.stop()
+        }
+        if let beforeDisconnect {
+            beforeDisconnect(workspace, connection.generation, connection.transport.controlPath, finish)
+        } else {
+            finish()
+        }
+    }
+
+    private func closePanes(_ workspace: String, _ connection: Connection) {
+        let closing = Array(connection.panes.keys)
+        // Effect consumers publish snapshots synchronously. They must observe
+        // the closed state rather than resurrecting panes from an old snapshot.
+        connection.panes.removeAll()
+        connection.producedOutput.removeAll()
+        for pane in closing {
+            emit(WorkspaceTerminalEffect(kind: "terminal_close", workspaceID: workspace,
+                generation: connection.generation, paneID: pane, executable: nil, arguments: [], message: nil))
+        }
+    }
+
+    private func effect(_ kind: String, _ workspace: String, _ connection: Connection, message: String) {
+        emit(WorkspaceTerminalEffect(kind: kind, workspaceID: workspace,
+            generation: connection.generation, paneID: nil, executable: nil, arguments: [], message: message))
+    }
+}

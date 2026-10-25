@@ -251,7 +251,7 @@ final class AppModel: ObservableObject {
     private var seenDefinitive: Set<String> = []
     /// The active primary SSH resolution attempt for each pod. A completion
     /// may mount only if it still owns this generation.
-    private var sshConnectionGenerations: [String: UUID] = [:]
+    private let sshConnectionGenerations = WorkspaceConnectionGenerations()
     private struct SSHRecoverySnapshot {
         let tabCount: Int
         let activeIndex: Int
@@ -300,9 +300,9 @@ final class AppModel: ObservableObject {
     private var creationDiscoveryMissCount = 0
     private var creationLastMissRevision: UInt64?
     private var lastAppliedPollRevision: UInt64 = 0
-    private static let maxCreationDiscoveryMisses = 3
-    private static let sshStartupRetryDelays: [TimeInterval] = [0.5, 1.5]
-    private static let sshDisruptionRetryDelays: [TimeInterval] = [3, 5, 8, 13, 21]
+    private static let maxCreationDiscoveryMisses = WorkspaceCreationDiscovery.maximumMisses
+    private static let sshStartupRetryDelays = SSHRecoveryBudget.startupDelays
+    private static let sshDisruptionRetryDelays = SSHRecoveryBudget.disruptionDelays
     private static let sshClientRetryDelays: [TimeInterval] = [0.5, 1.5]
 
     enum TerminalHandoffAction: Equatable {
@@ -355,9 +355,13 @@ final class AppModel: ObservableObject {
         integrationSucceeded: Bool,
         sshProducedOutput: Bool
     ) -> TerminalHandoffAction {
-        integrationSucceeded && sshProducedOutput
-            ? .restartRemoteShellThenReveal
-            : .revealOriginal
+        switch WorkspaceController.terminalHandoffAction(
+            integrationSucceeded: integrationSucceeded,
+            sshProducedOutput: sshProducedOutput
+        ) {
+        case .revealOriginal: .revealOriginal
+        case .restartRemoteShellThenReveal: .restartRemoteShellThenReveal
+        }
     }
 
     nonisolated static func shouldConfirmSSH(forShellIntegrationSuccess succeeded: Bool) -> Bool {
@@ -694,37 +698,27 @@ final class AppModel: ObservableObject {
     /// get the "started" notification (released below) and a Connect card
     /// instead of an automatic session.
     private func reconcileLifecycle() {
-        let states = byID
-        // First DEFINITIVE sighting of a pod (launch, or created mid-session):
-        // if it's Running, a session is expected — that's the app's core UX.
-        for w in workspaces where w.state == "Running" || w.state == "Stopped" {
-            if seenDefinitive.insert(w.id).inserted, w.state == "Running" {
-                autoConnect.insert(w.id)
-            }
+        let plan = WorkspaceLifecycle.reconcile(
+            workspaces: workspaces,
+            seenDefinitive: seenDefinitive,
+            autoConnect: autoConnect,
+            opened: opened,
+            starting: starting,
+            shuttingDown: shuttingDown
+        )
+        let withdrawnIntent = autoConnect.subtracting(plan.autoConnect)
+        seenDefinitive = plan.seenDefinitive
+        autoConnect = plan.autoConnect
+        for id in withdrawnIntent { cancelSSHRecovery(id) }
+        for id in plan.connect { openSSHIfNeeded(id) }
+        for id in plan.disconnect {
+            invalidateSSHConnection(id)
+            closePane(id)
+            opened.remove(id)
         }
-        for w in workspaces where w.state == "Running" {
-            if autoConnect.contains(w.id) { openSSHIfNeeded(w.id) }
-        }
-        // Drop terminals once a pod is explicitly Stopped or gone (not on a
-        // transient Unknown/Loading blip) — and withdraw the standing intent:
-        // whoever starts it next (user via Start/Connect, or someone external)
-        // decides whether a session opens.
-        for w in workspaces where w.state == "Stopped" {
-            if !starting.contains(w.id) {
-                autoConnect.remove(w.id)
-                cancelSSHRecovery(w.id)
-            }
-        }
-        for id in opened {
-            let s = states[id]?.state
-            if s == "Stopped" || states[id] == nil {
-                invalidateSSHConnection(id)
-                closePane(id)
-                opened.remove(id)
-            }
-        }
-        for id in shuttingDown {
-            if states[id]?.state == "Stopped" { closePane(id); shuttingDown.remove(id) }
+        for id in plan.stopConfirmed {
+            closePane(id)
+            shuttingDown.remove(id)
         }
         // Externally started pods (pending "started", no session planned) get
         // their notification now — with no SSH there is no later confirm, and
@@ -866,11 +860,11 @@ final class AppModel: ObservableObject {
         before: Set<String>,
         after: Set<String>
     ) -> String? {
-        if let explicitID {
-            return after.contains(explicitID) ? explicitID : nil
-        }
-        let created = after.subtracting(before)
-        return created.count == 1 ? created.first : nil
+        WorkspaceController.createdWorkspaceID(
+            explicitID: explicitID,
+            before: before,
+            after: after
+        )
     }
 
     private func creationProcessExited(_ exitCode: Int32, generation: UUID) {
@@ -1468,14 +1462,13 @@ final class AppModel: ObservableObject {
     }
 
     private func beginSSHAttempt(_ id: String, startedAt attemptStartedAt: UInt64) {
-        let generation = UUID()
-        sshConnectionGenerations[id] = generation
+        let generation = sshConnectionGenerations.begin(workspaceID: id)
         Self.logConnection(id, phase: "requested", startedAt: attemptStartedAt)
         sshProxyResolver(id) { [weak self] proxyCommand in
             guard let self,
                   self.opened.contains(id),
                   !self.shuttingDown.contains(id),
-                  self.sshConnectionGenerations[id] == generation,
+                  self.sshConnectionGenerations.isCurrent(generation, workspaceID: id),
                   (self.panes[id] ?? []).isEmpty
             else { return }
             guard self.byID[id]?.state == "Running" else {
@@ -1528,7 +1521,7 @@ final class AppModel: ObservableObject {
         startedAt attemptStartedAt: UInt64
     ) {
         guard opened.contains(id),
-              sshConnectionGenerations[id] == generation,
+              sshConnectionGenerations.isCurrent(generation, workspaceID: id),
               transports[id] === transport,
               transport.state == .ready,
               (panes[id] ?? []).isEmpty
@@ -1583,7 +1576,7 @@ final class AppModel: ObservableObject {
         error: SSHTransportSession.StartError,
         generation: UUID
     ) {
-        guard sshConnectionGenerations[id] == generation else { return }
+        guard sshConnectionGenerations.isCurrent(generation, workspaceID: id) else { return }
         let transport = transports[id]
         let transportType = transport.map { String(describing: type(of: $0)) } ?? "none"
         let diagnostic: String
@@ -1623,7 +1616,7 @@ final class AppModel: ObservableObject {
     }
 
     private func masterExited(_ id: String, exitCode: Int32, generation: UUID) {
-        guard sshConnectionGenerations[id] == generation else { return }
+        guard sshConnectionGenerations.isCurrent(generation, workspaceID: id) else { return }
         let list = panes[id] ?? []
         if !list.isEmpty {
             let activeIndex = list.firstIndex { $0.id == activePane[id] } ?? 0
@@ -1967,12 +1960,11 @@ final class AppModel: ObservableObject {
 
         let delay = Self.sshStartupRetryDelays[retryCount]
         sshStartupRetryCounts[id] = retryCount + 1
-        let retryGeneration = UUID()
-        sshConnectionGenerations[id] = retryGeneration
+        let retryGeneration = sshConnectionGenerations.begin(workspaceID: id)
         Log.write("connect pod=\(id) phase=retry-scheduled attempt=\(retryCount + 1) exit=\(exitCode)")
         connectionRetryScheduler.schedule(after: delay) { [weak self] in
             guard let self,
-                  self.sshConnectionGenerations[id] == retryGeneration,
+                  self.sshConnectionGenerations.isCurrent(retryGeneration, workspaceID: id),
                   self.opened.contains(id),
                   self.autoConnect.contains(id),
                   !self.starting.contains(id),
@@ -2041,12 +2033,11 @@ final class AppModel: ObservableObject {
 
         let delay = Self.sshDisruptionRetryDelays[retryCount]
         sshDisruptionRetryCounts[id] = retryCount + 1
-        let recoveryGeneration = UUID()
-        sshConnectionGenerations[id] = recoveryGeneration
+        let recoveryGeneration = sshConnectionGenerations.begin(workspaceID: id)
         Log.write("connect pod=\(id) phase=disruption-retry-scheduled attempt=\(retryCount + 1) exit=\(exitCode)")
         connectionRetryScheduler.schedule(after: delay) { [weak self] in
             guard let self,
-                  self.sshConnectionGenerations[id] == recoveryGeneration,
+                  self.sshConnectionGenerations.isCurrent(recoveryGeneration, workspaceID: id),
                   self.opened.contains(id),
                   self.autoConnect.contains(id),
                   !self.starting.contains(id),
@@ -2071,7 +2062,7 @@ final class AppModel: ObservableObject {
         generation: UUID,
         exitCode: Int32
     ) {
-        guard sshConnectionGenerations[id] == generation,
+        guard sshConnectionGenerations.isCurrent(generation, workspaceID: id),
               opened.contains(id), autoConnect.contains(id),
               !starting.contains(id), !shuttingDown.contains(id), !recreating.contains(id),
               (panes[id] ?? []).isEmpty
@@ -2108,7 +2099,7 @@ final class AppModel: ObservableObject {
     }
 
     private func invalidateSSHConnection(_ id: String) {
-        sshConnectionGenerations[id] = nil
+        sshConnectionGenerations.invalidate(workspaceID: id)
         sshStartupPanes[id] = nil
         sshRecoverySnapshots[id] = nil
         sshClientRetries[id] = nil

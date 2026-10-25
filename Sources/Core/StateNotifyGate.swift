@@ -71,4 +71,11 @@ public struct StateNotifyGate {
         last[id] = nil
         pendingStarted.remove(id)
     }
+
+    /// Removal/recreation is unlike hiding: the old SSH session is no longer
+    /// evidence that a new workspace with the same id is ready.
+    public mutating func forget(_ id: String) {
+        reset(id)
+        confirmed.remove(id)
+    }
 }

@@ -1,4 +1,7 @@
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import DevSpaceCore
 
 // Mirrors notify.rs tests.
@@ -99,6 +102,19 @@ final class NotifyTests: XCTestCase {
         XCTAssertEqual(received?.0, "wc-1")
         XCTAssertEqual(received?.1, "Claude finished")
     }
+
+    #if os(Linux)
+    func testListenerStopReleasesPortWhileAcceptIsBlocked() throws {
+        let port: UInt16 = 17993
+        let first = NotifyListener(expectedToken: "secret", port: port) { _, _ in }
+        try first.start()
+        Thread.sleep(forTimeInterval: 0.05)
+        first.stop()
+        let replacement = NotifyListener(expectedToken: "secret", port: port) { _, _ in }
+        XCTAssertNoThrow(try replacement.start(), "closed listener retained its blocked accept socket")
+        replacement.stop()
+    }
+    #endif
 
     func testListenerIgnoresWrongToken() throws {
         let port: UInt16 = 17988

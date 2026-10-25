@@ -26,6 +26,88 @@ private struct PanicRunner: CommandRunning {
 }
 
 final class DevpodTests: XCTestCase {
+    func testStreamingCommandRetainsOnlyBoundedOutputTail() throws {
+        let runner = DesktopCommandRunner(executable: "/bin/sh")
+        let output = try runner.run(["-c", "head -c 1048576 /dev/zero | tr '\\0' x; printf END"], onOutput: { _ in })
+        XCTAssertLessThanOrEqual(output.utf8.count, 65536)
+        XCTAssertTrue(output.hasSuffix("END"))
+        XCTAssertEqual(try runner.run(["-c", "printf 'complete-output'"], onOutput: nil), "complete-output")
+        do {
+            _ = try runner.run(["-c", "head -c 1048576 /dev/zero | tr '\\0' x >&2; printf ERROR >&2; exit 1"], onOutput: { _ in })
+            XCTFail("nonzero command should fail")
+        } catch let error as DevpodError {
+            XCTAssertLessThanOrEqual(error.message.utf8.count, 65536)
+            XCTAssertTrue(error.message.hasSuffix("ERROR"))
+        }
+    }
+    #if os(Linux)
+    func testCLIReadsStderrWhileWaitingForStdout() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("devspace-devpod-pipes-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("devpod")
+        try "#!/usr/bin/env python3\nimport sys\nsys.stderr.write('x' * 262144)\nsys.stderr.flush()\nprint('done')\n".write(
+            to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let cli = DevpodCLI(environment: ["PATH": "\(directory.path):/usr/bin:/bin"])
+        let finished = expectation(description: "both pipes drained")
+        DispatchQueue.global().async {
+            do { XCTAssertEqual(try cli.run(["list"]), "done\n") }
+            catch { XCTFail("command failed: \(error)") }
+            finished.fulfill()
+        }
+        wait(for: [finished], timeout: 2)
+        cli.cancel()
+    }
+    #endif
+
+    func testCancelledCLICannotLaunchAnotherCommand() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("devspace-devpod-after-cancel-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("devpod")
+        try "#!/bin/sh\nprintf launched\n".write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let cli = DevpodCLI(environment: ["PATH": "\(directory.path):/usr/bin:/bin"])
+        cli.cancel()
+        XCTAssertThrowsError(try cli.run(["list"]))
+    }
+
+    func testCLIStopsAnInFlightDevpodProcess() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("devspace-devpod-cancel-\(UUID().uuidString)")
+        let marker = directory.appendingPathComponent("started")
+        let executable = directory.appendingPathComponent("devpod")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try "#!/bin/sh\ntouch \"$DEVSPACE_TEST_MARKER\"\nexec sleep 30\n".write(
+            to: executable,
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+
+        let cli = DevpodCLI(environment: [
+            "PATH": "\(directory.path):/usr/bin:/bin",
+            "DEVSPACE_TEST_MARKER": marker.path,
+        ])
+        let finished = expectation(description: "cancelled process returns")
+        DispatchQueue.global().async {
+            _ = try? cli.run(["list"])
+            finished.fulfill()
+        }
+        let deadline = Date().addingTimeInterval(1)
+        while !FileManager.default.fileExists(atPath: marker.path), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+
+        cli.cancel()
+        wait(for: [finished], timeout: 2)
+    }
+
     func testParsesListFixture() throws {
         let ws = try Devpod.parseList(listJSON)
         XCTAssertEqual(ws.count, 2)

@@ -1,8 +1,14 @@
 import XCTest
+#if canImport(Darwin)
 import Darwin
+#else
+import Glibc
+#endif
 @testable import DevSpaceCore
 
+#if !os(Linux)
 @MainActor
+#endif
 final class SSHTransportSessionTests: XCTestCase {
     private final class ManualProcess: SSHTransportProcess {
         private var exit: ((Int32) -> Void)?
@@ -82,6 +88,106 @@ final class SSHTransportSessionTests: XCTestCase {
 
         harness.scheduler.fireNext()
         XCTAssertEqual(readyCount, 1)
+        XCTAssertEqual(session.state, .ready)
+    }
+
+    func testMissingResolvedDevpodProxyCannotLaunchUsingUnmodifiedHostConfiguration() {
+        var completion: ((String?) -> Void)?
+        var launches = 0
+        var failure: SSHTransportSession.StartError?
+        let session = SSHTransportSession(podID: "wc-1", proxyCommand: nil,
+            controlPath: "/tmp/devspace-test/socket",
+            launch: { _, _ in launches += 1; return ManualProcess() },
+            check: { _, done in done(false) }, scheduler: ManualScheduler(),
+            prepare: { done in completion = done; return ManualProcess() })
+        session.onStartError = { failure = $0 }
+        session.start()
+        completion?(nil)
+        XCTAssertEqual(launches, 0, "missing safe DevPod proxy fell back to the user's original SSH configuration")
+        XCTAssertEqual(failure, .launchFailed)
+        XCTAssertEqual(session.state, .exited)
+    }
+
+    func testStoppingDuringConfigResolutionWaitsAndCannotLaunchMaster() {
+        let resolver = ManualProcess()
+        var resolved: ((String?) -> Void)?
+        var launches = 0
+        var stopped = 0
+        let session = SSHTransportSession(podID: "wc-1", proxyCommand: nil,
+            controlPath: "/tmp/devspace-test/socket",
+            launch: { _, _ in launches += 1; return ManualProcess() },
+            check: { _, completion in completion(false) }, scheduler: ManualScheduler(),
+            prepare: { completion in resolved = completion; return resolver })
+        session.onStopped = { stopped += 1 }
+        session.start()
+        XCTAssertEqual(launches, 0, "master launched before configuration resolved")
+        session.stop()
+        XCTAssertEqual(session.state, .stopping)
+        XCTAssertEqual(resolver.terminateCount, 1)
+        XCTAssertEqual(stopped, 0, "stop acknowledged before resolver cleanup")
+        resolved?("devpod ssh --stdio wc-1")
+        XCTAssertEqual(launches, 0, "cancelled configuration callback launched a master")
+        XCTAssertEqual(stopped, 1)
+        XCTAssertEqual(session.state, .exited)
+    }
+
+    func testOldConfigurationCompletionCannotConsumeReplacementResolution() {
+        var completions: [(String?) -> Void] = []
+        var launched: [[String]] = []
+        let session = SSHTransportSession(podID: "wc-1", proxyCommand: nil,
+            controlPath: "/tmp/devspace-test/socket", launch: { args, _ in
+                launched.append(args); return ManualProcess()
+            }, check: { _, callback in callback(true) }, scheduler: ManualScheduler(),
+            prepare: { callback in completions.append(callback); return ManualProcess() })
+        session.start()
+        session.stop()
+        completions[0](nil)
+        session.start()
+        completions[0]("devpod ssh --stdio old")
+        completions[1]("devpod ssh --stdio wc-1")
+        XCTAssertEqual(launched.count, 1)
+        XCTAssertEqual(session.state, .ready)
+        XCTAssertEqual(session.proxyCommand, "devpod ssh --stdio wc-1")
+    }
+
+    func testConfigurationDeadlineWaitsForCleanupBeforeFailure() {
+        let resolver = ManualProcess()
+        let scheduler = ManualScheduler()
+        var completion: ((String?) -> Void)?
+        var failure: SSHTransportSession.StartError?
+        let session = SSHTransportSession(podID: "wc-1", proxyCommand: nil,
+            controlPath: "/tmp/devspace-test/socket", launch: { _, _ in
+                XCTFail("timed out resolver launched a master"); return ManualProcess()
+            }, check: { _, callback in callback(false) }, scheduler: scheduler,
+            prepare: { callback in completion = callback; return resolver })
+        session.onStartError = { failure = $0 }
+        session.start()
+        scheduler.fireLast()
+        XCTAssertEqual(resolver.terminateCount, 1)
+        XCTAssertNil(failure)
+        completion?(nil)
+        XCTAssertEqual(failure, .readinessTimedOut)
+        XCTAssertEqual(session.state, .exited)
+    }
+
+    func testCompletedConfigurationCannotShortenMasterReadinessDeadline() throws {
+        let resolver = ManualProcess()
+        let master = ManualProcess()
+        let scheduler = ManualScheduler()
+        var completion: ((String?) -> Void)?
+        var checkCompletion: ((Bool) -> Void)?
+        let session = SSHTransportSession(podID: "wc-1", proxyCommand: nil,
+            controlPath: "/tmp/devspace-test/socket", launch: { _, _ in master },
+            check: { _, callback in checkCompletion = callback }, scheduler: scheduler,
+            prepare: { callback in completion = callback; return resolver })
+        session.start()
+        let configurationDeadline = try XCTUnwrap(scheduler.scheduled.first).action
+        completion?("devpod ssh --stdio wc-1")
+
+        configurationDeadline()
+        XCTAssertEqual(master.terminateCount, 0, "completed configuration timer terminated the new master")
+        XCTAssertEqual(session.state, .starting)
+        checkCompletion?(true)
         XCTAssertEqual(session.state, .ready)
     }
 

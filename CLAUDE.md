@@ -34,6 +34,14 @@ make install     # release build + install to $APP_INSTALL_LOCATION (default /Ap
 make clean       # remove build output
 ```
 
+On Linux, `make install` builds and installs the Swift/GTK/libghostty/Skia production
+bundle under `~/.local` (no sudo, no .deb). Override `LINUX_INSTALL_PREFIX`
+for an isolated verification prefix, or pass `LINUX_INSTALL_BUNDLE` to install
+an existing production bundle without rebuilding. The installer refuses a
+running destination and unrelated files; never install over the user's daily
+driver without approval. See `docs/linux-development.md`. Use temporary
+prefixes under `.tmp` for installer tests, not the user's actual installation.
+
 **During development always use `make build-dev` / `make run`** (the amber
 "DevSpaceDev" build with logging to `.tmp/devspace.log`). Use `make build`
 (release "DevSpace") only for producing a distributable bundle.
@@ -101,6 +109,16 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
 
 ## Agent Rules
 
+- **Validate instead of assuming wherever possible.** Before diagnosing,
+  changing behavior, or claiming an outcome, inspect the relevant source code
+  and trace its dependencies up to two levels deep (direct dependencies and
+  their dependencies). Read the relevant project documentation and check it
+  against the implementation; resolve discrepancies using evidence rather
+  than treating either as automatically authoritative. Inspect the relevant
+  tests, run checks appropriate to the change, and confirm their actual output.
+  State what was verified, what remains unverified, and any assumptions that
+  could not be checked. Do not claim runtime behavior from source inspection
+  alone or claim tests pass without running them.
 - **Use conventional-commit-style branch names.** Prefix the branch with the
   change type, followed by a concise kebab-case description; for example,
   `feat/dide-zed-folder`, `fix/terminal-shortcut-routing`, or
@@ -108,6 +126,10 @@ make test          # swift test (DevSpaceCore unit + listener integration tests)
 - **Agents may commit only on a non-`main`/non-`master` branch.** Never run
   `git commit` or `git push` while checked out on `main` or `master`; create
   and use a feature branch instead.
+- **Commit completed milestones incrementally.** On a non-`main`/non-`master`
+  feature branch, commit each small, independently verified milestone with a
+  conventional commit message. Stage only files belonging to that milestone;
+  leave unrelated or unfinished working-tree changes unstaged.
 - **Always use `gh stack` to create PRs**, including single-PR changes. When PR
   creation is explicitly authorized, establish local stack tracking with
   `gh stack init` (or extend it with `gh stack add`), then publish with
