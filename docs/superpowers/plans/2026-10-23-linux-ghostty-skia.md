@@ -135,7 +135,8 @@ Return inserts the composed character once. This narrows the IME uncertainty
 but does not establish IBus/Fcitx or screen-reader parity. A fresh experimental
 debug app was opened alongside the installed production app.
 
-M05 development packaging checkpoint: `make linux-ghostty-bundle-dev` builds a
+M05 development packaging checkpoint: the migration-only bundle target (now
+superseded by `make build-dev`) builds a
 separate development bundle with the global Swift runtime and 20 pinned native
 notice files. Source revisions and notice checksums are validated; native
 archive hashes are recorded. 21 packaging/inventory tests and the relocated

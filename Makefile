@@ -27,9 +27,6 @@ export DEVSPACE_LINUX_TERMINAL ?= ghostty
 LINUX_DEV_PREFIX ?= build/linux-dev
 LINUX_DEV_BUNDLE ?= build/linux-dev-bundle
 LINUX_SWIFT_SCRATCH ?= $(if $(filter vte,$(DEVSPACE_LINUX_TERMINAL)),.tmp/swift-linux-app,.tmp/ghostty-skia/app)
-LINUX_GHOSTTY_SWIFT_SCRATCH ?= .tmp/ghostty-skia/app
-LINUX_GHOSTTY_DEV_PREFIX ?= build/linux-ghostty-dev
-LINUX_GHOSTTY_DEV_BUNDLE ?= build/linux-ghostty-dev-bundle
 LINUX_SWIFT_RUNTIME ?= $(shell $(SWIFT) -print-target-info | python3 -c 'import json,sys; print(json.load(sys.stdin)["paths"]["runtimeLibraryPaths"][0])')
 LINUX_RELEASE_SCRATCH ?= .tmp/swift-linux-release
 LINUX_RELEASE_BUNDLE ?= build/linux-production
@@ -55,7 +52,7 @@ if [ "$(DEVSPACE_LINUX_TERMINAL)" = ghostty ]; then \
 fi
 endef
 
-.PHONY: linux-build-dev linux-ghostty-build-dev linux-ghostty-bundle-dev linux-ghostty-run linux-bundle-dev linux-bundle linux-run linux-package linux-install linux-test-core linux-test-ghostty linux-test-skia linux-test-protocol linux-test-gtk linux-test
+.PHONY: linux-build-dev linux-bundle-dev linux-bundle linux-run linux-package linux-install linux-test-core linux-test-ghostty linux-test-skia linux-test-protocol linux-test-gtk linux-test
 
 install: linux-install
 build: linux-bundle
@@ -115,27 +112,6 @@ linux-build-dev:
 	mkdir -p "$(LINUX_DEV_PREFIX)/bin"
 	install -m 755 "$(LINUX_SWIFT_SCRATCH)/debug/DevSpaceLinuxApp" "$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxApp"
 	install -m 755 "$(LINUX_SWIFT_SCRATCH)/debug/DevSpaceLinuxBackend" "$(LINUX_DEV_PREFIX)/bin/DevSpaceLinuxBackend"
-
-# Compatibility aliases retaining the separate migration artifact paths.
-linux-ghostty-build-dev:
-	$(MAKE) linux-build-dev DEVSPACE_LINUX_TERMINAL=ghostty \
-		LINUX_SWIFT_SCRATCH="$(LINUX_GHOSTTY_SWIFT_SCRATCH)" LINUX_DEV_PREFIX="$(LINUX_GHOSTTY_DEV_PREFIX)"
-
-linux-ghostty-run: linux-ghostty-build-dev
-	DEVSPACE_BUILD_CHANNEL=development DEVSPACE_BACKEND="$(abspath $(LINUX_GHOSTTY_DEV_PREFIX))/bin/DevSpaceLinuxBackend" \
-		"$(LINUX_GHOSTTY_DEV_PREFIX)/bin/DevSpaceLinuxApp"
-
-linux-ghostty-bundle-dev: linux-ghostty-build-dev
-	@set -eu; \
-	mkdir -p .tmp; \
-	work=$$(mktemp -d .tmp/linux-ghostty-bundle.XXXXXX); \
-	trap 'rm -rf "$$work"' EXIT; \
-	python3 scripts/collect-linux-native-notices.py --fetch-missing --output "$$work/notices"; \
-	python3 scripts/assemble-linux.py --frontend "$(LINUX_GHOSTTY_DEV_PREFIX)" \
-	  --backend "$(LINUX_GHOSTTY_DEV_PREFIX)/bin/DevSpaceLinuxBackend" \
-	  --swift-runtime "$(LINUX_SWIFT_RUNTIME)" --swift-license "$(LINUX_SWIFT_LICENSE)" \
-	  --icu-license "$(LINUX_ICU_LICENSE)" --third-party-notices "$$work/notices" \
-	  --channel development --output "$(LINUX_GHOSTTY_DEV_BUNDLE)" --replace
 
 linux-bundle-dev: linux-build-dev
 	@set -eu; mkdir -p .tmp; \
@@ -213,7 +189,7 @@ endif
 
 help:
 	@echo "DevSpace native build targets:"
-	@echo "  make build-dev  - Debug build + assemble \"DevSpaceDev.app\" (amber icon)"
+	@echo "  make build-dev  - Debug build + assemble $(if $(filter Linux,$(shell uname -s)),$(LINUX_DEV_BUNDLE),\"DevSpaceDev.app\" (amber icon))"
 	@echo "  make build      - Release bundle ($(if $(filter Linux,$(shell uname -s)),$(LINUX_RELEASE_BUNDLE),DevSpace.app)); does not install or launch"
 	@echo "  make test       - run unit tests (swift test)"
 	@echo "  make run        - build-dev and launch the app"
@@ -221,7 +197,6 @@ help:
 	@echo "  make clean      - remove build output"
 	@echo "  make linux-build-dev     - build the Swift GTK/libghostty/Skia frontend and backend"
 	@echo "  make linux-bundle-dev    - assemble a relocatable development bundle"
-	@echo "  make linux-ghostty-bundle-dev - compatibility alias using the migration artifact path"
 	@echo "  make linux-bundle        - assemble a relocatable production bundle (same as make build on Linux)"
 	@echo "  make linux-run           - build, bundle, and launch DevSpaceDev on Linux"
 	@echo "  make linux-package       - build a production Ubuntu .deb (requires copyright and maintainer metadata)"

@@ -75,7 +75,7 @@ DEVSPACE_REQUIRE_HARDWARE=1 bash scripts/check-skia-runtime.sh --gpu
 
 Xvfb/llvmpipe success proves the OpenGL integration, **not hardware acceleration**.
 
-## libghostty-vt ABI check
+## libghostty-vt build and engine checks
 
 The local Ghostty reference is `08a9518340e19487bd5fdf96963583fb32f0c41f`.
 Verify that checkout and use globally installed Zig **0.17.0** (not the older
@@ -89,12 +89,13 @@ Verify that checkout and use globally installed Zig **0.17.0** (not the older
     zig build -Demit-lib-vt -Doptimize=ReleaseFast -j2 \
       --prefix "$OLDPWD/.tmp/ghostty-skia/ghostty-vt"
 )
-bash scripts/check-ghostty-interop.sh
+make linux-test-ghostty
 ```
 
-Ghostty's revision pins its package dependencies. The ABI check links the actual
-static library into Swift and verifies ANSI text formatting and disposal over
-32 terminal lifecycles. It is not the production terminal adapter.
+Ghostty's revision pins its package dependencies. The native Swift engine tests
+link the actual static library and verify ANSI/Unicode parsing, formatting,
+selection, input protocols and disposal. They supersede the original standalone
+ABI smoke fixture.
 
 ## Verified checkpoint and remaining work
 

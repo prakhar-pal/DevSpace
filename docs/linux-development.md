@@ -35,9 +35,9 @@ These targets use `.tmp/ghostty-skia/app` for Swift build output and
 relocatable development bundle. They use the global Swift
 installation. `SKIA_SOURCE` and `GHOSTTY_VT_PREFIX` override native dependency
 locations. Both development and production identities support the wrapper.
-Release builds/installations still require approval. The older
-`linux-ghostty-build-dev`, `linux-ghostty-run` and `linux-ghostty-bundle-dev`
-targets retain their separate `build/linux-ghostty-*` paths as compatibility aliases.
+Release builds/installations still require approval. Migration-only build/run
+aliases have been removed; use the standard targets above. `LINUX_SWIFT_SCRATCH`,
+`LINUX_DEV_PREFIX` and `LINUX_DEV_BUNDLE` remain available for isolated paths.
 
 All normal bundle targets include the selected global Swift runtime and a
 checksum inventory of pinned native archives/notices. They may fetch missing
