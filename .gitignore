@@ -3,6 +3,9 @@ node_modules/
 dist/
 .tmp
 
+# Generated agent task reports
+.superpowers/sdd/
+
 # macOS native app (SwiftPM build output + assembled bundle)
 .build/
 build/
